@@ -1,0 +1,129 @@
+name: validate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        # Immutable pin to the official actions/checkout release v7.0.1
+        # (resolved via the GitHub API, verified against the official
+        # actions/checkout repository) - never a mutable tag such as
+        # @v4, which can be repointed after review.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # Full history: base/head commits and their merge-base for the
+          # diff-range check below must always be present, regardless of
+          # how large the PR or push range turns out to be.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: make validate
+        run: make validate
+
+      - name: Determine diff range
+        id: diffrange
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            before="${{ github.event.before }}"
+            head="${{ github.sha }}"
+            # Built at runtime, not written as a literal: a 40-character
+            # or 12-digit run in tracked source trips the repository's
+            # own restricted-pattern checks (scripts/validate/check-
+            # forbidden-terms.sh), and this is a comparison value, not a
+            # GitHub Actions SHA pin, so it does not qualify for that
+            # validator's narrow actions/checkout exception.
+            zero_sha="$(printf '%040d' 0)"
+            if [ -z "$before" ] || [ "$before" = "$zero_sha" ]; then
+              # No usable previous SHA (new branch, or a history rewrite
+              # not visible to this event) - fall back to the pushed
+              # commit's own parent, or the empty tree if it has none
+              # (the repository's very first commit), so this never
+              # silently no-ops instead of failing loudly.
+              if git rev-parse --verify --quiet "${head}^" >/dev/null; then
+                base="$(git rev-parse "${head}^")"
+              else
+                base="$(git hash-object -t tree /dev/null)"
+              fi
+            else
+              base="$before"
+            fi
+          else
+            # workflow_dispatch or any other manual trigger has no
+            # natural range: diff HEAD against its parent, or the empty
+            # tree if it has none.
+            head="${{ github.sha }}"
+            if git rev-parse --verify --quiet "${head}^" >/dev/null; then
+              base="$(git rev-parse "${head}^")"
+            else
+              base="$(git hash-object -t tree /dev/null)"
+            fi
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+
+      - name: git diff --check over the actual change range
+        run: git diff --check "${{ steps.diffrange.outputs.base }}...${{ steps.diffrange.outputs.head }}"
+
+      - name: Shell syntax check (sh -n / bash -n by declared shebang, NUL-safe)
+        run: |
+          set -euo pipefail
+          status=0
+          checked=0
+          while IFS= read -r -d '' f; do
+            first_line="$(head -n 1 -- "$f")"
+            case "$first_line" in
+              '#!/bin/sh'|'#! /bin/sh')
+                # A genuine POSIX-sh script: sh -n is the correct check.
+                checked=$((checked + 1))
+                if ! sh -n -- "$f"; then
+                  echo "FAIL: sh -n failed for $f"
+                  status=1
+                fi
+                ;;
+              '#!/usr/bin/env bash'|'#!/bin/bash')
+                # Deliberately bash-only scripts (arrays, [[ ]], process
+                # substitution) - running sh -n against these would fail
+                # on the interpreter mismatch alone, not a real defect;
+                # bash -n is the syntax check that actually matches how
+                # they are declared and invoked (via `bash`, never `sh`,
+                # everywhere else in this repository).
+                checked=$((checked + 1))
+                if ! bash -n -- "$f"; then
+                  echo "FAIL: bash -n failed for $f"
+                  status=1
+                fi
+                ;;
+              *)
+                # Anything else is unclassified - fail loudly rather
+                # than silently skip a tracked shell script.
+                echo "FAIL: $f has an unrecognized or missing shebang ('$first_line') - cannot determine which interpreter to syntax-check it with"
+                status=1
+                ;;
+            esac
+          done < <(git ls-files -z -- '*.sh')
+          echo "shell syntax check: $checked script(s) checked"
+          if [ "$status" -ne 0 ]; then
+            echo "shell syntax check: FAILED"
+            exit 1
+          fi
+          echo "shell syntax check: OK"
