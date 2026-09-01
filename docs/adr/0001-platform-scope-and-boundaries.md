@@ -37,6 +37,21 @@ supposed to take it over.
   exclusively through Terraform until version pinning, CI gating, and
   freedom from out-of-band dependencies are proven there first.
 
+### Local-lab bootstrap exception (Phase 2.2)
+
+The decision above — "Terraform owns... Argo CD's own initial bootstrap
+installation" — describes the target **AWS/EKS** architecture. It does
+not apply to the project-local `kind` lab (`lab-lite`, Phase 2.1), which
+has no Terraform-managed infrastructure to begin with. For the local lab
+only, Argo CD is bootstrapped directly via a pinned, checksum-verified
+Helm CLI (`lab/argocd/*.sh`, backing the `make argocd-*` targets) against
+an immutable, digest-pinned `argo-cd` chart release — never `helm repo
+add`, never a floating tag. This is a deliberate, scoped exception that
+exists only to let the platform's GitOps reconciliation flow be exercised
+end to end without AWS cost or credentials; it does not change how Argo
+CD is bootstrapped on real `management`/`staging`/`prod` clusters, where
+Terraform remains the sole bootstrap mechanism per the decision above.
+
 ### Criteria for a future repository split
 
 Split a component out of the monorepo only when at least one of these

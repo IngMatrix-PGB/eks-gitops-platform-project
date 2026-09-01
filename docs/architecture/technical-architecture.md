@@ -195,13 +195,73 @@ See ADR-0003.
 creates only the `kind` cluster itself — never `staging`, `production`,
 `ApplicationSet`, `AppProject`, or any Argo CD resource. Phase 2.2's
 bootstrap is a narrow, explicit exception: it may imperatively create
-only what installing the GitOps controller requires (the Argo CD
-namespace, the pinned Argo CD installation, the root/bootstrap
-`Application`). From Phase 2.3 onward, `staging`, `production`,
-`AppProject`s, `ApplicationSet`s, demo workloads, and environment
-policies are created and reconciled **declaratively** by Argo CD — no
-imperative script owns a resource that GitOps should reconcile from
-there on.
+only what installing the GitOps controller itself requires (the Argo CD
+namespace and the pinned Argo CD Helm release) — **it does not create the
+root/bootstrap `Application`, any `AppProject`, or any `ApplicationSet`**;
+those, along with `staging`/`production` and every environment policy,
+are explicitly deferred to Phase 2.3 and created and reconciled
+**declaratively** by Argo CD once it exists — no imperative script owns a
+resource that GitOps should reconcile from there on.
+
+### Local Lab Argo CD Bootstrap (Phase 2.2)
+
+`lab/argocd/*.sh` (backing the `make argocd-*` targets) installs Argo CD
+into the Phase 2.1 `lab-lite` `kind` cluster, entirely offline once the
+chart is fetched, and entirely isolated to the project-local toolchain
+and kubeconfig — the same isolation discipline as Phase 2.1.
+
+- **Chart:** `argo-helm/argo-cd` `10.4.2` (app version `v3.5.2`), fetched
+  once as an immutable GitHub Release `.tgz` asset and SHA256-pinned in
+  `scripts/argocd/_lib.sh` — never `helm repo add`, never a floating
+  version. `make argocd-chart-fetch` is the only target permitted to
+  download it; every other target requires it already present and
+  checksum-verified.
+- **Tooling:** Helm `v4.2.4`, installed the same way as `kind`/`kubectl`
+  in Phase 2.1 — a pinned, checksum-verified download into
+  `.tools/bin/helm` — except Helm ships as a `tar.gz` archive, so
+  `scripts/lab/install-tools.sh` extracts exactly one validated,
+  non-symlink, regular-file archive member before verifying and
+  installing it.
+- **Images:** every rendered image reference is digest-pinned
+  (`repository:tag@sha256:digest`) — `quay.io/argoproj/argocd:v3.5.2` and
+  `ecr-public.aws.com/docker/library/redis:8.6.4-alpine`, each verified
+  against the registry's own `Docker-Content-Digest` at pin time.
+  `dex` and `notifications-controller` are disabled; `make argocd-render`
+  proves both are absent from the render and that no tag-only image
+  exists.
+- **Values contract:** `lab/argocd/values-lab.yaml` is the single,
+  explicit source of every override — one replica per component,
+  `ClusterIP`-only `server` service, ingress disabled, explicit
+  CPU/memory requests and limits on every rendered container and init
+  container (including the `copyutil` init container and the
+  `redis-secret-init` pre-install hook `Job`), and `crds.keep: true` so
+  Argo CD's CRDs survive an `uninstall`.
+- **Idempotency, proven not assumed:** `make argocd-install` is
+  fail-closed — absent → installs; an exact match against the pinned
+  chart, values fingerprint, and live manifest → a true no-op (no `helm
+  upgrade` call at all); any drift in any of those → refuses to
+  reconcile automatically and fails closed. `make argocd-test-lifecycle`
+  exercises install → install (asserting the Helm release revision, the
+  live manifest checksum, and every managed workload's
+  `.metadata.generation` are byte-identical — proving no rollout
+  occurred) → uninstall (asserting the exact three Argo CD CRDs are
+  retained and still schema-compatible via `kubectl diff`, and that no
+  unexpected `*.argoproj.io` CRD exists) → uninstall no-op → a
+  restoration install using those retained CRDs, leaving Argo CD
+  installed and healthy at the end.
+- **Namespace ownership:** the `argocd` namespace carries a dedicated
+  `eks-gitops-lab-lite.local/owner=argocd-bootstrap` label (not the
+  generic `app.kubernetes.io/managed-by`); `make argocd-uninstall` only
+  ever deletes it when this bootstrap owns it and an exhaustive
+  namespaced-resource inventory (every `kubectl api-resources
+  --verbs=list --namespaced` type, not just `kubectl get all`) shows
+  nothing beyond the two objects Kubernetes itself always creates.
+- **Admin access:** the initial-admin `Secret`'s password is decoded
+  manually (`kubectl ... -o jsonpath='{.data.password}' | base64 -D` on
+  macOS) — never scripted, logged, or written to any evidence file — and
+  is expected to be deleted once a replacement auth method is in place.
+  `make argocd-port-forward` exposes the UI/API at
+  `https://localhost:8443` in the foreground only.
 
 ## Application Delivery and Promotion
 
@@ -405,7 +465,8 @@ Implementation Status" below.
 | Local lab tooling (`make tools-check`/`tools-install`, `lab/kind/*.sh`) | `VERIFIED` | Executed in this phase: `make tools-install` downloaded and checksum-verified `kind v0.33.0`/`kubectl v1.36.4` into `.tools/bin/`; `make tools-check` confirmed them read-only |
 | `lab-lite` cluster: creation, idempotency, teardown, identity match | `VERIFIED`, scoped to exactly what was exercised (cluster lifecycle and identity — not Argo CD/workloads, which remain `NOT IMPLEMENTED`) | `make lab-test-lifecycle` proved create→create(no-op)→destroy→destroy(no-op); the persistent cluster was then created and confirmed: server `v1.36.4` exactly, node image digest matches the pin, node `Ready`, reachable only via `.local/kubeconfig`, no `staging`/`production`/`argocd` namespace present |
 | `lab-multicluster` | `NOT IMPLEMENTED` | Reserved for Phase 2.5, not created |
-| Argo CD reconciliation / `ApplicationSet` behavior | `NOT IMPLEMENTED` | No Argo CD instance exists |
+| Argo CD control-plane bootstrap in `lab-lite` (`make argocd-*`) | `VERIFIED`, scoped to exactly what was exercised (Argo CD's own install/uninstall/upgrade lifecycle — not `ApplicationSet`/`Application` reconciliation behavior, which remains `NOT IMPLEMENTED` until Phase 2.3) | `make argocd-chart-fetch` downloaded and checksum-verified `argo-cd-10.4.2.tgz`; `make argocd-render` confirmed all 7 rendered image occurrences (2 distinct images) are digest-pinned and dex/notifications are absent; `make argocd-test-lifecycle` proved install→install(true no-op: Helm revision, live-manifest sha256, and every managed workload's `.metadata.generation` byte-identical)→uninstall(exactly the 3 pinned CRDs retained and `kubectl diff`-compatible)→uninstall(no-op)→restoration install using those retained CRDs, ending installed and healthy; a further two `make argocd-install` runs confirmed persistence (second run a true no-op) |
+| Argo CD reconciliation / `ApplicationSet` behavior | `NOT IMPLEMENTED` | No `Application`/`ApplicationSet`/`AppProject` object exists; Phase 2.2 installs only the Argo CD control plane itself |
 | EKS Pod Identity workload access | `UNKNOWN` | Requires a real, temporary, authorized EKS cluster |
 | Workload-identity (cluster/namespace/ServiceAccount) contract | `NOT IMPLEMENTED` | No contract test exists |
 | Per-cluster External Secrets reconciliation under the layered model | `NOT IMPLEMENTED` | No cluster or ESO installation exists |
@@ -424,7 +485,7 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
 - **Phase 1 — Documentation foundation:** complete.
 - **Phase 2 — Local GitOps lab:**
   - **2.1 — Local tooling and `kind` foundation:** implemented (pinned `lab-lite` cluster, project-local toolchain and kubeconfig; no Argo CD, no Keycloak, no `ApplicationSet` yet).
-  - **2.2 — Argo CD bootstrap:** not started.
+  - **2.2 — Argo CD bootstrap:** implemented (pinned, digest-verified Argo CD control plane installed offline via Helm into `lab-lite`; fail-closed idempotent install, proven true no-op, CRD retention, and restoration; dex/notifications disabled; no `ApplicationSet`/`Application`/`AppProject` yet).
   - **2.3 — GitOps contract and demo workload:** not started.
   - **2.4 — Keycloak OIDC and Argo CD RBAC:** not started.
   - **2.5 — Multicluster profile:** not started.
