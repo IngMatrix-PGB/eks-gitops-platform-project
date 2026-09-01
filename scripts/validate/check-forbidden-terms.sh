@@ -30,7 +30,12 @@ checked=0
 
 generic_patterns=(
   '[0-9]{12}'      # AWS-account-ID-shaped number
-  '[0-9a-f]{40}'   # full git commit SHA-shaped token
+  # Exact-length match with explicit non-hex boundaries, not \b: a
+  # 40-hex-char SHA-1-shaped token must never match as a substring of a
+  # legitimate longer digest (e.g. a 64-char SHA256), and \b is
+  # unreliable here because word-boundary semantics also react to
+  # underscores and other non-hex word characters around a hex run.
+  '(^|[^0-9A-Fa-f])[0-9A-Fa-f]{40}([^0-9A-Fa-f]|$)'   # exact 40-hex SHA-1-shaped token, case-insensitive-safe
 )
 
 while IFS= read -r f; do
