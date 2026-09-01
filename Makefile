@@ -1,7 +1,9 @@
 .DEFAULT_GOAL := help
 
 .PHONY: help validate check-markdown check-links check-adr check-secrets check-forbidden-terms check-tad check-private-untracked \
-	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle
+	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle \
+	argocd-chart-fetch argocd-render argocd-install argocd-status argocd-uninstall argocd-port-forward \
+	argocd-test-runtime-health argocd-test-lifecycle
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
@@ -50,3 +52,27 @@ lab-test: ## Read-only shape/identity checks against the existing project cluste
 
 lab-test-lifecycle: ## Mutating: proves create/destroy idempotency end-to-end (cluster must be absent first)
 	@sh tests/lab/test-idempotency.sh
+
+argocd-chart-fetch: ## Download and checksum-verify the pinned Argo CD chart into .tools/charts/ (the only target allowed to fetch it)
+	@sh lab/argocd/chart-fetch.sh
+
+argocd-render: ## Fully offline Helm render of the pinned chart/values; proves every image is approved and digest-pinned
+	@sh lab/argocd/render.sh
+
+argocd-install: ## Fail-closed idempotent install: absent->install, exact match->no-op, any drift->fail closed
+	@sh lab/argocd/install.sh
+
+argocd-status: ## Report Argo CD release/workload/CRD status (read-only)
+	@sh lab/argocd/status.sh
+
+argocd-uninstall: ## Uninstall the Argo CD release; CRDs retained; namespace deleted only if owned and inventory-clean
+	@sh lab/argocd/uninstall.sh
+
+argocd-port-forward: ## Foreground port-forward to the Argo CD server UI/API at https://localhost:8443
+	@sh lab/argocd/port-forward.sh
+
+argocd-test-runtime-health: ## Read-only runtime health checks against an installed Argo CD release
+	@sh tests/argocd/test-runtime-health.sh
+
+argocd-test-lifecycle: ## Mutating: proves install/no-op/uninstall idempotency and CRD retention end-to-end
+	@sh tests/argocd/test-idempotency.sh

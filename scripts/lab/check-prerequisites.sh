@@ -29,7 +29,7 @@ if [ ! -f "$versions_file" ]; then
   exit 1
 fi
 
-while IFS='|' read -r name version platform filename sha256 url; do
+while IFS='|' read -r name version platform filename archive_type archive_member download_sha installed_sha url; do
   [ -z "$name" ] && continue
   case "$name" in \#*) continue ;; esac
   dest=".tools/bin/${filename}"
@@ -38,9 +38,13 @@ while IFS='|' read -r name version platform filename sha256 url; do
     fail=1
     continue
   fi
+  # Always compare against installed_sha256 - the checksum of the file
+  # actually placed at .tools/bin/<filename>, never download_sha256 (for
+  # archive-sourced tools those are two different files' hashes; for raw
+  # downloads the two columns are identical anyway).
   actual_sha="$(shasum -a 256 "$dest" | awk '{print $1}')"
-  if [ "$actual_sha" != "$sha256" ]; then
-    echo "FAIL: $name at $dest does not match the pinned checksum for $version" >&2
+  if [ "$actual_sha" != "$installed_sha" ]; then
+    echo "FAIL: $name at $dest does not match the pinned installed checksum for $version" >&2
     fail=1
     continue
   fi

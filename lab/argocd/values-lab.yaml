@@ -1,0 +1,75 @@
+# lab/argocd/values-lab.yaml — Phase 2.2 explicit security/topology contract.
+# Every key is an explicit override or a deliberately-confirmed default;
+# see docs/architecture/technical-architecture.md for the per-key chart
+# citation. No key here is "left at chart default" without that citation
+# existing in the TAD.
+
+dex:
+  enabled: false
+
+notifications:
+  enabled: false
+
+global:
+  image:
+    repository: quay.io/argoproj/argocd
+    tag: "v3.5.2@sha256:e2aadfae709d904e87f46ba4aa49601d827b3022db22cd4d03aae816a2e7097b"
+
+controller:
+  replicas: 1
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+server:
+  replicas: 1
+  service:
+    type: ClusterIP
+  ingress:
+    enabled: false
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+repoServer:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+applicationSet:
+  replicas: 1
+  ingress:
+    enabled: false
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+redisSecretInit:
+  # Enabled by chart default (not overridden); its pre-install/pre-upgrade
+  # hook Job runs the "secret-init" container and needs its own governance.
+  resources:
+    requests: { cpu: 50m, memory: 32Mi }
+    limits: { cpu: 100m, memory: 64Mi }
+
+redis:
+  enabled: true
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 100m, memory: 128Mi }
+  image:
+    tag: "8.6.4-alpine@sha256:2cc044fc5a07c9b701f8f1255a309ae9ad7856e694ac03513bf3648c01e40763"
+
+redis-ha:
+  enabled: false
+
+crds:
+  install: true
+  keep: true
+
+configs:
+  cm:
+    admin.enabled: true
+    users.anonymous.enabled: "false"   # chart's own key type: quoted string, not YAML boolean
+  params:
+    server.insecure: "false"            # same: quoted string, per argocd-cmd-params-cm.yaml

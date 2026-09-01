@@ -32,12 +32,15 @@ the [Technical Architecture Document](docs/architecture/technical-architecture.m
 ## Current status
 
 **Phase 1 (documentation foundation) is complete. Phase 2.1 (local
-tooling and `kind` foundation) is implemented** — a single, pinned
-`lab-lite` `kind` cluster with no application workloads, no Argo CD, no
-Keycloak. No Terraform, no Helm charts, no Kubernetes manifests beyond
-what `kind` itself creates. An `Accepted` ADR records an approved
-decision, not a fully implemented one. See the TAD's evidence table and
-delivery roadmap for what exists versus what is proposed.
+tooling and `kind` foundation) and Phase 2.2 (Argo CD bootstrap) are
+implemented** — a single, pinned `lab-lite` `kind` cluster running a
+pinned, digest-verified Argo CD control plane installed offline via
+Helm, with no application workloads, no `ApplicationSet`/`Application`/
+`AppProject`, and no Keycloak yet. No Terraform, no Kubernetes manifests
+beyond what `kind` and the pinned Argo CD chart itself create. An
+`Accepted` ADR records an approved decision, not a fully implemented
+one. See the TAD's evidence table and delivery roadmap for what exists
+versus what is proposed.
 
 ## Local lab
 
@@ -63,6 +66,30 @@ simulations at this stage, not real multi-cluster isolation (see the
 TAD's "Cluster and Environment Topology"). Phase 2.1 creates only the
 cluster itself — no `staging`/`production` namespace, no Argo CD, per
 the imperative/declarative boundary in the TAD.
+
+## Local lab: Argo CD bootstrap
+
+Phase 2.2 installs Argo CD into the Phase 2.1 `lab-lite` cluster via a
+pinned, checksum-verified Helm CLI and an immutable, digest-pinned chart
+release — never `helm repo add`, never a floating tag:
+
+```bash
+make argocd-chart-fetch      # download + checksum-verify the pinned argo-cd-10.4.2 chart (only target allowed to fetch it)
+make argocd-render           # fully offline render; proves every image is approved and digest-pinned
+make argocd-install          # fail-closed idempotent install: absent->install, exact match->no-op, any drift->fail closed
+make argocd-status           # read-only release/workload/CRD status report
+make argocd-test-runtime-health # read-only health checks against an installed release
+make argocd-test-lifecycle   # mutating: proves install/no-op/uninstall/restore idempotency and CRD retention end-to-end
+make argocd-port-forward     # foreground port-forward to the Argo CD UI/API at https://localhost:8443
+make argocd-uninstall        # uninstall the release; CRDs retained; namespace deleted only if owned and inventory-clean
+```
+
+Argo CD's own `dex` and `notifications-controller` are disabled; every
+rendered image is digest-pinned; every rendered container has explicit
+CPU/memory requests and limits. Phase 2.2 installs only the Argo CD
+control plane itself — no root/bootstrap `Application`, `AppProject`, or
+`ApplicationSet`, which are declarative, Phase 2.3 concerns (see the
+TAD's "Local Lab Argo CD Bootstrap" and "GitOps Control Plane" sections).
 
 ## Main components
 
