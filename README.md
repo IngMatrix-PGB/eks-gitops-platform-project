@@ -31,13 +31,38 @@ the [Technical Architecture Document](docs/architecture/technical-architecture.m
 
 ## Current status
 
-**Phase 1 (documentation foundation) is complete; Phase 2 (local lab)
-has not started.** This repository currently contains documentation and
-an accepted architecture baseline only — no Terraform, no Helm charts,
-no Kubernetes manifests, no `kind` cluster, no Argo CD or Keycloak
-installation. An `Accepted` ADR records an approved decision, not an
-implemented one. See the TAD's evidence table and delivery roadmap for
-what exists versus what is proposed.
+**Phase 1 (documentation foundation) is complete. Phase 2.1 (local
+tooling and `kind` foundation) is implemented** — a single, pinned
+`lab-lite` `kind` cluster with no application workloads, no Argo CD, no
+Keycloak. No Terraform, no Helm charts, no Kubernetes manifests beyond
+what `kind` itself creates. An `Accepted` ADR records an approved
+decision, not a fully implemented one. See the TAD's evidence table and
+delivery roadmap for what exists versus what is proposed.
+
+## Local lab
+
+Phase 2.1 provides a pinned, project-local `kind` cluster with zero
+dependency on the machine's global `kubectl`/`kind` installation or
+kubeconfig:
+
+```bash
+make tools-check       # read-only: verify the pinned local toolchain is installed
+make tools-install     # download + checksum-verify kind/kubectl into .tools/bin/ (mutates .tools/ only)
+make lab-create        # create the pinned lab-lite cluster (no-op if it already matches)
+make lab-status        # read-only health/identity report
+make lab-test          # read-only shape/identity checks against the existing cluster
+make lab-test-lifecycle # mutating: proves create/destroy idempotency (cluster must be absent first)
+make lab-destroy       # destroy only the exact project cluster (no-op if absent)
+```
+
+All lab commands use `.tools/bin/kind` and `.tools/bin/kubectl` (never
+the global binaries) and `.local/kubeconfig` (never `~/.kube/config` or
+the shell's current context) — both paths are gitignored. `lab-lite` is
+a single physical cluster; `staging`/`production` are namespace-level
+simulations at this stage, not real multi-cluster isolation (see the
+TAD's "Cluster and Environment Topology"). Phase 2.1 creates only the
+cluster itself — no `staging`/`production` namespace, no Argo CD, per
+the imperative/declarative boundary in the TAD.
 
 ## Main components
 

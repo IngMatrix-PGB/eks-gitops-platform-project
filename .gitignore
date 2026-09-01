@@ -27,6 +27,12 @@ override.tf.json
 kubeconfig*.yaml
 kubeconfig*.yml
 
+# Local lab (Phase 2): project-local kubeconfig and pinned tool binaries.
+# /.local/ is also incidentally matched by the existing *.local pattern
+# above; listed explicitly here for clarity and to not depend on that.
+/.local/
+/.tools/
+
 # Node / Python tooling caches, in case future scripts need them
 node_modules/
 __pycache__/

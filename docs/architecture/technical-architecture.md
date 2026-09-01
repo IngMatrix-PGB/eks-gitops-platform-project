@@ -5,9 +5,9 @@
 | Field | Value |
 |---|---|
 | Document | eks-gitops-platform-project Technical Architecture |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Status | Architecture baseline |
-| Phase | Phase 1 — Complete |
+| Phase | Phase 2.1 — Local tooling and kind foundation (implemented) |
 | Last updated | 2026-08-31 |
 
 This document is the **single, authoritative source of truth** for the
@@ -147,11 +147,31 @@ only), **workload-cluster runtime add-ons** (`staging`/`prod`, including
 each cluster's own ESO), and **application workloads** (`staging`/`prod`
 only, never `management`).
 
-**Local lab profiles** (documented, not created — Phase 2):
-- `lab-lite` — one `kind` cluster, namespaces simulating the three
-  environments. Default for day-to-day iteration.
-- `lab-multicluster` — three separate `kind` clusters, one per
-  environment. Higher fidelity, used deliberately, not by default.
+**Local lab profiles:**
+- `lab-lite` — **implemented as of Phase 2.1**: one `kind` cluster
+  (`kindest/node:v1.36.4`, pinned by digest), single control-plane node.
+  As of Phase 2.1 it is only the cluster itself — `staging`/`production`
+  namespaces, Argo CD, and any workload are added in later Phase 2
+  increments (2.2/2.3), never created imperatively (see "GitOps Control
+  Plane" for the imperative/declarative boundary). Namespace-level
+  environment simulation validates GitOps generation, RBAC, destination
+  restrictions, and reconciliation logic — it does **not** prove real
+  cluster-level isolation.
+- `lab-multicluster` — documented, not created. Three separate `kind`
+  clusters, one per environment; reserved for deliberate, manual
+  execution once `lab-lite` passes all its criteria (Phase 2.5). Real
+  `management`/`staging`/`production` cluster separation is validated
+  only there.
+
+**Local toolchain and isolation (Phase 2.1):** `kind v0.33.0` and
+`kubectl v1.36.4` run from project-local, checksum-pinned binaries
+(`.tools/bin/`, gitignored, installed only via `make tools-install` —
+never the machine's global `kubectl`/`kind`). The cluster's kubeconfig
+lives at `.local/kubeconfig` (gitignored), never merged into
+`~/.kube/config` and never read from an ambient `KUBECONFIG` — every
+`lab/kind/*.sh` and `tests/lab/*.sh` script passes both explicitly. This
+keeps the lab isolated from any EKS context, Docker Desktop Kubernetes,
+or other `kind` clusters on the same machine.
 
 **AWS**: Terraform prepares one VPC/EKS root per environment; **no AWS
 cluster exists by default**. Staging is the first candidate for a
@@ -170,6 +190,18 @@ repositories, destination cluster/namespace pairs, and resource kinds
 per trust domain. Control-plane add-ons and application workloads use
 distinct GitOps boundaries — never the same `AppProject` or generator.
 See ADR-0003.
+
+**Imperative/declarative boundary across Phase 2 increments:** Phase 2.1
+creates only the `kind` cluster itself — never `staging`, `production`,
+`ApplicationSet`, `AppProject`, or any Argo CD resource. Phase 2.2's
+bootstrap is a narrow, explicit exception: it may imperatively create
+only what installing the GitOps controller requires (the Argo CD
+namespace, the pinned Argo CD installation, the root/bootstrap
+`Application`). From Phase 2.3 onward, `staging`, `production`,
+`AppProject`s, `ApplicationSet`s, demo workloads, and environment
+policies are created and reconciled **declaratively** by Argo CD — no
+imperative script owns a resource that GitOps should reconcile from
+there on.
 
 ## Application Delivery and Promotion
 
@@ -370,7 +402,9 @@ Implementation Status" below.
 | Repository foundation (TAD, ADRs, validation scripts) | `CODE-CONFIRMED` | Files exist and pass `make validate` |
 | Local documentation validation (`make validate`) | `VERIFIED`, within each script's documented pattern coverage | Executed with a reproducible result during this phase |
 | Target architecture described in this document | `PROPOSED` | Design only; nothing deployed |
-| Local lab (`lab-lite` / `lab-multicluster`) | `NOT IMPLEMENTED` | Neither profile created yet (Phase 2) |
+| Local lab tooling (`make tools-check`/`tools-install`, `lab/kind/*.sh`) | `VERIFIED` | Executed in this phase: `make tools-install` downloaded and checksum-verified `kind v0.33.0`/`kubectl v1.36.4` into `.tools/bin/`; `make tools-check` confirmed them read-only |
+| `lab-lite` cluster: creation, idempotency, teardown, identity match | `VERIFIED`, scoped to exactly what was exercised (cluster lifecycle and identity — not Argo CD/workloads, which remain `NOT IMPLEMENTED`) | `make lab-test-lifecycle` proved create→create(no-op)→destroy→destroy(no-op); the persistent cluster was then created and confirmed: server `v1.36.4` exactly, node image digest matches the pin, node `Ready`, reachable only via `.local/kubeconfig`, no `staging`/`production`/`argocd` namespace present |
+| `lab-multicluster` | `NOT IMPLEMENTED` | Reserved for Phase 2.5, not created |
 | Argo CD reconciliation / `ApplicationSet` behavior | `NOT IMPLEMENTED` | No Argo CD instance exists |
 | EKS Pod Identity workload access | `UNKNOWN` | Requires a real, temporary, authorized EKS cluster |
 | Workload-identity (cluster/namespace/ServiceAccount) contract | `NOT IMPLEMENTED` | No contract test exists |
@@ -388,7 +422,13 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
 
 - **Phase 0 — Discovery:** complete.
 - **Phase 1 — Documentation foundation:** complete.
-- **Phase 2 — Local GitOps lab:** not started.
+- **Phase 2 — Local GitOps lab:**
+  - **2.1 — Local tooling and `kind` foundation:** implemented (pinned `lab-lite` cluster, project-local toolchain and kubeconfig; no Argo CD, no Keycloak, no `ApplicationSet` yet).
+  - **2.2 — Argo CD bootstrap:** not started.
+  - **2.3 — GitOps contract and demo workload:** not started.
+  - **2.4 — Keycloak OIDC and Argo CD RBAC:** not started.
+  - **2.5 — Multicluster profile:** not started.
+  - **2.6 — Evidence and hardening:** not started.
 - **Phase 3 — Terraform/EKS, plan-only:** not started.
 - **Phase 4 — Identity and secrets:** not started.
 - **Phase 5 — Promotion and governance:** not started.

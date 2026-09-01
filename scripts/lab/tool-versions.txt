@@ -1,0 +1,8 @@
+# Declarative, tracked source of truth for the project-local lab toolchain.
+# Format: name|version|platform|destination-filename|sha256|official-url
+#
+# Read by scripts/lab/check-prerequisites.sh (read-only) and
+# scripts/lab/install-tools.sh (the only script allowed to write into
+# .tools/). Never edited to point at "latest" or a floating URL.
+kind|v0.33.0|darwin-arm64|kind|0c8c7dbe5e23594a198b786c4bc13dacc101fa6196b0cb0b23a1ca44e61f4b4f|https://kind.sigs.k8s.io/dl/v0.33.0/kind-darwin-arm64
+kubectl|v1.36.4|darwin-arm64|kubectl|c9e4f713d6fee0043a3d835cca13077cda2bc0973840eb9779360df0b5bdfc69|https://dl.k8s.io/release/v1.36.4/bin/darwin/arm64/kubectl
