@@ -1,0 +1,37 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+
+# Environment and local overrides
+.env
+.env.*
+*.local
+
+# Terraform (added ahead of Phase 3; harmless while unused)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Kubeconfig exports (added ahead of the local lab; harmless while unused)
+kubeconfig*.yaml
+kubeconfig*.yml
+
+# Node / Python tooling caches, in case future scripts need them
+node_modules/
+__pycache__/
+*.pyc
+
+# Editor/OS-generated temp files
+*.tmp
+*~

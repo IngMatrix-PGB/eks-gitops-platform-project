@@ -1,0 +1,417 @@
+# Technical Architecture Document — eks-gitops-platform-project
+
+## Document Control
+
+| Field | Value |
+|---|---|
+| Document | eks-gitops-platform-project Technical Architecture |
+| Version | 0.4.0 |
+| Status | Architecture baseline |
+| Phase | Phase 1 — Complete |
+| Last updated | 2026-08-31 |
+
+This document is the **single, authoritative source of truth** for the
+project's architecture: scope, principles, topology, control plane,
+identity, secrets, security, risks, evidence, and roadmap. Diagrams are
+inline Mermaid, versioned as part of this file; a standalone draw.io
+diagram and a polished DOCX export are derived artifacts generated from
+this document later (Phase 7), never an independent source to keep in
+sync.
+
+Architectural reasoning here stands on this project's own requirements
+and on general, well-documented GitOps/Kubernetes/AWS engineering risks
+— never on a claim that a specific external system, prior organization,
+or private document informed a decision (see `AGENTS.md`).
+
+## Executive Summary
+
+`eks-gitops-platform-project` is a greenfield, portfolio-quality GitOps
+platform for AWS EKS, built from scratch in small, reviewable phases. It
+demonstrates: reproducible AWS/EKS infrastructure via Terraform; workload
+identity without static credentials (EKS Pod Identity, IRSA as
+compatibility); secrets that never enter Git (External Secrets Operator
++ AWS Secrets Manager, run per cluster, under a layered isolation model);
+Argo CD reconciling a closed set of environments through
+`ApplicationSet`; and production promotion gated by a reviewed PR
+**plus** runtime trust boundaries (`AppProject`, RBAC, least-privilege
+credentials) — the PR alone is treated as necessary, not sufficient.
+
+As of this version, **nothing has been implemented**. This document
+describes the target architecture and the decisions behind it; the
+[evidence table](#evidence-and-implementation-status) states plainly
+that no runtime capability is `VERIFIED` yet. An `Accepted` ADR below
+records an approved decision — it does not mean that decision has been
+implemented.
+
+## Scope and Non-Goals
+
+**In scope:** a local, reproducible `kind`-based lab; a target AWS/EKS
+Terraform substrate (plan-only until authorized); Argo CD +
+`ApplicationSet` with an explicit trust model; a standard workload
+contract; human identity (IAM Identity Center, Keycloak for the local
+lab) and workload identity (Pod Identity, IRSA); secrets management with
+a layered, per-cluster isolation model; PR-gated environment promotion.
+
+**Non-goals:** a general-purpose internal-developer-portal UI; support
+for cloud providers other than AWS; a self-service infrastructure
+catalog in the MVP (Crossplane or equivalent — deferred, see ADR-0001);
+Progressive Delivery as the primary production gate; three permanently
+running EKS clusters; generating application workloads for the
+`management` cluster; deciding Argo CD's production AWS identity
+provider ahead of Phase 3/4 (see "Human Identity and SSO").
+
+## Architecture Principles
+
+1. **A single Git repository is the desired-state source of truth** for
+   everything Argo CD reconciles.
+2. **Application and infrastructure concerns are separated** — the
+   standard workload chart never provisions cloud infrastructure.
+3. **Identity contracts between independently evolving systems are
+   tested, never assumed.** The (cluster, namespace, `ServiceAccount`)
+   tuple that Terraform and the workload chart must agree on is covered
+   by an automated contract test before it is trusted.
+4. **Every required CI check blocks the merge it protects** — no
+   required check is ever configured to continue past a failure.
+5. **A reviewed pull request is necessary, but not sufficient, for
+   production promotion** — it is paired with `AppProject` boundaries,
+   Argo CD RBAC, and least-privilege cluster credentials.
+6. **Pinning applies to what is consumed, not to the desired-state
+   branch itself** — `main` may be tracked continuously because it is
+   protected by review; external dependencies are pinned immutably.
+7. **No control-plane component's identity is shared across clusters
+   for convenience** — each cluster that needs to act on AWS (including
+   each cluster's ESO instance) has its own scoped identity.
+8. **Confidence is labeled honestly** — a capability described only in
+   documentation is never `VERIFIED`.
+
+## System Context
+
+```mermaid
+flowchart TB
+    subgraph Human["Human Access"]
+        Users["Human users<br/>(admin / developer / auditor)"]
+    end
+
+    IDC["IAM Identity Center<br/>(human AWS/EKS access)"]
+    Git["Git repository<br/>(protected branch: main)"]
+
+    subgraph Mgmt["Management cluster (control plane)"]
+        Argo["Argo CD"]
+        Keycloak["Keycloak<br/>(local lab IdP)"]
+        ESOMgmt["ESO<br/>(control-plane secrets only)"]
+    end
+
+    subgraph Staging["Staging cluster (workload plane)"]
+        WLStaging["Application workloads"]
+        ESOStaging["ESO<br/>(staging secrets)"]
+    end
+
+    subgraph Prod["Production cluster (workload plane)"]
+        WLProd["Application workloads"]
+        ESOProd["ESO<br/>(production secrets)"]
+    end
+
+    SM["AWS Secrets Manager"]
+
+    Users -->|"SSO"| IDC
+    Users -->|"OIDC, local lab"| Keycloak
+    IDC -->|"access entries"| Mgmt
+    IDC -->|"access entries"| Staging
+    IDC -->|"access entries"| Prod
+    Git -->|"desired state,<br/>pulled by Argo CD"| Argo
+    Argo -->|"reconciles"| Staging
+    Argo -->|"reconciles"| Prod
+    ESOMgmt --> SM
+    ESOStaging --> SM
+    ESOProd --> SM
+```
+
+Argo CD **pulls** the desired state from Git and reconciles it toward
+`staging` and `prod` — Git is a source Argo CD reads, not something Argo
+CD reconciles. `management` is the control plane only; it is never a
+workload plane. Every cluster that creates Kubernetes `Secret`s runs its
+**own** ESO instance against AWS Secrets Manager — none is shared. See
+"Cluster and Environment Topology."
+
+## Cluster and Environment Topology
+
+| Environment | Role | Control-plane add-ons | Workload-cluster runtime add-ons | Application workloads |
+|---|---|---|---|---|
+| `management` | Control plane | Argo CD; Keycloak (local lab only); ESO, if a control-plane component needs a secret (e.g. Argo CD's OIDC client secret) | — | **No** |
+| `staging` | Workload plane | — | Its own ESO instance, own Pod Identity association, own namespace-scoped `SecretStore`s and IAM roles | Yes — auto-reconciled |
+| `prod` | Workload plane | — | Its own ESO instance, own Pod Identity association, own namespace-scoped `SecretStore`s and IAM roles, fully separate from staging | Yes — PR-promoted only |
+
+**No ESO controller instance is shared across clusters.** This
+distinguishes three categories: **control-plane add-ons** (`management`
+only), **workload-cluster runtime add-ons** (`staging`/`prod`, including
+each cluster's own ESO), and **application workloads** (`staging`/`prod`
+only, never `management`).
+
+**Local lab profiles** (documented, not created — Phase 2):
+- `lab-lite` — one `kind` cluster, namespaces simulating the three
+  environments. Default for day-to-day iteration.
+- `lab-multicluster` — three separate `kind` clusters, one per
+  environment. Higher fidelity, used deliberately, not by default.
+
+**AWS**: Terraform prepares one VPC/EKS root per environment; **no AWS
+cluster exists by default**. Staging is the first candidate for a
+temporary environment once authorized; production stays plan-only until
+a separate authorization. No AWS cluster runs permanently for the lab.
+See ADR-0002.
+
+## GitOps Control Plane
+
+Argo CD, running in `management`, reads the protected `main` branch of
+this repository and reconciles it toward `staging` and `prod`.
+`ApplicationSet` generates `Application` objects from an explicit, closed
+environment list/matrix (never free text) — it **generates, it does not
+authorize**. `AppProject` boundaries restrict allowed source
+repositories, destination cluster/namespace pairs, and resource kinds
+per trust domain. Control-plane add-ons and application workloads use
+distinct GitOps boundaries — never the same `AppProject` or generator.
+See ADR-0003.
+
+## Application Delivery and Promotion
+
+```mermaid
+flowchart TB
+    Dev["Developer change"] --> PR1["Validation PR<br/>(CI: lint, policy,<br/>secret scan)"]
+    PR1 --> Main["Protected branch: main"]
+    Main --> ASGen["ApplicationSet<br/>(generates Applications)"]
+    ASGen -.->|"generates only,<br/>does not approve"| Note["Approval = PR gate<br/>+ AppProject / RBAC"]
+    ASGen --> StagingSync["Automatic staging<br/>reconciliation"]
+    StagingSync --> PromPR["Explicit production<br/>promotion PR"]
+    PromPR --> ProdSync["Production<br/>reconciliation"]
+    ProdSync -.->|"if rollback needed"| Revert["Git revert"]
+    Revert --> Main
+```
+
+Staging reconciles automatically from `main`. Production is promoted
+only through a **separate, explicit PR** that bumps a pinned
+external-dependency value (chart version, image digest) — never a direct
+commit. Rollback is a Git revert of the promotion commit, reconciled the
+same way. The PR gate is necessary but not sufficient: it is paired with
+the `AppProject`/RBAC/least-privilege-credential controls in "Security
+and Trust Boundaries." See ADR-0003.
+
+## Workload Deployment Contract
+
+One standard Helm chart renders every workload: `Deployment`/`Service`,
+an explicit `ServiceAccount` `identityMode` (`podIdentity` / `irsa` /
+`none` — see "Workload Identity"), startup/readiness/liveness probes,
+resource requests/limits, an HPA that does not fight a static replica
+count, a `PodDisruptionBudget`, topology-spread/anti-affinity, graceful
+termination, `NetworkPolicy`, optional `Ingress`, an optional
+metrics/`ServiceMonitor` interface, and digest-pinned images. The chart
+never provisions cloud infrastructure and fails clearly on invalid
+values — every documented field is backed by a template that reads it.
+See ADR-0006.
+
+## Human Identity and SSO
+
+- **Human → AWS/EKS:** AWS IAM Identity Center; EKS access entries mapped
+  to groups. This is settled.
+- **Human → Argo CD, local lab:** Keycloak, direct OIDC — no Dex broker
+  unless a concrete multi-connector need appears later. **Keycloak is
+  the reproducible identity provider for the local lab only; this
+  document does not assert it will be the production identity
+  provider.**
+- **Human → Argo CD, production AWS:** the identity provider is
+  **`UNKNOWN`**, pending an explicit decision in Phase 3/4. The local
+  lab's job is to prove the OIDC/RBAC mechanism (authenticate, map to a
+  role, enforce that role) — not to pre-select a production IdP.
+- Roles: platform administrator, application developer (scoped to owned
+  namespaces), read-only auditor. `admin` is a bootstrap/break-glass
+  fallback, not the standing path once OIDC is configured.
+- Bootstrap: the Keycloak↔Argo CD OIDC secret is generated locally,
+  stored only as an ephemeral in-cluster `Secret`, never written to Git.
+  In AWS, Argo CD may start without SSO; the `management`-cluster ESO
+  instance is installed before OIDC is finalized; the secret then lives
+  in Secrets Manager. See ADR-0005.
+
+## Workload Identity
+
+```mermaid
+flowchart LR
+    subgraph WorkloadPath["Workload path"]
+        Pod["Workload Pod"] --> PIAgent["EKS Pod Identity"]
+        PIAgent --> IAMRole["IAM role"]
+        IAMRole --> AWSService["AWS service"]
+    end
+
+    subgraph SecretsPath["Secrets path"]
+        ESO["ESO controller<br/>(per cluster)"] --> PIAgent2["EKS Pod Identity"]
+        PIAgent2 --> TenantRole["Namespace/tenant role"]
+        TenantRole --> SecretsMgr["AWS Secrets Manager"]
+        ESO --> K8sSecret["Kubernetes Secret"]
+        K8sSecret --> Pod
+    end
+
+    subgraph Compat["Compatibility path only"]
+        Pod2["Workload Pod<br/>(IRSA-only add-on)"] -.->|"OIDC trust policy +<br/>role-arn annotation"| IRSARole["IAM role via IRSA"]
+    end
+```
+
+EKS Pod Identity is the default: no `eks.amazonaws.com/role-arn`
+annotation, requires the Pod Identity Agent, bound via a
+Terraform-managed (cluster, namespace, `ServiceAccount`) association.
+IRSA is an explicit compatibility path only — OIDC provider, trust
+policy, and the annotation — never a silent fallback and never described
+as the same mechanism as Pod Identity. The contract that must be tested
+is the (cluster, namespace, `ServiceAccount`) tuple; `kind` validates its
+shape only — it cannot prove Pod Identity itself. See ADR-0004.
+
+## Secrets Management
+
+External Secrets Operator runs as a **separate instance in every
+cluster** that needs to create Kubernetes `Secret`s — `management`
+(control-plane secrets only), `staging`, and `prod`. **No ESO controller
+instance is shared across clusters.** Each instance reconciles secrets
+from AWS Secrets Manager under a layered model: IAM least privilege,
+Kubernetes RBAC, that cluster's own ESO controller identity (via its own
+Pod Identity association), and — where feasible — per-namespace/tenant
+assumable roles scoped to that cluster. A namespace-scoped `SecretStore`
+is the default in every cluster, referencing that cluster's own scoped
+role; it is **not by itself the security boundary** — real isolation is
+the combination of all layers above, evaluated per cluster.
+`ClusterSecretStore` requires a separate, explicit decision, per cluster
+if ever adopted. See ADR-0004.
+
+## Terraform and Bootstrap Boundary
+
+Terraform provisions AWS infrastructure (VPC, EKS, IAM baseline, KMS,
+Pod Identity associations for every cluster's workloads and ESO
+instance) and Argo CD's initial bootstrap installation only. After
+bootstrap, Argo CD manages its own declarative configuration — Terraform
+does not keep patching it. The OIDC-secret bootstrap ordering (Argo CD
+may start without SSO → the `management`-cluster ESO instance installed
+→ OIDC finalized) and its open seeding question are described in
+ADR-0005; Terraform must never store a secret's plaintext value in state.
+See ADR-0001 and ADR-0005.
+
+## Security and Trust Boundaries
+
+- `AppProject` per trust domain; Argo CD RBAC; a restricted set of
+  principals allowed to modify `ApplicationSet` definitions; a documented
+  sync/prune policy; least-privilege Argo CD cluster credentials.
+- **Explicit threat-model statement:** a compromised Argo CD controller,
+  or an over-privileged/admin-level cluster credential, can mutate a
+  cluster directly regardless of branch protection. This is why the PR
+  gate (ADR-0003) is paired with the runtime controls above, not treated
+  as sufficient alone.
+- Secrets isolation depends on the layered, per-cluster model in
+  "Secrets Management" — a namespace-scoped `SecretStore` is not a
+  boundary by itself, and no ESO identity is shared across clusters.
+- No long-lived AWS access keys are permitted anywhere in this
+  repository (checked by `scripts/validate/check-secrets.sh`, within its
+  documented pattern coverage).
+
+## Observability and Operations
+
+`NOT IMPLEMENTED`. The standard chart reserves a metrics/`ServiceMonitor`
+interface without forcing a Prometheus dependency. An observability
+stack, runbooks, and failure drills are Phase 6 scope.
+
+## Availability and Recovery
+
+`NOT IMPLEMENTED`. Backup/DR boundaries and single-point-of-failure
+analysis for the GitOps delivery path (including the bootstrap-cycle
+risk in the table below) are Phase 6 scope.
+
+## Costs and FinOps
+
+| Item | Cost | Status |
+|---|---|---|
+| Local lab (`lab-lite` or `lab-multicluster`) | No AWS service charges — runs on local Docker | `PROPOSED` — neither profile exists yet |
+| Terraform plan-only | No AWS service charges | `PROPOSED` as a standing rule |
+| One EKS cluster, standard support, control plane only | ≈US$0.10/hour | `INFERRED` — public AWS pricing at time of writing, not re-verified live |
+| Three EKS control planes running continuously | ≈US$219/month, before nodes/NAT/storage/transfer | `INFERRED` — same caveat; why this project never runs three permanent clusters |
+
+"No AWS service charges" means no billed AWS resource consumption — it
+is not a claim of zero cost in every sense (local compute/electricity is
+not counted). All figures must be re-verified against current AWS
+pricing before any real deployment. **No AWS resource is created without
+a fresh, explicit authorization.**
+
+## Architecture Decisions
+
+| ADR | Decision | Status |
+|---|---|---|
+| [ADR-0001](../adr/0001-platform-scope-and-boundaries.md) | Platform scope and repository boundaries | Accepted |
+| [ADR-0002](../adr/0002-environment-topology.md) | Environment topology | Accepted |
+| [ADR-0003](../adr/0003-gitops-control-plane-and-promotion.md) | GitOps control plane and promotion | Accepted |
+| [ADR-0004](../adr/0004-workload-identity-and-secrets.md) | Workload identity and secrets | Accepted |
+| [ADR-0005](../adr/0005-sso-bootstrap-and-cluster-access.md) | SSO, bootstrap, and cluster access | Accepted |
+| [ADR-0006](../adr/0006-standard-workload-contract.md) | Standard workload contract | Accepted |
+
+Each ADR above records an **approved decision**, not an implemented one
+— every capability it describes is tracked honestly in "Evidence and
+Implementation Status" below.
+
+## Risks and Open Questions
+
+| ID | Risk | Impact | Mitigation | Status |
+|---|---|---|---|---|
+| R-01 | The (cluster, namespace, `ServiceAccount`) Pod Identity contract is untested against real EKS | High | Shape-test in `kind`; positive/negative test against a temporary, authorized EKS cluster (ADR-0004) | Open |
+| R-02 | Any cluster's ESO controller identity could be over-privileged, making that cluster's namespace-scoped `SecretStore`s a nominal boundary only — evaluated per cluster and per tenant | High | Per-cluster, per-namespace/tenant assumable roles; IAM least privilege; no ESO identity shared across clusters (ADR-0002, ADR-0004) | Open |
+| R-03 | A compromised Argo CD controller or admin-level cluster credential can mutate a cluster regardless of branch protection | High | `AppProject`, Argo CD RBAC, least-privilege cluster credentials (ADR-0003) | Open |
+| R-04 | Bootstrap cycle between Argo CD, the `management`-cluster ESO instance, and the OIDC client secret | Medium | Documented ordering; OIDC-secret seeding mechanism explicitly `UNKNOWN` pending Phase 4 (ADR-0005) | Open |
+| R-05 | Remote EKS cluster access/credentials for Argo CD not yet designed | Medium | Explicitly deferred to Phase 3/4 with a least-privilege requirement stated up front (ADR-0005) | Open |
+| R-06 | No CI or branch protection exists yet — the PR-gate design is unenforced | High (if a mutating change happened today) | No remote is configured during this phase; tracked for the phase that introduces one | Open |
+| R-07 | AWS costs could be incurred without authorization | High if it happened | Standing rule: no `apply` without fresh, explicit, scoped authorization | Mitigated by policy, not tooling yet |
+| R-08 | TAD/code drift as implementation begins | Medium | TAD updated in the same PR as any architecture change (`AGENTS.md`) | Open |
+| R-09 | Secret and confidentiality-term scanning is pattern-based, not exhaustive | Medium | Documented explicitly in each script; never presented as a complete scanner | Accepted limitation |
+| R-10 | `lab-multicluster` may be too resource-intensive for routine local iteration | Low | `lab-lite` is the default; `lab-multicluster` used deliberately | Open |
+
+## Evidence and Implementation Status
+
+| Capability | Status | Evidence required |
+|---|---|---|
+| Repository foundation (TAD, ADRs, validation scripts) | `CODE-CONFIRMED` | Files exist and pass `make validate` |
+| Local documentation validation (`make validate`) | `VERIFIED`, within each script's documented pattern coverage | Executed with a reproducible result during this phase |
+| Target architecture described in this document | `PROPOSED` | Design only; nothing deployed |
+| Local lab (`lab-lite` / `lab-multicluster`) | `NOT IMPLEMENTED` | Neither profile created yet (Phase 2) |
+| Argo CD reconciliation / `ApplicationSet` behavior | `NOT IMPLEMENTED` | No Argo CD instance exists |
+| EKS Pod Identity workload access | `UNKNOWN` | Requires a real, temporary, authorized EKS cluster |
+| Workload-identity (cluster/namespace/ServiceAccount) contract | `NOT IMPLEMENTED` | No contract test exists |
+| Per-cluster External Secrets reconciliation under the layered model | `NOT IMPLEMENTED` | No cluster or ESO installation exists |
+| Production PR-gated promotion | `PROPOSED` | No remote, branch protection, or `AppProject` exists yet |
+| Argo CD's production AWS identity provider | `UNKNOWN` | Explicitly undecided pending Phase 3/4 (ADR-0005) |
+| Crossplane-based self-service infrastructure | `OUT OF SCOPE` | Deferred past the MVP (ADR-0001) |
+| Progressive Delivery as primary production gate | `OUT OF SCOPE` | Not the design (see "Application Delivery and Promotion") |
+| Cost estimates in "Costs and FinOps" | `INFERRED` | Public pricing at time of writing, not re-verified live |
+
+No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
+`VERIFIED` at the runtime level anywhere in this repository.
+
+## Delivery Roadmap
+
+- **Phase 0 — Discovery:** complete.
+- **Phase 1 — Documentation foundation:** complete.
+- **Phase 2 — Local GitOps lab:** not started.
+- **Phase 3 — Terraform/EKS, plan-only:** not started.
+- **Phase 4 — Identity and secrets:** not started.
+- **Phase 5 — Promotion and governance:** not started.
+- **Phase 6 — Hardening and operations:** not started.
+- **Phase 7 — Final evidence, draw.io, and DOCX:** not started.
+
+## Definition of Done
+
+The project is done only when: a new engineer can launch the local lab
+from documented prerequisites; `ApplicationSet` creates the intended
+staging/production `Application` objects and never for `management`; the
+workload-identity contract is contract-tested and EKS Pod Identity is
+proven against a real, temporary, authorized EKS cluster; production
+promotion requires a reviewed PR **and** the `AppProject`/RBAC/
+least-privilege-credential controls; external dependencies are pinned
+immutably while the desired-state branch itself is protected by review;
+every cluster's ESO instance reconciles under the layered isolation model
+with no secret value ever in Git; required CI checks are blocking and
+green; this TAD and its six ADRs match the actual implementation; every
+unverified runtime statement is labeled honestly; no
+confidentiality-restricted material or its provenance is referenced
+anywhere in this repository's history; and no AWS resource was created
+without explicit authorization.
+
+None of these criteria are met yet — Phase 1 delivers the architecture
+baseline only; implementation begins in Phase 2.
