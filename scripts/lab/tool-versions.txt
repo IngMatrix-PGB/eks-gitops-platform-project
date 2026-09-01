@@ -1,8 +1,20 @@
 # Declarative, tracked source of truth for the project-local lab toolchain.
-# Format: name|version|platform|destination-filename|sha256|official-url
+# Format: name|version|platform|filename|archive_type|archive_member|download_sha256|installed_sha256|url
 #
-# Read by scripts/lab/check-prerequisites.sh (read-only) and
+#   archive_type    "raw" (the download IS the binary) or "tar.gz"
+#                    (the download must be extracted first).
+#   archive_member   For tar.gz only: the exact path of the binary inside
+#                    the extracted archive. Empty for raw.
+#   download_sha256  SHA256 of the file as downloaded (verified BEFORE
+#                    any extraction is attempted).
+#   installed_sha256 SHA256 of the file actually placed at .tools/bin/
+#                    <filename> - identical to download_sha256 for raw
+#                    tools; the extracted binary's own hash for archives.
+#
+# Read by scripts/lab/check-prerequisites.sh (read-only, verifies
+# installed_sha256 against .tools/bin/<filename>) and
 # scripts/lab/install-tools.sh (the only script allowed to write into
 # .tools/). Never edited to point at "latest" or a floating URL.
-kind|v0.33.0|darwin-arm64|kind|0c8c7dbe5e23594a198b786c4bc13dacc101fa6196b0cb0b23a1ca44e61f4b4f|https://kind.sigs.k8s.io/dl/v0.33.0/kind-darwin-arm64
-kubectl|v1.36.4|darwin-arm64|kubectl|c9e4f713d6fee0043a3d835cca13077cda2bc0973840eb9779360df0b5bdfc69|https://dl.k8s.io/release/v1.36.4/bin/darwin/arm64/kubectl
+kind|v0.33.0|darwin-arm64|kind|raw||0c8c7dbe5e23594a198b786c4bc13dacc101fa6196b0cb0b23a1ca44e61f4b4f|0c8c7dbe5e23594a198b786c4bc13dacc101fa6196b0cb0b23a1ca44e61f4b4f|https://kind.sigs.k8s.io/dl/v0.33.0/kind-darwin-arm64
+kubectl|v1.36.4|darwin-arm64|kubectl|raw||c9e4f713d6fee0043a3d835cca13077cda2bc0973840eb9779360df0b5bdfc69|c9e4f713d6fee0043a3d835cca13077cda2bc0973840eb9779360df0b5bdfc69|https://dl.k8s.io/release/v1.36.4/bin/darwin/arm64/kubectl
+helm|v4.2.4|darwin-arm64|helm|tar.gz|darwin-arm64/helm|d747eb4e28bd2727173d15b759fa0a17822291ec09db7ced3d55af290a3661a2|66f6b8881392bfa15c6c1dceef980426a28709c8122d5dc8a7a29697cad7334c|https://get.helm.sh/helm-v4.2.4-darwin-arm64.tar.gz
