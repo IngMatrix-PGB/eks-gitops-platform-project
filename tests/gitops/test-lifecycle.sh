@@ -98,12 +98,21 @@ fi
 echo "OK: step 7 - exactly 2 generated Applications ($GITOPS_GENERATED_APPS)"
 
 echo "test-lifecycle(gitops): step 8 - verify staging/production namespaces and ownership metadata"
+escaped_owner_key="$(printf '%s' "$GITOPS_NS_OWNER_LABEL_KEY" | sed 's/\./\\./g')"
 for ns in staging production; do
-  if ! pkubectl get namespace "$ns" >/dev/null 2>&1; then
-    echo "FAIL: namespace '$ns' was not created" >&2
-    exit 1
-  fi
-  escaped_owner_key="$(printf '%s' "$GITOPS_NS_OWNER_LABEL_KEY" | sed 's/\./\\./g')"
+  # Namespace creation is driven by the generated Application's own
+  # CreateNamespace=true sync, which completes shortly after step 7
+  # observes the Application object itself exists - poll briefly rather
+  # than requiring it to already be there on the very first check.
+  elapsed=0
+  until pkubectl get namespace "$ns" >/dev/null 2>&1; do
+    if [ "$elapsed" -ge 60 ]; then
+      echo "FAIL: namespace '$ns' was not created within 60s" >&2
+      exit 1
+    fi
+    sleep 3
+    elapsed=$((elapsed + 3))
+  done
   owner_label="$(pkubectl get namespace "$ns" -o jsonpath="{.metadata.labels.${escaped_owner_key}}" 2>/dev/null || true)"
   if [ "$owner_label" != "$GITOPS_NS_OWNER_LABEL_VALUE" ]; then
     echo "FAIL: namespace '$ns' missing ownership label $GITOPS_NS_OWNER_LABEL_KEY=$GITOPS_NS_OWNER_LABEL_VALUE (got '${owner_label:-<none>}')" >&2

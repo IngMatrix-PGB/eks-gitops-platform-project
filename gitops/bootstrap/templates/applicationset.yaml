@@ -13,6 +13,13 @@ metadata:
   namespace: argocd
   labels:
     eks-gitops-lab-lite.local/owner: gitops-bootstrap
+  annotations:
+    # Higher wave than the AppProject (wave "0") - deleted FIRST on
+    # cascade (reverse wave order), so this ApplicationSet and its
+    # generated Applications finish their own finalizer-driven cleanup
+    # while the AppProject they reference still exists. See the
+    # AppProject template for the full rationale.
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=error"]

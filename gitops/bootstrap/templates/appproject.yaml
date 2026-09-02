@@ -5,6 +5,16 @@ metadata:
   namespace: argocd
   labels:
     eks-gitops-lab-lite.local/owner: gitops-bootstrap
+  annotations:
+    # Sync waves order deletion in REVERSE - wave "0" is deleted last,
+    # after wave "1" (the ApplicationSet). Without this, the root
+    # Application's finalizer deletes both with no ordering guarantee;
+    # observed empirically to sometimes delete this AppProject first,
+    # leaving the ApplicationSet's still-existing generated Applications
+    # unable to resolve their project reference until a slow
+    # informer-resync retry eventually clears it. This makes the
+    # correct order deterministic instead of racing on resync timing.
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   description: >-
     Phase 2.3 platform environments (staging/production). Exact-scoped:

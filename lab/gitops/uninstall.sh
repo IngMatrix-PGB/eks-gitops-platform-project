@@ -30,7 +30,17 @@ fi
 
 if gitops_root_app_exists; then
   echo "gitops-uninstall: deleting root Application '$GITOPS_ROOT_APP_NAME' (foreground cascade via finalizer) ..."
-  pkubectl -n "$ARGOCD_NAMESPACE" delete application "$GITOPS_ROOT_APP_NAME" --wait --timeout=180s
+  # Observed empirically: the root's own finalizer deletes its two
+  # rendered children (AppProject, ApplicationSet) without an ordering
+  # guarantee between them. If the AppProject disappears first, the
+  # ApplicationSet's already-generated Applications briefly fail to
+  # resolve their project reference; the application-controller's next
+  # resync (informer-cache-bound, observed up to ~2-3 minutes even on a
+  # healthy chain) retries and completes the delete correctly on its
+  # own - never a real deadlock, just slower than a short timeout
+  # suggests. 300s comfortably covers that, without ever force-removing
+  # a finalizer.
+  pkubectl -n "$ARGOCD_NAMESPACE" delete application "$GITOPS_ROOT_APP_NAME" --wait --timeout=300s
   echo "OK: root Application deleted (cascade removed AppProject/ApplicationSet/generated Applications/ConfigMaps)"
 else
   echo "OK: root Application '$GITOPS_ROOT_APP_NAME' already absent"
