@@ -14,4 +14,4 @@ resources:
     memory: 64Mi
 
 configMap:
-  uiMessage: "podinfo staging — phase 2.4 initial rollout"
+  uiMessage: "podinfo staging — phase 2.4 verified"
