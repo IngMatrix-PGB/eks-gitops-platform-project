@@ -145,6 +145,12 @@ metadata:
     eks-gitops-lab-lite.local/owner: lifecycle-test-ephemeral
 spec:
   restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
   containers:
     - name: check
       image: ghcr.io/stefanprodan/podinfo@sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da
@@ -155,6 +161,11 @@ spec:
           curl -fsS "http://${svc}.${ns}.svc.cluster.local:9898/healthz"
           curl -fsS "http://${svc}.${ns}.svc.cluster.local:9898/readyz"
           curl -fsS "http://${svc}.${ns}.svc.cluster.local:9898/api/info"
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
 EOF
   pkubectl -n "$ns" wait --for=jsonpath='{.status.phase}'=Succeeded --timeout=60s pod/"$pod" >/dev/null 2>&1 || true
   info_json="$(pkubectl -n "$ns" logs pod/"$pod" 2>/dev/null | tail -1)"
