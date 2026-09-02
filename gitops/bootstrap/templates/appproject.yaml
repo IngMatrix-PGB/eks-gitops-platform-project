@@ -9,8 +9,8 @@ spec:
   description: >-
     Phase 2.3 platform environments (staging/production). Exact-scoped:
     exactly one source repository, exactly the staging/production
-    destination namespaces, no project roles, no cluster-scoped
-    resource privileges.
+    destination namespaces, no project roles, the single minimum
+    cluster-scoped grant proven necessary for CreateNamespace=true.
   sourceRepos:
     - {{ .Values.repoURL }}
   destinations:
@@ -18,14 +18,17 @@ spec:
     - server: https://kubernetes.default.svc
       namespace: {{ .namespace }}
     {{- end }}
-  # No cluster-scoped resource kind is granted. CreateNamespace=true on
-  # the generated Applications is handled by the Argo CD controller as
-  # a pre-sync step outside normal per-resource AppProject enforcement -
-  # confirmed empirically during this phase's lifecycle test, not
-  # assumed. If a future change proves a cluster-scoped grant is
-  # actually required, add only that single kind here and record why in
-  # docs/adr/0007-private-gitops-bootstrap.md.
-  clusterResourceWhitelist: []
+  # Proven necessary empirically during this phase's lifecycle test, not
+  # assumed: an empty clusterResourceWhitelist makes every generated
+  # Application's CreateNamespace=true sync fail with "resource
+  # :Namespace is not permitted in project platform" - the sync option
+  # IS subject to normal AppProject cluster-resource enforcement, it is
+  # not a permission-check-exempt controller step. This is the single
+  # minimum grant that makes it work; see docs/adr/0007-private-gitops-
+  # bootstrap.md for the empirical finding.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
   namespaceResourceWhitelist:
     - group: ""
       kind: ConfigMap

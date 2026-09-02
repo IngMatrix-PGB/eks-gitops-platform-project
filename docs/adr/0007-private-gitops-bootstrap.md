@@ -85,14 +85,17 @@ was considered:
   namespace.
 - **AppProject scope**: exactly one `sourceRepos` entry (this
   repository's own SSH URL), exactly the `staging`/`production`
-  destination namespaces, an empty `clusterResourceWhitelist`, no
-  project `roles`. `CreateNamespace=true` was verified empirically
-  during this phase's lifecycle test to work with that empty
-  cluster-resource whitelist — Argo CD's namespace-creation sync option
-  is a controller-level step, not a tracked-resource apply, so it does
-  not require a `Namespace` grant here. If a future change proves
-  otherwise, the minimum necessary grant should be added and this
-  paragraph updated to say so.
+  destination namespaces, no project `roles`, and exactly one
+  cluster-scoped grant: `group: "", kind: Namespace`. This grant is not
+  a starting assumption — the first lifecycle-test run against an empty
+  `clusterResourceWhitelist` failed both generated Applications' sync
+  with `resource :Namespace is not permitted in project platform`,
+  proving empirically that `CreateNamespace=true` **is** subject to
+  normal AppProject cluster-resource enforcement, not a permission-
+  check-exempt controller step as initially assumed. The
+  `clusterResourceWhitelist` was corrected to grant exactly that one
+  kind and nothing else, and the lifecycle test re-run confirmed it is
+  sufficient.
 
 ## Alternatives Considered
 
