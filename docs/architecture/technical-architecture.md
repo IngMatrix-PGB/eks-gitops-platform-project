@@ -196,12 +196,63 @@ creates only the `kind` cluster itself — never `staging`, `production`,
 `ApplicationSet`, `AppProject`, or any Argo CD resource. Phase 2.2's
 bootstrap is a narrow, explicit exception: it may imperatively create
 only what installing the GitOps controller itself requires (the Argo CD
-namespace and the pinned Argo CD Helm release) — **it does not create the
-root/bootstrap `Application`, any `AppProject`, or any `ApplicationSet`**;
-those, along with `staging`/`production` and every environment policy,
-are explicitly deferred to Phase 2.3 and created and reconciled
-**declaratively** by Argo CD once it exists — no imperative script owns a
-resource that GitOps should reconcile from there on.
+namespace and the pinned Argo CD Helm release) — it does not create the
+root/bootstrap `Application`, any `AppProject`, or any `ApplicationSet`.
+Phase 2.3 narrows the imperative surface to exactly two objects: the
+Argo CD repository-credential `Secret` and the root `Application`
+(`platform-bootstrap`) itself. Everything the root `Application` points
+at — the `AppProject`, the `ApplicationSet`, the `Application` objects
+it generates, `staging`/`production`, and their `ConfigMap`s — is
+rendered by the `gitops/bootstrap` Helm chart and reconciled
+**declaratively** by Argo CD from there on. See ADR-0007.
+
+### Local Lab Private GitOps Bootstrap (Phase 2.3)
+
+`lab/gitops/*.sh` (backing the `make gitops-*` targets) gives the
+already-installed Argo CD read-only SSH access to this repository and
+bootstraps exactly one root `Application`.
+
+- **Credential**: a repository-scoped, read-only Ed25519 deploy key —
+  never a Personal Access Token, never a personal SSH key, never a
+  GitHub App (see ADR-0007 for the full comparison). The private key
+  lives only at `.local/gitops/github-deploy-key` (gitignored, mode
+  `0600`) and as the `eks-gitops-platform-project-repo` Argo CD
+  repository `Secret`; no script ever prints it — identity is verified
+  by comparing SHA256 hashes and the (non-secret) repository URL only.
+- **Root → chart relationship**: the root `Application` points at the
+  dependency-free `gitops/bootstrap` Helm chart and passes its own Git
+  revision through as a Helm value, so the `ApplicationSet` it renders —
+  and every `Application` that `ApplicationSet` generates — always
+  tracks the exact same revision as the root itself.
+- **Environment generation**: a deterministic Helm `list` generator (not
+  a `git`/`directory` generator) produces exactly two `Application`
+  objects, `platform-smoke-staging` and `platform-smoke-production`,
+  each reading its own `gitops/environments/<env>/` path — a third
+  environment requires an explicit, reviewed chart change, never a
+  stray file drop.
+- **AppProject**: exactly one `sourceRepos` entry, exactly the
+  `staging`/`production` destinations, an empty
+  `clusterResourceWhitelist`, no project `roles`.
+- **Self-heal and prune** are enabled throughout — this is a single
+  local `kind` cluster with no other tenant and no shared blast radius,
+  so the tradeoffs that justify disabling `selfHeal` in a real
+  multi-tenant production environment do not apply yet.
+- **Namespace ownership**: `staging`/`production` carry the same
+  `eks-gitops-lab-lite.local/owner: gitops-bootstrap` label Phase 2.2
+  already established for the `argocd` namespace; `make gitops-uninstall`
+  only ever deletes a namespace carrying that exact label and only after
+  an exhaustive, `kubectl api-resources --namespaced`-driven inventory
+  shows nothing unexpected remains.
+- **Idempotency, proven not assumed**: `make gitops-bootstrap` is
+  fail-closed — absent → applies the root `Application`; an exact match
+  → a true no-op (its `resourceVersion` is asserted unchanged, not just
+  "probably fine"); any drift → refuses to reconcile automatically.
+  `make gitops-test-lifecycle` additionally proves that a deliberate,
+  single-environment `ConfigMap` drift self-heals from Git within 90
+  seconds while the other environment is provably unaffected, and that
+  a foreground-cascading uninstall removes exactly the Phase 2.3
+  workload resources while leaving Argo CD, its CRDs, the repository
+  Secret, and the deploy key untouched.
 
 ### Local Lab Argo CD Bootstrap (Phase 2.2)
 
@@ -435,6 +486,7 @@ a fresh, explicit authorization.**
 | [ADR-0004](../adr/0004-workload-identity-and-secrets.md) | Workload identity and secrets | Accepted |
 | [ADR-0005](../adr/0005-sso-bootstrap-and-cluster-access.md) | SSO, bootstrap, and cluster access | Accepted |
 | [ADR-0006](../adr/0006-standard-workload-contract.md) | Standard workload contract | Accepted |
+| [ADR-0007](../adr/0007-private-gitops-bootstrap.md) | Private repository GitOps bootstrap | Accepted |
 
 Each ADR above records an **approved decision**, not an implemented one
 — every capability it describes is tracked honestly in "Evidence and
@@ -466,7 +518,8 @@ Implementation Status" below.
 | `lab-lite` cluster: creation, idempotency, teardown, identity match | `VERIFIED`, scoped to exactly what was exercised (cluster lifecycle and identity — not Argo CD/workloads, which remain `NOT IMPLEMENTED`) | `make lab-test-lifecycle` proved create→create(no-op)→destroy→destroy(no-op); the persistent cluster was then created and confirmed: server `v1.36.4` exactly, node image digest matches the pin, node `Ready`, reachable only via `.local/kubeconfig`, no `staging`/`production`/`argocd` namespace present |
 | `lab-multicluster` | `NOT IMPLEMENTED` | Reserved for Phase 2.5, not created |
 | Argo CD control-plane bootstrap in `lab-lite` (`make argocd-*`) | `VERIFIED`, scoped to exactly what was exercised (Argo CD's own install/uninstall/upgrade lifecycle — not `ApplicationSet`/`Application` reconciliation behavior, which remains `NOT IMPLEMENTED` until Phase 2.3) | `make argocd-chart-fetch` downloaded and checksum-verified `argo-cd-10.4.2.tgz`; `make argocd-render` confirmed all 7 rendered image occurrences (2 distinct images) are digest-pinned and dex/notifications are absent; `make argocd-test-lifecycle` proved install→install(true no-op: Helm revision, live-manifest sha256, and every managed workload's `.metadata.generation` byte-identical)→uninstall(exactly the 3 pinned CRDs retained and `kubectl diff`-compatible)→uninstall(no-op)→restoration install using those retained CRDs, ending installed and healthy; a further two `make argocd-install` runs confirmed persistence (second run a true no-op) |
-| Argo CD reconciliation / `ApplicationSet` behavior | `NOT IMPLEMENTED` | No `Application`/`ApplicationSet`/`AppProject` object exists; Phase 2.2 installs only the Argo CD control plane itself |
+| Private repository GitOps bootstrap (`make gitops-*`) | `PARTIALLY VERIFIED` at commit time — offline render and repository-authentication provisioning verified pre-merge; the runtime bootstrap/self-heal/uninstall lifecycle is verified via this phase's own PR feature-branch lifecycle test, whose result is recorded in that PR's description (and, if a correction was needed after that run, in a follow-up commit's message) rather than asserted here in advance | `make gitops-render` confirmed the chart renders exactly 1 `AppProject`, 1 `ApplicationSet` with exactly 2 generator elements, 0 `Secret` objects, no wildcard permissions, and correct revision propagation; `make gitops-repo-setup` provisioned the deploy key/GitHub deploy key/repository Secret and was confirmed idempotent (re-run is a true no-op); client- and server-side `kubectl apply --dry-run` passed for the root Application, the rendered AppProject/ApplicationSet, and both environment ConfigMaps |
+| Argo CD reconciliation / `ApplicationSet` behavior | See "Private repository GitOps bootstrap" row above | Phase 2.3 is the first phase to exercise this; scope is exactly `platform`/`platform-environments`/`platform-smoke-{staging,production}` — no other `Application`/`ApplicationSet`/`AppProject` exists |
 | EKS Pod Identity workload access | `UNKNOWN` | Requires a real, temporary, authorized EKS cluster |
 | Workload-identity (cluster/namespace/ServiceAccount) contract | `NOT IMPLEMENTED` | No contract test exists |
 | Per-cluster External Secrets reconciliation under the layered model | `NOT IMPLEMENTED` | No cluster or ESO installation exists |
@@ -486,7 +539,7 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
 - **Phase 2 — Local GitOps lab:**
   - **2.1 — Local tooling and `kind` foundation:** implemented (pinned `lab-lite` cluster, project-local toolchain and kubeconfig; no Argo CD, no Keycloak, no `ApplicationSet` yet).
   - **2.2 — Argo CD bootstrap:** implemented (pinned, digest-verified Argo CD control plane installed offline via Helm into `lab-lite`; fail-closed idempotent install, proven true no-op, CRD retention, and restoration; dex/notifications disabled; no `ApplicationSet`/`Application`/`AppProject` yet).
-  - **2.3 — GitOps contract and demo workload:** not started.
+  - **2.3 — Private repository GitOps bootstrap:** implemented (read-only SSH deploy key; root `Application` applied imperatively; `platform` `AppProject`, `platform-environments` `ApplicationSet`, and `staging`/`production` with a `platform-smoke` `ConfigMap` each, all reconciled declaratively from Git; see ADR-0007). A future increment (proposed name TBD) should add real workloads and the standard chart in place of the smoke `ConfigMap`.
   - **2.4 — Keycloak OIDC and Argo CD RBAC:** not started.
   - **2.5 — Multicluster profile:** not started.
   - **2.6 — Evidence and hardening:** not started.
