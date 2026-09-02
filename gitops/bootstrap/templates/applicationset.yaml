@@ -29,7 +29,6 @@ spec:
           {{- range .Values.environments }}
           - env: {{ .name }}
             namespace: {{ .namespace }}
-            path: {{ .path }}
           {{- end }}
   template:
     metadata:
@@ -38,7 +37,8 @@ spec:
         eks-gitops-lab-lite.local/owner: gitops-bootstrap
       # Required so deleting this Application (directly, or via cascade
       # when the ApplicationSet/root Application above it is deleted)
-      # also deletes the ConfigMap it manages, instead of orphaning it.
+      # also deletes the Deployment/Service/ServiceAccount/ConfigMap it
+      # manages, instead of orphaning them.
       finalizers:
         - resources-finalizer.argocd.argoproj.io
     spec:
@@ -46,7 +46,10 @@ spec:
       source:
         repoURL: {{ .Values.repoURL }}
         targetRevision: {{ .Values.gitRevision }}
-        path: "{{ "{{" }}.path{{ "}}" }}"
+        path: {{ .Values.workloadChartPath }}
+        helm:
+          valueFiles:
+            - "values-{{ "{{" }}.env{{ "}}" }}.yaml"
       destination:
         server: https://kubernetes.default.svc
         namespace: "{{ "{{" }}.namespace{{ "}}" }}"
@@ -57,9 +60,26 @@ spec:
         syncOptions:
           - CreateNamespace=true
           - ServerSideApply=true
+          # Graduated safety step (official Argo CD sync-options
+          # mechanism): defers pruning of anything removed from the
+          # desired state to the final sync wave, letting the rest of
+          # the sync fully settle first. Not Prune=confirm - nothing
+          # this chart renders is stateful/irreversible-if-pruned, so a
+          # manual confirmation gate would only block routine automated
+          # updates for no safety benefit (ADR-0008 / Phase 2.4 plan).
+          - PruneLast=true
         managedNamespaceMetadata:
           labels:
             eks-gitops-lab-lite.local/owner: gitops-bootstrap
+            # Pod Security Admission, pinned to this project's own
+            # cluster minor version (kindest/node:v1.36.4). Enforced by
+            # the API server at admission time, not merely documented.
+            pod-security.kubernetes.io/enforce: restricted
+            pod-security.kubernetes.io/enforce-version: v1.36
+            pod-security.kubernetes.io/audit: restricted
+            pod-security.kubernetes.io/audit-version: v1.36
+            pod-security.kubernetes.io/warn: restricted
+            pod-security.kubernetes.io/warn-version: v1.36
         retry:
           limit: 5
           backoff:

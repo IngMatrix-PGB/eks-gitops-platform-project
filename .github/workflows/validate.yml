@@ -33,6 +33,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: make tools-install
+        # Phase 2.4: make validate now also renders/dry-runs the
+        # standard-workload chart (check-standard-workload-chart), which
+        # needs a real .tools/bin/helm and .tools/bin/kubectl - .tools/
+        # is gitignored, so a fresh runner has neither until this step
+        # downloads and checksum-verifies them (scripts/lab/install-
+        # tools.sh, unchanged, the same script every local invocation
+        # already uses). kind is downloaded too as a side effect of the
+        # same pinned tool-versions.txt list, but is never invoked here -
+        # no cluster is created or reachable in this job.
+        run: make tools-install
+
       - name: make validate
         run: make validate
 

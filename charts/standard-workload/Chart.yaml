@@ -1,0 +1,9 @@
+apiVersion: v2
+name: standard-workload
+description: >-
+  Phase 2.4 standard workload contract - Deployment, Service, ServiceAccount,
+  ConfigMap only. Restricted-PSS-compliant by default. Ingress/HPA/PDB/
+  NetworkPolicy/ServiceMonitor are deferred, not dead-configured (ADR-0006).
+type: application
+version: 0.1.0
+appVersion: "6.15.0"

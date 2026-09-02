@@ -42,6 +42,26 @@ responsibility (ADR-0001). It must render cleanly with minimal values and
 backed by a template that actually reads it, verified by a
 rendering/contract test before the field is documented.
 
+### Phased implementation note (Phase 2.4)
+
+This ADR's full vision above is not implemented in one pass. Phase 2.4
+(`docs/adr/0008-standard-workload-before-sso.md`) ships only `Deployment`,
+`Service`, `ServiceAccount`, and `ConfigMap`, with a Restricted-Pod-Security-
+Standards-compliant default. `HorizontalPodAutoscaler`, `PodDisruptionBudget`,
+`NetworkPolicy`, `Ingress`, and a `ServiceMonitor` interface remain committed
+future chart capabilities — deliberately **not** schema-exposed until each has
+a real template, per the Public Upstream Gap Review's findings that they
+would otherwise be dead configuration in this lab: `kind`'s default CNI does
+not enforce `NetworkPolicy` (WC-09); the community Ingress-NGINX controller
+is being retired and Gateway API should be evaluated first, so no default
+controller choice is made yet (WC-10); `ServiceMonitor` is a Prometheus
+Operator CRD with no operator installed (WC-11); `HorizontalPodAutoscaler`
+and `PodDisruptionBudget` need infrastructure (metrics-server, multiple
+nodes/AZs, a real disruption source) this lab does not have (WC-13). Each
+capability is added in a later, separately reviewed change once its
+supporting infrastructure exists — this paragraph is the record that the
+omission is deliberate, not an oversight.
+
 ## Alternatives Considered
 
 - **Per-service hand-written manifests**: rejected — reintroduces

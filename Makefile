@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 
 .PHONY: help validate check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked \
+	check-standard-workload-chart \
 	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle \
 	argocd-chart-fetch argocd-render argocd-install argocd-status argocd-uninstall argocd-port-forward \
 	argocd-test-runtime-health argocd-test-lifecycle \
@@ -11,7 +12,7 @@ help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked ## Run every Phase 1 documentation validation check
+validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -36,6 +37,9 @@ check-tad: ## Verify the Technical Architecture Document has all required sectio
 
 check-private-untracked: ## Verify local-only reference material is excluded and untracked
 	@bash scripts/validate/check-private-untracked.sh
+
+check-standard-workload-chart: ## Offline lint/render/schema/PSS/dry-run validation of charts/standard-workload for both environments
+	@sh scripts/validate/check-standard-workload-chart.sh
 
 tools-check: ## Verify the project-local kind/kubectl are installed and match pinned checksums (read-only)
 	@sh scripts/lab/check-prerequisites.sh

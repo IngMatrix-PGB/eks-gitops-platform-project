@@ -1,0 +1,17 @@
+# Environment overrides for staging only. Everything not listed here is
+# inherited from values.yaml. Commit 2 of the Phase 2.4 implementation
+# changes only configMap.uiMessage below, to a "final" value, as the
+# GitOps rollout proof (see docs/adr/0008-standard-workload-before-sso.md
+# and the Phase 2.4 plan's rollout-test section).
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
+
+configMap:
+  uiMessage: "podinfo staging — phase 2.4 initial rollout"
