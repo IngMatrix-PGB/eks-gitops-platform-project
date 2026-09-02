@@ -1,0 +1,44 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: {{ .Values.project.name }}
+  namespace: argocd
+  labels:
+    eks-gitops-lab-lite.local/owner: gitops-bootstrap
+  annotations:
+    # Sync waves order deletion in REVERSE - wave "0" is deleted last,
+    # after wave "1" (the ApplicationSet). Without this, the root
+    # Application's finalizer deletes both with no ordering guarantee;
+    # observed empirically to sometimes delete this AppProject first,
+    # leaving the ApplicationSet's still-existing generated Applications
+    # unable to resolve their project reference until a slow
+    # informer-resync retry eventually clears it. This makes the
+    # correct order deterministic instead of racing on resync timing.
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  description: >-
+    Phase 2.3 platform environments (staging/production). Exact-scoped:
+    exactly one source repository, exactly the staging/production
+    destination namespaces, no project roles, the single minimum
+    cluster-scoped grant proven necessary for CreateNamespace=true.
+  sourceRepos:
+    - {{ .Values.repoURL }}
+  destinations:
+    {{- range .Values.environments }}
+    - server: https://kubernetes.default.svc
+      namespace: {{ .namespace }}
+    {{- end }}
+  # Proven necessary empirically during this phase's lifecycle test, not
+  # assumed: an empty clusterResourceWhitelist makes every generated
+  # Application's CreateNamespace=true sync fail with "resource
+  # :Namespace is not permitted in project platform" - the sync option
+  # IS subject to normal AppProject cluster-resource enforcement, it is
+  # not a permission-check-exempt controller step. This is the single
+  # minimum grant that makes it work; see docs/adr/0007-private-gitops-
+  # bootstrap.md for the empirical finding.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap

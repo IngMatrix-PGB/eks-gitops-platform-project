@@ -1,0 +1,39 @@
+# The only Application ever applied imperatively. Everything it
+# generates (AppProject, ApplicationSet, and the ApplicationSet's own
+# generated Applications) is reconciled by Argo CD from Git from here
+# on. See docs/adr/0007-private-gitops-bootstrap.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-bootstrap
+  namespace: argocd
+  labels:
+    eks-gitops-lab-lite.local/owner: gitops-bootstrap
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:IngMatrix-PGB/eks-gitops-platform-project.git
+    targetRevision: main
+    path: gitops/bootstrap
+    helm:
+      parameters:
+        - name: gitRevision
+          value: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-smoke
+  namespace: production
+  labels:
+    eks-gitops-lab-lite.local/owner: gitops-bootstrap
+data:
+  environment: production
+  managed-by: argocd-gitops
+  phase: "2.3"

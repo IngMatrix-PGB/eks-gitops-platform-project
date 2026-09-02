@@ -1,0 +1,9 @@
+apiVersion: v2
+name: gitops-bootstrap
+description: >-
+  Phase 2.3 private GitOps bootstrap chart. Renders exactly one AppProject
+  and one ApplicationSet - never a root Application, a Secret, a
+  Namespace, or any workload resource. Dependency-free.
+type: application
+version: 0.1.0
+appVersion: "2.3.0"

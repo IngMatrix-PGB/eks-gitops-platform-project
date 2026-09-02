@@ -31,16 +31,17 @@ the [Technical Architecture Document](docs/architecture/technical-architecture.m
 
 ## Current status
 
-**Phase 1 (documentation foundation) is complete. Phase 2.1 (local
-tooling and `kind` foundation) and Phase 2.2 (Argo CD bootstrap) are
-implemented** — a single, pinned `lab-lite` `kind` cluster running a
-pinned, digest-verified Argo CD control plane installed offline via
-Helm, with no application workloads, no `ApplicationSet`/`Application`/
-`AppProject`, and no Keycloak yet. No Terraform, no Kubernetes manifests
-beyond what `kind` and the pinned Argo CD chart itself create. An
-`Accepted` ADR records an approved decision, not a fully implemented
-one. See the TAD's evidence table and delivery roadmap for what exists
-versus what is proposed.
+**Phase 1 (documentation foundation), Phase 2.1 (local tooling and
+`kind` foundation), Phase 2.2 (Argo CD bootstrap), and Phase 2.3
+(private GitOps bootstrap) are implemented** — a single, pinned
+`lab-lite` `kind` cluster running a pinned, digest-verified Argo CD
+control plane, reconciling this repository's own `gitops/` directory
+over a read-only SSH deploy key into a `staging` and a `production`
+namespace, each holding one GitOps-managed `ConfigMap`. No application
+workload beyond that smoke `ConfigMap` exists yet, and no Keycloak. No
+Terraform. An `Accepted` ADR records an approved decision, not
+necessarily a fully implemented one. See the TAD's evidence table and
+delivery roadmap for what exists versus what is proposed.
 
 ## Local lab
 
@@ -91,6 +92,34 @@ control plane itself — no root/bootstrap `Application`, `AppProject`, or
 `ApplicationSet`, which are declarative, Phase 2.3 concerns (see the
 TAD's "Local Lab Argo CD Bootstrap" and "GitOps Control Plane" sections).
 
+## Local lab: private GitOps bootstrap
+
+Phase 2.3 gives Argo CD read-only SSH access to this private repository
+and reconciles a `staging` and a `production` environment from
+`gitops/` — only the root `Application` and the Argo CD repository
+credential `Secret` are ever applied imperatively; everything else
+(`AppProject`, `ApplicationSet`, the two generated `Application`
+objects, both namespaces, both `ConfigMap`s) is Git-reconciled:
+
+```bash
+make gitops-repo-setup       # idempotently provision the deploy key, GitHub deploy key, and Argo CD repository Secret
+make gitops-repo-check       # read-only equivalent of the above (no mutation)
+make gitops-render           # fully offline render; proves exactly 1 AppProject/1 ApplicationSet/2 generators/0 Secrets/no wildcards
+make gitops-bootstrap        # fail-closed idempotent apply of the root Application only (REVISION=<value>, default main)
+make gitops-status           # read-only status report
+make gitops-test             # read-only runtime health checks
+make gitops-test-lifecycle   # mutating: proves bootstrap/no-op/self-heal/isolation/uninstall/no-op (REVISION=<pushed branch>)
+make gitops-uninstall        # delete the root Application (foreground cascade) and owned namespaces only
+make gitops-repo-remove      # remove the repository Secret/deploy key (requires CONFIRM=REMOVE; never run by the lifecycle test)
+```
+
+The deploy key is repository-scoped and read-only — see
+[ADR-0007](docs/adr/0007-private-gitops-bootstrap.md) for the full
+comparison against a public repo, an HTTPS PAT, and a GitHub App. Its
+private half never enters Git: it lives only at
+`.local/gitops/github-deploy-key` (gitignored, mode `0600`) and as the
+Argo CD repository Secret in-cluster — no script ever prints it.
+
 ## Main components
 
 | Component | Role |
@@ -105,7 +134,8 @@ TAD's "Local Lab Argo CD Bootstrap" and "GitOps Control Plane" sections).
 
 ## Architecture Decision Records
 
-All six are `Accepted` — an approved decision, not an implemented one.
+All seven are `Accepted` — an approved decision, not necessarily a fully
+implemented one (0001–0003 and 0007 have code behind them today).
 
 | ADR | Decision |
 |---|---|
@@ -115,6 +145,7 @@ All six are `Accepted` — an approved decision, not an implemented one.
 | [0004](docs/adr/0004-workload-identity-and-secrets.md) | Workload identity and secrets |
 | [0005](docs/adr/0005-sso-bootstrap-and-cluster-access.md) | SSO, bootstrap, and cluster access |
 | [0006](docs/adr/0006-standard-workload-contract.md) | Standard workload contract |
+| [0007](docs/adr/0007-private-gitops-bootstrap.md) | Private repository GitOps bootstrap |
 
 ## Working locally
 
