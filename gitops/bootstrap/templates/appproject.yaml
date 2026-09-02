@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: {{ .Values.project.name }}
+  namespace: argocd
+  labels:
+    eks-gitops-lab-lite.local/owner: gitops-bootstrap
+spec:
+  description: >-
+    Phase 2.3 platform environments (staging/production). Exact-scoped:
+    exactly one source repository, exactly the staging/production
+    destination namespaces, no project roles, no cluster-scoped
+    resource privileges.
+  sourceRepos:
+    - {{ .Values.repoURL }}
+  destinations:
+    {{- range .Values.environments }}
+    - server: https://kubernetes.default.svc
+      namespace: {{ .namespace }}
+    {{- end }}
+  # No cluster-scoped resource kind is granted. CreateNamespace=true on
+  # the generated Applications is handled by the Argo CD controller as
+  # a pre-sync step outside normal per-resource AppProject enforcement -
+  # confirmed empirically during this phase's lifecycle test, not
+  # assumed. If a future change proves a cluster-scoped grant is
+  # actually required, add only that single kind here and record why in
+  # docs/adr/0007-private-gitops-bootstrap.md.
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap

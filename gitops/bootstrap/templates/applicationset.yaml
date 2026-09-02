@@ -1,0 +1,61 @@
+{{- /*
+This ApplicationSet's own spec.template block uses ApplicationSet's Go
+templating (goTemplate: true), which is evaluated later by the live
+ApplicationSet controller - NOT by `helm template` now. Every
+{{ "{{" }}.field{{ "}}" }} occurrence below is deliberately built from
+literal Helm string pieces so Helm passes it through untouched instead
+of trying to resolve .field as a Helm value.
+*/ -}}
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: {{ .Values.project.name }}-environments
+  namespace: argocd
+  labels:
+    eks-gitops-lab-lite.local/owner: gitops-bootstrap
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - list:
+        elements:
+          {{- range .Values.environments }}
+          - env: {{ .name }}
+            namespace: {{ .namespace }}
+            path: {{ .path }}
+          {{- end }}
+  template:
+    metadata:
+      name: "platform-smoke-{{ "{{" }}.env{{ "}}" }}"
+      labels:
+        eks-gitops-lab-lite.local/owner: gitops-bootstrap
+      # Required so deleting this Application (directly, or via cascade
+      # when the ApplicationSet/root Application above it is deleted)
+      # also deletes the ConfigMap it manages, instead of orphaning it.
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: {{ .Values.project.name }}
+      source:
+        repoURL: {{ .Values.repoURL }}
+        targetRevision: {{ .Values.gitRevision }}
+        path: "{{ "{{" }}.path{{ "}}" }}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{ "{{" }}.namespace{{ "}}" }}"
+      syncPolicy:
+        automated:
+          selfHeal: true
+          prune: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+        managedNamespaceMetadata:
+          labels:
+            eks-gitops-lab-lite.local/owner: gitops-bootstrap
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m

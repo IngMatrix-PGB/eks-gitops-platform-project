@@ -1,0 +1,23 @@
+# gitops/bootstrap/values.yaml — Phase 2.3 explicit contract.
+# repoURL/gitRevision are overridden by the root Application's own Helm
+# parameters (see gitops/root-application.yaml) so every generated
+# Application reads from the exact same repository and revision as the
+# root Application itself - never a second, independently-drifting copy.
+
+repoURL: git@github.com:IngMatrix-PGB/eks-gitops-platform-project.git
+gitRevision: main
+
+project:
+  name: platform
+
+# Exactly two environments. Adding a third here is intentionally not
+# supported by templates/applicationset.yaml without an explicit,
+# separately-reviewed change - Phase 2.3 authorizes staging/production
+# only.
+environments:
+  - name: staging
+    namespace: staging
+    path: gitops/environments/staging
+  - name: production
+    namespace: production
+    path: gitops/environments/production
