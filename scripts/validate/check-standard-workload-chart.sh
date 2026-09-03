@@ -132,29 +132,47 @@ for render in "$render_staging" "$render_production"; do
 done
 [ "$fail" -eq 0 ] && echo "OK: Service selectors match Deployment pod-template labels in both environments"
 
-# --- client-side kubectl dry-run (never mutates anything; used as a
-# structural/schema oracle only when a real cluster is reachable) ---
-# Verified empirically: kubectl v1.36.4's --dry-run=client still requires
-# live API discovery (RESTMapper resolution) even with --validate=false -
-# there is no fully offline fallback in this kubectl version. --dry-run=
-# client itself guarantees no object is ever persisted, so pointing it at
-# the project's own real kind cluster is safe (identical guarantee to
-# every other --dry-run=client use already in this repository) - it is
-# used here purely as a schema oracle, never as a mutation. In an
-# environment with no reachable cluster at all (CI has none, per this
-# workflow's own no-cluster-access constraint), this step is skipped
-# explicitly and loudly rather than failing on an impossible precondition.
-if [ -f "$PROJECT_KUBECONFIG" ] && pkubectl get --raw /healthz >/dev/null 2>&1; then
-  for render in "$render_staging" "$render_production"; do
-    if ! pkubectl apply --dry-run=client -f "$render" >/dev/null 2>&1; then
-      echo "FAIL: kubectl dry-run=client (against the project cluster, as a schema oracle only - nothing is persisted) rejected $render" >&2
-      pkubectl apply --dry-run=client -f "$render" >&2 || true
-      fail=1
-    fi
-  done
-  [ "$fail" -eq 0 ] && echo "OK: client-side kubectl dry-run passed for both environments (project cluster used as schema oracle, no mutation)"
+# --- kubectl itself must be present, executable, and version-capable
+# before it is trusted for anything below. A wrong-platform or corrupt
+# binary (the "Exec format error" incident this check exists to catch)
+# must fail loudly here - it must never be allowed to masquerade as "no
+# cluster reachable" the way it did before this fix. ---
+if [ ! -x "$KUBECTL" ]; then
+  echo "FAIL: $KUBECTL not found or not executable - run 'make tools-install' first" >&2
+  fail=1
+elif ! "$KUBECTL" version --client >/dev/null 2>&1; then
+  echo "FAIL: $KUBECTL is present but did not execute successfully (missing, incompatible, or wrong-platform binary) - run 'make tools-install'" >&2
+  fail=1
 else
-  echo "SKIP: no reachable cluster available for the kubectl dry-run schema oracle (expected in CI - kubectl v1.36.4 has no offline discovery fallback); helm lint/template, the rendered-kind allowlist, and the schema regression matrix above already cover structural correctness"
+  echo "OK: $KUBECTL is executable and reports a client version"
+
+  # --- client-side kubectl dry-run (never mutates anything; used as a
+  # structural/schema oracle only when a real cluster is reachable) ---
+  # Verified empirically: kubectl v1.36.4's --dry-run=client still
+  # requires live API discovery (RESTMapper resolution) even with
+  # --validate=false - there is no fully offline fallback in this
+  # kubectl version. --dry-run=client itself guarantees no object is
+  # ever persisted, so pointing it at the project's own real kind
+  # cluster is safe (identical guarantee to every other
+  # --dry-run=client use already in this repository) - it is used here
+  # purely as a schema oracle, never as a mutation. Once kubectl itself
+  # is proven functional above, the only remaining reason to skip is a
+  # genuine absence of a project cluster in this environment (expected
+  # in CI, which never runs `make lab-create`) - never a broken binary.
+  if [ ! -f "$PROJECT_KUBECONFIG" ]; then
+    echo "SKIP: no $PROJECT_KUBECONFIG in this environment (expected in CI, which never creates a project cluster); kubectl itself is verified functional above, and helm lint/template, the rendered-kind allowlist, and the schema regression matrix already cover structural correctness"
+  elif ! pkubectl get --raw /healthz >/dev/null 2>&1; then
+    echo "SKIP: $PROJECT_KUBECONFIG exists but the project cluster is not currently reachable; kubectl itself is verified functional above, and helm lint/template, the rendered-kind allowlist, and the schema regression matrix already cover structural correctness"
+  else
+    for render in "$render_staging" "$render_production"; do
+      if ! pkubectl apply --dry-run=client -f "$render" >/dev/null 2>&1; then
+        echo "FAIL: kubectl dry-run=client (against the project cluster, as a schema oracle only - nothing is persisted) rejected $render" >&2
+        pkubectl apply --dry-run=client -f "$render" >&2 || true
+        fail=1
+      fi
+    done
+    [ "$fail" -eq 0 ] && echo "OK: client-side kubectl dry-run passed for both environments (project cluster used as schema oracle, no mutation)"
+  fi
 fi
 
 # --- deterministic negative schema regression (post-merge, values built at runtime) ---
