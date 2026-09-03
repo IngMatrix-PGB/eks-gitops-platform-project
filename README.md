@@ -33,18 +33,22 @@ the [Technical Architecture Document](docs/architecture/technical-architecture.m
 
 **Phase 1 (documentation foundation), Phase 2.1 (local tooling and
 `kind` foundation), Phase 2.2 (Argo CD bootstrap), Phase 2.3 (private
-GitOps bootstrap), and Phase 2.4 (standard workload contract) are
-implemented** — a single, pinned `lab-lite` `kind` cluster running a
-pinned, digest-verified Argo CD control plane, reconciling this
-repository's own `gitops/` directory over a read-only SSH deploy key
-into a `staging` and a `production` namespace, each running a real
-Restricted-PSS-compliant `Deployment`/`Service`/`ServiceAccount`/
-`ConfigMap` (`charts/standard-workload`, a pinned, non-root
-`podinfo` image) instead of the earlier smoke `ConfigMap`. No Keycloak
-yet — postponed, not rejected (ADR-0008). No Terraform. An `Accepted`
-ADR records an approved decision, not necessarily a fully implemented
-one. See the TAD's evidence table and delivery roadmap for what exists
-versus what is proposed.
+GitOps bootstrap), Phase 2.4 (standard workload contract), and Phase 2.5
+(repository governance baseline) are implemented** — a single, pinned
+`lab-lite` `kind` cluster running a pinned, digest-verified Argo CD
+control plane, reconciling this repository's own `gitops/` directory
+over a read-only SSH deploy key into a `staging` and a `production`
+namespace, each running a real Restricted-PSS-compliant
+`Deployment`/`Service`/`ServiceAccount`/`ConfigMap`
+(`charts/standard-workload`, a pinned, non-root `podinfo` image) instead
+of the earlier smoke `ConfigMap`. No Keycloak yet — postponed, not
+rejected (ADR-0008). No Terraform. `main` currently relies on process
+(PR + a passing `validate` check), not GitHub-enforced branch
+protection — this repository is private on GitHub Free, which does not
+offer branch protection or rulesets for a private repository
+(ADR-0009). An `Accepted` ADR records an approved decision, not
+necessarily a fully implemented one. See the TAD's evidence table and
+delivery roadmap for what exists versus what is proposed.
 
 ## Local lab
 
@@ -145,6 +149,30 @@ make check-standard-workload-chart  # offline lint/render/schema/PSS/dry-run val
 See [ADR-0008](docs/adr/0008-standard-workload-before-sso.md) for why
 this phase came before Keycloak/SSO, not instead of it.
 
+## Repository governance
+
+Phase 2.5 applies the repository governance controls actually available
+on a **private repository on GitHub Free**: Dependabot vulnerability
+alerts and automated security updates are enabled; Dependabot version
+updates are configured for the one dependency ecosystem this repository
+actually has (`.github/dependabot.yml`, `github-actions` only); GitHub
+Actions are restricted to GitHub-owned actions with immutable SHA
+pinning required platform-side; and the merge button only offers a real
+merge commit (squash and rebase merging are disabled).
+
+**`main` is not GitHub-protected.** Classic branch protection and
+repository rulesets both require GitHub Pro (or a public repository) for
+a private repository — confirmed directly against this repository's own
+API responses, not assumed from documentation. The owner chose to keep
+the repository private and stay on GitHub Free rather than pay for or
+give up privacy to unlock that feature. Until that changes, `main` is
+protected only by process: every change goes through a pull request,
+and a passing `validate` run is required before merge, by maintainer
+discipline rather than server-side enforcement. The exact ruleset design
+that would close this gap is fully specified and ready to apply,
+unchanged, the moment the plan or visibility decision changes — see
+[ADR-0009](docs/adr/0009-repository-governance-baseline.md).
+
 ## Main components
 
 | Component | Role |
@@ -159,8 +187,8 @@ this phase came before Keycloak/SSO, not instead of it.
 
 ## Architecture Decision Records
 
-All eight are `Accepted` — an approved decision, not necessarily a fully
-implemented one (0001–0003, 0006, 0007, and 0008 have code behind them today).
+All nine are `Accepted` — an approved decision, not necessarily a fully
+implemented one (0001–0003, 0006, 0007, 0008, and 0009 have code behind them today).
 
 | ADR | Decision |
 |---|---|
@@ -172,6 +200,7 @@ implemented one (0001–0003, 0006, 0007, and 0008 have code behind them today).
 | [0006](docs/adr/0006-standard-workload-contract.md) | Standard workload contract |
 | [0007](docs/adr/0007-private-gitops-bootstrap.md) | Private repository GitOps bootstrap |
 | [0008](docs/adr/0008-standard-workload-before-sso.md) | Standard workload contract before SSO |
+| [0009](docs/adr/0009-repository-governance-baseline.md) | Repository governance baseline |
 
 ## Working locally
 

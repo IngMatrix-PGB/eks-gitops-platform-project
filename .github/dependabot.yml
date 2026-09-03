@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # The only dependency-manifest-shaped, Dependabot-supported ecosystem
+  # actually present in this repository (verified against the tracked
+  # file list: no go.mod, package.json, requirements.txt, Gemfile,
+  # Cargo.toml, Dockerfile, or Terraform anywhere) - the single workflow
+  # at .github/workflows/validate.yml, which pins actions/checkout by
+  # SHA. Dependabot supports SHA-pinned actions directly: it opens a PR
+  # updating the pinned SHA, never switching to a floating tag. See
+  # docs/adr/0009-repository-governance-baseline.md.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Single-maintainer repository with exactly one workflow and one
+    # pinned action today - grouping every github-actions update into
+    # one PR avoids multiple near-duplicate PRs for what will usually
+    # be a single-line SHA bump.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
