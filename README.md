@@ -33,19 +33,22 @@ the [Technical Architecture Document](docs/architecture/technical-architecture.m
 
 **Phase 1 (documentation foundation), Phase 2.1 (local tooling and
 `kind` foundation), Phase 2.2 (Argo CD bootstrap), Phase 2.3 (private
-GitOps bootstrap), Phase 2.4 (standard workload contract), and Phase 2.5
-(repository governance baseline) are implemented** — a single, pinned
-`lab-lite` `kind` cluster running a pinned, digest-verified Argo CD
-control plane, reconciling this repository's own `gitops/` directory
-over a read-only SSH deploy key into a `staging` and a `production`
-namespace, each running a real Restricted-PSS-compliant
+GitOps bootstrap), Phase 2.4 (standard workload contract), Phase 2.5
+(repository governance baseline), and Phase 2.6.1 (External Secrets
+Operator bootstrap) are implemented** — a single, pinned `lab-lite`
+`kind` cluster running a pinned, digest-verified Argo CD control plane,
+reconciling this repository's own `gitops/` directory over a read-only
+SSH deploy key into a `staging` and a `production` namespace, each
+running a real Restricted-PSS-compliant
 `Deployment`/`Service`/`ServiceAccount`/`ConfigMap`
 (`charts/standard-workload`, a pinned, non-root `podinfo` image) instead
-of the earlier smoke `ConfigMap`. No Keycloak yet — postponed, not
-rejected (ADR-0008). No Terraform. `main` currently relies on process
-(PR + a passing `validate` check), not GitHub-enforced branch
-protection — this repository is private on GitHub Free, which does not
-offer branch protection or rulesets for a private repository
+of the earlier smoke `ConfigMap`, plus two namespace-scoped External
+Secrets Operator controllers (one per environment) with no `SecretStore`
+or `ExternalSecret` contract wired up yet (Phase 2.6.2). No Keycloak
+yet — postponed, not rejected (ADR-0008). No Terraform. `main` currently
+relies on process (PR + a passing `validate` check), not GitHub-enforced
+branch protection — this repository is private on GitHub Free, which
+does not offer branch protection or rulesets for a private repository
 (ADR-0009). An `Accepted` ADR records an approved decision, not
 necessarily a fully implemented one. See the TAD's evidence table and
 delivery roadmap for what exists versus what is proposed.
@@ -173,6 +176,49 @@ that would close this gap is fully specified and ready to apply,
 unchanged, the moment the plan or visibility decision changes — see
 [ADR-0009](docs/adr/0009-repository-governance-baseline.md).
 
+## Local lab: External Secrets Operator bootstrap
+
+Phase 2.6.1 installs the External Secrets Operator (`v2.10.0`, chart
+`2.10.0`) with its 25 CRDs applied once and owned by no Helm release
+(`kubectl apply`, never a release — the chart renders them as plain
+templates with no retention annotation, so a release that owned them
+would delete them on `helm uninstall`), and **two namespace-scoped
+controller releases** — `eso-staging` (watches only `staging`) and
+`eso-production` (watches only `production`), each with `scopedRBAC:
+true` converting every cluster-scoped RBAC rule the controller itself
+needs into a `Role`/`RoleBinding` restricted to exactly that one
+namespace. The webhook and cert-controller components are cluster-wide
+singletons by construction (their object names are fixed, not
+release-qualified) and run from `eso-staging` only — proven, not
+assumed, by a collision/ownership gate that renders the full
+architecture offline before anything is ever applied. CRDs are applied
+under a single stable field manager with a `--dry-run=server` preflight
+first — a genuine field-ownership conflict stops the install with the
+CRD completely untouched; `--force-conflicts` is never used. Because
+`eso-production` has no webhook/cert-controller of its own, it depends
+on `eso-staging`'s — `make eso-uninstall ENV=staging` is refused
+outright while `eso-production` still exists, and `make eso-status`
+fails if `eso-production` exists but that shared webhook/cert-controller
+is unhealthy:
+
+```bash
+make eso-chart-fetch          # download + checksum-verify the pinned external-secrets-2.10.0 chart (only target allowed to fetch it)
+make eso-render                # fully offline render + collision/ownership proof (25 CRDs, no cross-release collision, webhook/cert-controller singleton, zero structural wildcard RBAC, digest-only images)
+make check-eso-chart           # helm lint + the same proof (standalone - requires the network-fetched chart, so not part of `make validate`)
+make eso-install                # fail-closed idempotent install: CRD preflight (no force) + both scoped releases
+make eso-status                 # read-only CRD/release/Deployment health report, including the shared-singleton dependency check
+make eso-test-runtime-health   # read-only health checks against an installed bootstrap
+make eso-test-lifecycle        # mutating: proves install/no-op/singleton guards/CRD-conflict fail-closed/uninstall(CRDs retained)/no-op/restore end-to-end
+make eso-uninstall              # uninstall both scoped releases (production then staging; ENV=staging|production for one at a time); never touches the CRDs; refuses staging while production exists
+```
+
+No `SecretStore`, `ExternalSecret`, or Kubernetes `Secret` exists yet —
+that is Phase 2.6.2, not yet implemented. See
+[ADR-0010](docs/adr/0010-external-secrets-operator-contract.md) for the
+full rationale, including why the chart's own default (both releases
+running the webhook) was rejected after the collision gate proved it
+would collide, not merely duplicate.
+
 ## Main components
 
 | Component | Role |
@@ -187,8 +233,8 @@ unchanged, the moment the plan or visibility decision changes — see
 
 ## Architecture Decision Records
 
-All nine are `Accepted` — an approved decision, not necessarily a fully
-implemented one (0001–0003, 0006, 0007, 0008, and 0009 have code behind them today).
+All ten are `Accepted` — an approved decision, not necessarily a fully
+implemented one (0001–0003, 0006, 0007, 0008, 0009, and 0010 have code behind them today).
 
 | ADR | Decision |
 |---|---|
@@ -201,6 +247,7 @@ implemented one (0001–0003, 0006, 0007, 0008, and 0009 have code behind them t
 | [0007](docs/adr/0007-private-gitops-bootstrap.md) | Private repository GitOps bootstrap |
 | [0008](docs/adr/0008-standard-workload-before-sso.md) | Standard workload contract before SSO |
 | [0009](docs/adr/0009-repository-governance-baseline.md) | Repository governance baseline |
+| [0010](docs/adr/0010-external-secrets-operator-contract.md) | External Secrets Operator contract |
 
 ## Working locally
 
