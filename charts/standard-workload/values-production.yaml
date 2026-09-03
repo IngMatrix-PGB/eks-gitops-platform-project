@@ -14,3 +14,13 @@ resources:
 
 configMap:
   uiMessage: "podinfo production — phase 2.4"
+
+# Phase 2.6.2: enables the read-only Secret mount for production only -
+# fully separate SecretStore/source-namespace/source-Secret/auth
+# ServiceAccount from staging, no shared object of any kind.
+externalSecret:
+  enabled: true
+  secretStoreName: "production-kubernetes-backend"
+  sourceNamespace: "eso-source-production"
+  sourceSecretName: "local-backend-production"
+  authServiceAccountName: "production-secretstore-reader"
