@@ -177,10 +177,32 @@ fi
 # manager's own seizure uses --force-conflicts (that is the test
 # fixture's setup, standing in for "some other tool already manages
 # this field"; it is not part of, and never appears in, this project's
-# own install path). ---
+# own install path).
+#
+# Fail-safe, trap-based cleanup: from the moment the foreign manager
+# seizes the field, ANY exit from this window - normal completion, an
+# assertion failure below, or an unexpected `set -eu` abort from any
+# command in between - releases that claim. Without this, a mid-window
+# failure would leave conflict-test-simulator permanently owning a
+# field on a real, shared CRD. This script sets no other trap, so
+# installing and later clearing this one is fully self-contained. ---
 echo "test-idempotency: simulating a CRD field-ownership conflict ..."
 conflict_crd="fakes.generators.external-secrets.io"
 conflict_manifest="$(mktemp)"
+conflict_release_manifest="$(mktemp)"
+conflict_out="$(mktemp)"
+cat > "$conflict_release_manifest" <<EOF
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ${conflict_crd}
+EOF
+conflict_cleanup() {
+  pkubectl apply --server-side --field-manager=conflict-test-simulator -f "$conflict_release_manifest" >/dev/null 2>&1 || true
+  rm -f "$conflict_manifest" "$conflict_release_manifest" "$conflict_out"
+}
+trap conflict_cleanup EXIT INT TERM
+
 cat > "$conflict_manifest" <<EOF
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -193,15 +215,15 @@ before_label="$(pkubectl get "customresourcedefinition/${conflict_crd}" -o jsonp
 pkubectl apply --server-side --field-manager=conflict-test-simulator --force-conflicts -f "$conflict_manifest" >/dev/null
 
 conflict_rc=0
-sh lab/eso/install.sh >"$conflict_manifest.out" 2>&1 || conflict_rc=$?
+sh lab/eso/install.sh >"$conflict_out" 2>&1 || conflict_rc=$?
 after_label="$(pkubectl get "customresourcedefinition/${conflict_crd}" -o jsonpath='{.metadata.labels.external-secrets\.io/component}' 2>/dev/null)"
 
 if [ "$conflict_rc" -eq 0 ]; then
   echo "FAIL: install.sh succeeded despite a live field-ownership conflict on $conflict_crd" >&2
   fail=1
-elif ! grep -qi "conflict" "$conflict_manifest.out"; then
+elif ! grep -qi "conflict" "$conflict_out"; then
   echo "FAIL: install.sh failed for a reason other than the expected field-ownership conflict:" >&2
-  cat "$conflict_manifest.out" >&2
+  cat "$conflict_out" >&2
   fail=1
 else
   echo "OK: install.sh's CRD preflight failed closed on a real field-ownership conflict (exit $conflict_rc)"
@@ -226,28 +248,85 @@ else
   echo "OK: lab/eso/install.sh never invokes --force-conflicts"
 fi
 
-# Release the foreign manager's claim (test cleanup, not part of the
-# install path) and restore the real, correct value via install.sh's
-# own normal (non-forced) path.
-release_manifest="$(mktemp)"
-cat > "$release_manifest" <<EOF
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: ${conflict_crd}
-EOF
-pkubectl apply --server-side --field-manager=conflict-test-simulator -f "$release_manifest" >/dev/null
-rm -f "$conflict_manifest" "$conflict_manifest.out" "$release_manifest"
+# Explicit, verified release of the foreign manager's claim (not just
+# relying on the exit trap, though it remains armed as the safety net
+# for anything below that fails unexpectedly) - then restore the real
+# field value via install.sh's own normal (non-forced) path.
+pkubectl apply --server-side --field-manager=conflict-test-simulator -f "$conflict_release_manifest" >/dev/null
+released_managers="$(pkubectl get "customresourcedefinition/${conflict_crd}" -o jsonpath='{.metadata.managedFields[*].manager}' 2>/dev/null)"
+if printf '%s' "$released_managers" | grep -q "conflict-test-simulator"; then
+  echo "FAIL: conflict-test-simulator still holds a field claim on $conflict_crd after the explicit release" >&2
+  fail=1
+else
+  echo "OK: conflict-test-simulator's claim was fully released"
+fi
 
 echo "test-idempotency: re-installing to restore correct CRD field ownership after the conflict simulation ..."
 sh lab/eso/install.sh
 restored_label="$(pkubectl get "customresourcedefinition/${conflict_crd}" -o jsonpath='{.metadata.labels.external-secrets\.io/component}' 2>/dev/null)"
+restored_manager="$(pkubectl get "customresourcedefinition/${conflict_crd}" -o jsonpath="{.metadata.managedFields[?(@.fieldsV1.f:metadata.f:labels.f:external-secrets\\.io/component)].manager}" 2>/dev/null)"
 if [ "$restored_label" = "controller" ]; then
   echo "OK: CRD field ownership restored to this project's own field manager ($restored_label)"
 else
   echo "FAIL: CRD field not restored correctly after the conflict simulation (got '$restored_label')" >&2
   fail=1
 fi
+
+# Confirm no trace of conflict-test-simulator remains across all 25
+# CRDs (not just the one used for the fixture) - the simulation only
+# ever touched fakes.generators.external-secrets.io, but this proves
+# that claim rather than assuming it.
+trace_found=0
+while IFS= read -r crd; do
+  [ -z "$crd" ] && continue
+  crd_managers="$(pkubectl get "customresourcedefinition/${crd}" -o jsonpath='{.metadata.managedFields[*].manager}' 2>/dev/null)"
+  if printf '%s' "$crd_managers" | grep -q "conflict-test-simulator"; then
+    echo "FAIL: CRD $crd still references conflict-test-simulator in managedFields" >&2
+    trace_found=1
+  fi
+done <<EOF
+$(eso_crd_names)
+EOF
+if [ "$trace_found" -eq 0 ]; then
+  echo "OK: no trace of conflict-test-simulator remains in any of the 25 CRDs"
+else
+  fail=1
+fi
+
+# Cleanup is complete and verified - clear the trap so it does not fire
+# a redundant (harmless, but unnecessary) release at script exit.
+trap - EXIT INT TERM
+rm -f "$conflict_manifest" "$conflict_release_manifest" "$conflict_out"
+
+# --- second install after the conflict simulation must be a genuine
+# no-op, under the legitimate field manager only, with both releases
+# still at revision 1 and healthy. ---
+fp_staging_conflict_1="$(capture_release_fingerprint eso-staging eso-staging)"
+fp_production_conflict_1="$(capture_release_fingerprint eso-production eso-production)"
+sh lab/eso/install.sh
+fp_staging_conflict_2="$(capture_release_fingerprint eso-staging eso-staging)"
+fp_production_conflict_2="$(capture_release_fingerprint eso-production eso-production)"
+if [ "$fp_staging_conflict_1" = "$fp_staging_conflict_2" ] && [ "$fp_production_conflict_1" = "$fp_production_conflict_2" ]; then
+  echo "OK: post-conflict-simulation re-install is a true no-op for both releases"
+else
+  echo "FAIL: post-conflict-simulation re-install was not a no-op (staging: $fp_staging_conflict_1 -> $fp_staging_conflict_2; production: $fp_production_conflict_1 -> $fp_production_conflict_2)" >&2
+  fail=1
+fi
+staging_rev="$(printf '%s' "$fp_staging_conflict_2" | cut -d: -f1)"
+production_rev="$(printf '%s' "$fp_production_conflict_2" | cut -d: -f1)"
+if [ "$staging_rev" = "1" ] && [ "$production_rev" = "1" ]; then
+  echo "OK: both releases remain at Helm revision 1 after the conflict simulation and re-install"
+else
+  echo "FAIL: unexpected Helm revision after the conflict simulation (staging=$staging_rev production=$production_rev, expected 1/1)" >&2
+  fail=1
+fi
+if printf '%s' "$restored_manager" | grep -q "^eks-gitops-lab-lite-eso-bootstrap$"; then
+  echo "OK: the legitimate field manager (eks-gitops-lab-lite-eso-bootstrap) owns the restored field"
+else
+  echo "FAIL: unexpected field manager for the restored field: '$restored_manager'" >&2
+  fail=1
+fi
+sh tests/eso/test-runtime-health.sh || fail=1
 
 if [ "$fail" -ne 0 ]; then
   echo "test-idempotency: FAILED before uninstall phase - stopping without uninstalling" >&2
