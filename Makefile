@@ -8,7 +8,8 @@
 	gitops-repo-setup gitops-repo-check gitops-repo-remove gitops-render gitops-bootstrap \
 	gitops-status gitops-test gitops-uninstall gitops-test-lifecycle \
 	eso-chart-fetch eso-render check-eso-chart eso-install eso-status eso-uninstall \
-	eso-test-runtime-health eso-test-lifecycle
+	eso-test-runtime-health eso-test-lifecycle \
+	eso-provision-source-secret eso-test-secret-lifecycle
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
@@ -173,3 +174,9 @@ eso-test-runtime-health: ## Read-only runtime health checks against an already-i
 
 eso-test-lifecycle: ## Mutating: proves install/no-op/uninstall(CRDs retained)/no-op/restore end-to-end
 	@sh tests/eso/test-idempotency.sh
+
+eso-provision-source-secret: ## Phase 2.6.2: create/rotate (default) or delete (ACTION=--delete) the imperative, out-of-Git source Secret for ENV=staging|production; value is read from stdin or an echo-disabled prompt, never a CLI argument
+	@sh lab/eso/provision-source-secret.sh $(ENV) $(ACTION)
+
+eso-test-secret-lifecycle: ## Phase 2.6.2: mutating end-to-end proof of the SecretStore/ExternalSecret contract (provision/reconcile/mount/rotate/propagate/delete-recreate/no-op/uninstall/restore); prints only hashes and states, never secret values; reconciles from the current pushed branch, restores to main
+	@sh tests/eso/test-secret-lifecycle.sh

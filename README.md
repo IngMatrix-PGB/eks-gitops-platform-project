@@ -34,8 +34,9 @@ the [Technical Architecture Document](docs/architecture/technical-architecture.m
 **Phase 1 (documentation foundation), Phase 2.1 (local tooling and
 `kind` foundation), Phase 2.2 (Argo CD bootstrap), Phase 2.3 (private
 GitOps bootstrap), Phase 2.4 (standard workload contract), Phase 2.5
-(repository governance baseline), and Phase 2.6.1 (External Secrets
-Operator bootstrap) are implemented** — a single, pinned `lab-lite`
+(repository governance baseline), Phase 2.6.1 (External Secrets
+Operator bootstrap), and Phase 2.6.2 (External Secrets workload
+contract) are implemented** — a single, pinned `lab-lite`
 `kind` cluster running a pinned, digest-verified Argo CD control plane,
 reconciling this repository's own `gitops/` directory over a read-only
 SSH deploy key into a `staging` and a `production` namespace, each
@@ -43,8 +44,12 @@ running a real Restricted-PSS-compliant
 `Deployment`/`Service`/`ServiceAccount`/`ConfigMap`
 (`charts/standard-workload`, a pinned, non-root `podinfo` image) instead
 of the earlier smoke `ConfigMap`, plus two namespace-scoped External
-Secrets Operator controllers (one per environment) with no `SecretStore`
-or `ExternalSecret` contract wired up yet (Phase 2.6.2). No Keycloak
+Secrets Operator controllers (one per environment), each now backed by
+its own namespaced `SecretStore`/`ExternalSecret` pair (Kubernetes-
+provider local backend) that reconciles an imperative, out-of-Git
+source Secret into a target Secret ESO owns exclusively, mounted into
+the workload as a read-only volume — never an environment variable, and
+never a `Secret` manifest in Git. No Keycloak
 yet — postponed, not rejected (ADR-0008). No Terraform. `main` currently
 relies on process (PR + a passing `validate` check), not GitHub-enforced
 branch protection — this repository is private on GitHub Free, which
@@ -212,12 +217,36 @@ make eso-test-lifecycle        # mutating: proves install/no-op/singleton guards
 make eso-uninstall              # uninstall both scoped releases (production then staging; ENV=staging|production for one at a time); never touches the CRDs; refuses staging while production exists
 ```
 
-No `SecretStore`, `ExternalSecret`, or Kubernetes `Secret` exists yet —
-that is Phase 2.6.2, not yet implemented. See
-[ADR-0010](docs/adr/0010-external-secrets-operator-contract.md) for the
-full rationale, including why the chart's own default (both releases
-running the webhook) was rejected after the collision gate proved it
-would collide, not merely duplicate.
+Phase 2.6.2 adds the per-environment `SecretStore`/`ExternalSecret`
+reconciliation contract on top of that bootstrap. The `kubernetes`-
+provider `SecretStore` in each of `staging`/`production` reads from a
+dedicated `eso-source-staging`/`eso-source-production` namespace that
+is never touched by Argo CD or this chart — its Secret is created and
+rotated exclusively by `lab/eso/provision-source-secret.sh`, an
+imperative, out-of-Git script that reads the value only from stdin or
+an echo-disabled prompt, never a CLI argument, and never prints it.
+Each `ExternalSecret` reconciles that source into a target Secret it
+owns exclusively (`creationPolicy: Owner`, `deletionPolicy: Retain`),
+which `charts/standard-workload` mounts as a read-only volume
+(`externalSecret.enabled`) — never `env`/`envFrom`. `staging` and
+`production` are fully isolated: distinct `SecretStore`s, distinct
+source namespaces/Secrets, distinct auth `ServiceAccount`s, and neither
+`SecretStore` can resolve the other's Secret. The `AppProject` grants
+only the two new namespaced kinds (`SecretStore`, `ExternalSecret`) —
+never `Secret`; Argo CD never manages a Secret in this design.
+
+```bash
+make eso-provision-source-secret ENV=staging     # create/rotate the staging source Secret (value from stdin/prompt, never argv)
+make eso-provision-source-secret ENV=production  # same, production
+make eso-provision-source-secret ENV=staging ACTION=--delete  # idempotent teardown of that environment's source namespace
+make eso-test-secret-lifecycle    # mutating: provision -> both SecretStores/ExternalSecrets Ready -> target Secrets owned by ESO -> read-only mount hash-verified per environment -> staging/production isolation -> controlled rotation + propagation (production unaffected) -> target-Secret delete/ESO-recreate -> no-op bootstrap -> ESO uninstall with target-Secret retention -> restore
+```
+
+See [ADR-0010](docs/adr/0010-external-secrets-operator-contract.md) for
+the full rationale, including why the chart's own default (both
+releases running the webhook) was rejected after the collision gate
+proved it would collide, not merely duplicate, and why the source
+Secret lives outside both Git and Helm ownership.
 
 ## Main components
 
