@@ -76,10 +76,18 @@ while IFS='|' read -r env_name ns release webhook_create cert_create; do
     fail=1
   fi
 
-  # No wildcard in the live Role.
-  wildcard_hits="$(pkubectl get role "$role_name" -n "$env_name" -o json 2>/dev/null | grep -c '"\*"' || true)"
-  if [ "$wildcard_hits" -gt 0 ]; then
-    echo "FAIL: live Role/$role_name contains a wildcard" >&2
+  # Structural (field-aware) wildcard scan of the LIVE Role, not a blind
+  # grep - reuses the same YAML-structural scanner the offline render
+  # gate uses (scripts/eso/_lib.sh), applied to `-o yaml` output so the
+  # same field-tracking logic is valid (kubectl's `-o json` array
+  # formatting is not the shape this scanner is written for).
+  role_yaml="$(mktemp)"
+  pkubectl get role "$role_name" -n "$env_name" -o yaml > "$role_yaml" 2>/dev/null
+  wildcard_hits="$(eso_check_no_rbac_wildcards "$role_yaml")"
+  rm -f "$role_yaml"
+  if [ -n "$wildcard_hits" ]; then
+    echo "FAIL: live Role/$role_name contains a structural wildcard:" >&2
+    printf '%s\n' "$wildcard_hits" >&2
     fail=1
   fi
 

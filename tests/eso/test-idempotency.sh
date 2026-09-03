@@ -3,9 +3,15 @@
 # bootstrap's install/no-op/uninstall/restore idempotency end to end:
 #   global-isolation baseline -> Argo CD/workload baseline -> install ->
 #   install (true no-op, per release) -> runtime health -> CRD
-#   ownership/isolation proof -> uninstall (CRDs retained) -> uninstall
-#   (no-op) -> restoration install -> restoration install (no-op) ->
-#   final health -> global-isolation re-check.
+#   ownership/isolation proof -> singleton-health guard (status.sh must
+#   fail while production exists if staging's shared webhook is
+#   unhealthy) -> CRD field-ownership conflict (install.sh's preflight
+#   must fail closed, with zero mutation and never a --force-conflicts
+#   retry) -> singleton-dependency guard (uninstalling staging while
+#   production exists must be refused) -> uninstall in the only order
+#   the guard allows (production, then staging; CRDs retained) ->
+#   uninstall (no-op) -> restoration install -> restoration install
+#   (no-op) -> final health -> global-isolation re-check.
 #
 # "True no-op" is proven empirically per scoped release: each release's
 # Helm revision and live manifest checksum are captured before and
@@ -121,14 +127,164 @@ else
   fail=1
 fi
 
+# --- status.sh must fail while production exists if staging's shared
+# webhook/cert-controller singleton is unhealthy - temporarily scale
+# the webhook Deployment to 0, confirm `eso-status` fails for exactly
+# that reason, then restore it and confirm status passes again. ---
+echo "test-idempotency: singleton health guard - scaling down the shared webhook Deployment ..."
+pkubectl scale deployment eso-staging-external-secrets-webhook -n eso-staging --replicas=0 >/dev/null
+pkubectl wait --for=jsonpath='{.status.replicas}'=0 deployment/eso-staging-external-secrets-webhook -n eso-staging --timeout=30s >/dev/null 2>&1 || true
+
+status_rc=0
+sh lab/eso/status.sh >/dev/null 2>&1 || status_rc=$?
+if [ "$status_rc" -eq 0 ]; then
+  echo "FAIL: eso-status succeeded even though the shared webhook singleton is unhealthy while production exists" >&2
+  fail=1
+else
+  echo "OK: eso-status failed closed (exit $status_rc) while the shared webhook singleton was unhealthy"
+fi
+
+echo "test-idempotency: restoring the shared webhook Deployment ..."
+pkubectl scale deployment eso-staging-external-secrets-webhook -n eso-staging --replicas=1 >/dev/null
+# Wait on the exact field status.sh itself reads (readyReplicas=1), not
+# just the Available condition - Available can flip true a moment
+# before status.readyReplicas catches up, which previously made the
+# very next status.sh call flap between "restored" and "still
+# unhealthy" depending on timing.
+pkubectl wait --for=jsonpath='{.status.readyReplicas}'=1 deployment/eso-staging-external-secrets-webhook -n eso-staging --timeout=120s >/dev/null
+
+status_rc=0
+status_tries=0
+while [ "$status_tries" -lt 6 ]; do
+  status_rc=0
+  sh lab/eso/status.sh >/dev/null 2>&1 || status_rc=$?
+  [ "$status_rc" -eq 0 ] && break
+  status_tries=$((status_tries + 1))
+  sleep 5
+done
+if [ "$status_rc" -ne 0 ]; then
+  echo "FAIL: eso-status still fails after the shared webhook singleton was restored (retried $status_tries times)" >&2
+  fail=1
+else
+  echo "OK: eso-status passes again once the shared webhook singleton is healthy"
+fi
+
+# --- CRD field-ownership conflict: install.sh's preflight must stop
+# the install with the CRD completely untouched, and must never retry
+# with --force-conflicts. Simulated by forcing a THIRD, foreign field
+# manager to seize a field our own CRD template genuinely sets
+# (metadata.labels."external-secrets.io/component") - the foreign
+# manager's own seizure uses --force-conflicts (that is the test
+# fixture's setup, standing in for "some other tool already manages
+# this field"; it is not part of, and never appears in, this project's
+# own install path). ---
+echo "test-idempotency: simulating a CRD field-ownership conflict ..."
+conflict_crd="fakes.generators.external-secrets.io"
+conflict_manifest="$(mktemp)"
+cat > "$conflict_manifest" <<EOF
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ${conflict_crd}
+  labels:
+    external-secrets.io/component: "conflict-test-hijacked"
+EOF
+before_label="$(pkubectl get "customresourcedefinition/${conflict_crd}" -o jsonpath='{.metadata.labels.external-secrets\.io/component}' 2>/dev/null)"
+pkubectl apply --server-side --field-manager=conflict-test-simulator --force-conflicts -f "$conflict_manifest" >/dev/null
+
+conflict_rc=0
+sh lab/eso/install.sh >"$conflict_manifest.out" 2>&1 || conflict_rc=$?
+after_label="$(pkubectl get "customresourcedefinition/${conflict_crd}" -o jsonpath='{.metadata.labels.external-secrets\.io/component}' 2>/dev/null)"
+
+if [ "$conflict_rc" -eq 0 ]; then
+  echo "FAIL: install.sh succeeded despite a live field-ownership conflict on $conflict_crd" >&2
+  fail=1
+elif ! grep -qi "conflict" "$conflict_manifest.out"; then
+  echo "FAIL: install.sh failed for a reason other than the expected field-ownership conflict:" >&2
+  cat "$conflict_manifest.out" >&2
+  fail=1
+else
+  echo "OK: install.sh's CRD preflight failed closed on a real field-ownership conflict (exit $conflict_rc)"
+fi
+if [ "$after_label" != "conflict-test-hijacked" ]; then
+  echo "FAIL: the conflicting CRD field was modified by the failed install attempt (before='$before_label' after='$after_label') - this must never happen" >&2
+  fail=1
+else
+  echo "OK: the CRD was not modified, deleted, recreated, or force-adopted by the failed install attempt"
+fi
+# Checked against install.sh's own SOURCE with comment lines stripped
+# first, not its runtime output - kubectl's own conflict error always
+# suggests "--force-conflicts" as one way a human could resolve it (see
+# the captured output above), which would make an output-text check a
+# permanent false positive; the script's own explanatory comments about
+# why it never does this would equally trip a naive full-file grep.
+# What actually matters is that no *executable* line passes that flag.
+if grep -v '^[[:space:]]*#' lab/eso/install.sh | grep -q -- "--force-conflicts"; then
+  echo "FAIL: lab/eso/install.sh itself invokes --force-conflicts - it must never retry a CRD conflict with a force flag" >&2
+  fail=1
+else
+  echo "OK: lab/eso/install.sh never invokes --force-conflicts"
+fi
+
+# Release the foreign manager's claim (test cleanup, not part of the
+# install path) and restore the real, correct value via install.sh's
+# own normal (non-forced) path.
+release_manifest="$(mktemp)"
+cat > "$release_manifest" <<EOF
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ${conflict_crd}
+EOF
+pkubectl apply --server-side --field-manager=conflict-test-simulator -f "$release_manifest" >/dev/null
+rm -f "$conflict_manifest" "$conflict_manifest.out" "$release_manifest"
+
+echo "test-idempotency: re-installing to restore correct CRD field ownership after the conflict simulation ..."
+sh lab/eso/install.sh
+restored_label="$(pkubectl get "customresourcedefinition/${conflict_crd}" -o jsonpath='{.metadata.labels.external-secrets\.io/component}' 2>/dev/null)"
+if [ "$restored_label" = "controller" ]; then
+  echo "OK: CRD field ownership restored to this project's own field manager ($restored_label)"
+else
+  echo "FAIL: CRD field not restored correctly after the conflict simulation (got '$restored_label')" >&2
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "test-idempotency: FAILED before uninstall phase - stopping without uninstalling" >&2
   exit 1
 fi
 
-# --- 11. ordinary uninstall ---
-echo "test-idempotency: uninstall ..."
-sh lab/eso/uninstall.sh
+# --- 11. singleton-dependency uninstall guard: removing staging (the
+# webhook/cert-controller owner) while production still exists must be
+# refused outright, with nothing uninstalled. ---
+echo "test-idempotency: singleton-dependency guard - uninstalling staging while production exists (expect refusal) ..."
+guard_out="$(mktemp)"
+guard_rc=0
+sh lab/eso/uninstall.sh staging >"$guard_out" 2>&1 || guard_rc=$?
+cat "$guard_out"
+rm -f "$guard_out"
+
+if [ "$guard_rc" -eq 0 ]; then
+  echo "FAIL: 'uninstall.sh staging' succeeded while eso-production still exists - the singleton dependency was not enforced" >&2
+  fail=1
+elif ! eso_release_exists eso-staging eso-staging; then
+  echo "FAIL: 'uninstall.sh staging' was refused but eso-staging is gone anyway" >&2
+  fail=1
+else
+  echo "OK: 'uninstall.sh staging' was refused (exit $guard_rc) and eso-staging remains installed"
+fi
+
+# --- ordinary uninstall, in the only order the guard allows: production
+# first (always safe), then staging (now unblocked). ---
+echo "test-idempotency: uninstall production (always safe) ..."
+sh lab/eso/uninstall.sh production
+if eso_release_exists eso-production eso-production; then
+  echo "FAIL: eso-production still exists after 'uninstall.sh production'" >&2
+  fail=1
+fi
+
+echo "test-idempotency: uninstall staging (now unblocked - production is gone) ..."
+sh lab/eso/uninstall.sh staging
 
 # --- 12. confirm all 25 CRDs remain ---
 remaining=0

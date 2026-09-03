@@ -95,6 +95,38 @@ authorization):
    treats Argo CD's own control-plane installation as imperative,
    outside GitOps; ESO is the same category of thing (a cluster operator
    with CRD/RBAC lifecycle concerns), not a workload.
+7. **CRD apply is fail-closed on field-ownership conflict, never
+   forced.** `kubectl apply --server-side` runs under a single, stable,
+   project-specific field manager
+   (`eks-gitops-lab-lite-eso-bootstrap`) and is preceded by a
+   `--dry-run=server` preflight - a genuine conflict against any other
+   field manager stops the install with the CRD completely untouched
+   (proven empirically: a rejected apply, dry-run or real, never
+   changes the object). `--force-conflicts` is never used anywhere in
+   this bootstrap; a conflict is a stop condition, not something to
+   silently resolve by force-adopting, deleting, or recreating the CRD.
+8. **The webhook/cert-controller singleton is an explicit, enforced
+   dependency, not just a comment.** `eso-production` has no webhook or
+   cert-controller of its own and depends entirely on `eso-staging`'s
+   for `ExternalSecret`/`SecretStore` admission validation and CA
+   management. `lab/eso/uninstall.sh` refuses to remove `eso-staging`
+   while `eso-production` still exists (`sh lab/eso/uninstall.sh
+   staging` fails closed in that state); `lab/eso/status.sh` fails if
+   `eso-production` exists but `eso-staging`'s webhook/cert-controller
+   Deployments are not Ready. Uninstalling both together always
+   proceeds production-first, staging-second, which trivially satisfies
+   the same dependency without a special case.
+9. **RBAC wildcard validation is structural (field-aware), not a blind
+   text search.** `eso_check_no_rbac_wildcards`
+   (`scripts/eso/_lib.sh`) tracks which of `apiGroups`/`resources`/
+   `verbs`/`resourceNames`/`nonResourceURLs` a candidate value belongs
+   to, and covers quoted and unquoted block list items, single-line
+   inline/flow lists, and multi-line inline/flow lists - a plain
+   `grep -c '"\*"'` would miss an unquoted `- *` list item and every
+   inline-list form entirely, and could never attribute a match to a
+   specific field. Applied to both the offline render (`lab/eso/
+   render.sh`) and the live installed `Role` objects (`tests/eso/
+   test-runtime-health.sh`).
 
 ## Alternatives Considered
 
@@ -150,8 +182,12 @@ authorization):
 - `eso-staging` is a structurally special release (it alone carries the
   webhook/cert-controller) - deleting or corrupting it has a
   cluster-wide admission-control impact that deleting `eso-production`
-  does not. This asymmetry is documented here rather than hidden; the
-  emergency/rollback procedure in the canonical plan accounts for it.
+  does not. This asymmetry is not just documented but enforced in code:
+  `lab/eso/uninstall.sh` refuses to remove `eso-staging` while
+  `eso-production` exists, and `lab/eso/status.sh` fails if
+  `eso-production` exists but the shared webhook/cert-controller are
+  unhealthy (see Decision items 7-8). The emergency/rollback procedure
+  in the canonical plan accounts for it as well.
 - Phase 2.6.2 (the actual secret contract a workload consumes) is not
   yet implemented - this ADR intentionally covers only the operator
   bootstrap, per the two-PR boundary decided in the canonical plan.
@@ -177,8 +213,15 @@ optional cluster-scoped extras (`rbac.servicebindings.create`,
   is scoped to exactly its own namespace; zero wildcard matches; every
   rendered image is digest-pinned.
 - `make eso-test-runtime-health` (read-only) and `make eso-test-lifecycle`
-  (mutating: install → true no-op → uninstall with CRD retention proof →
-  no-op uninstall → restoration install → no-op) - both against the real
+  (mutating: install → true no-op → runtime health → singleton-health
+  guard (`status.sh` fails if `eso-production` exists while `eso-staging`'s
+  shared webhook is unhealthy) → simulated CRD field-ownership conflict
+  (`install.sh`'s preflight fails closed, zero mutation, no
+  `--force-conflicts` retry, proven by inspecting the CRD's field value
+  and the failure output) → singleton-dependency guard (`uninstall.sh
+  staging` refused while `eso-production` exists) → uninstall in the
+  only order the guard allows → CRD retention proof → no-op uninstall →
+  restoration install → no-op) - both against the real
   `eks-gitops-lab-lite` cluster via `.local/kubeconfig` only, both
   preserving Argo CD, `platform-bootstrap`, and the standard-workload
   baseline throughout, both proving the global kubeconfig hash and

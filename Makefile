@@ -165,8 +165,8 @@ eso-install: ## Fail-closed idempotent install: 25 CRDs (kubectl apply, no Helm 
 eso-status: ## Report CRD/release/Deployment health for both scoped releases (read-only)
 	@sh lab/eso/status.sh
 
-eso-uninstall: ## Uninstall both scoped releases (production then staging); never touches the 25 CRDs
-	@sh lab/eso/uninstall.sh
+eso-uninstall: ## Uninstall both scoped releases (production then staging; accepts ENV=staging|production for one at a time); never touches the 25 CRDs; refuses to uninstall staging while production still exists
+	@sh lab/eso/uninstall.sh $(ENV)
 
 eso-test-runtime-health: ## Read-only runtime health checks against an already-installed ESO bootstrap
 	@sh tests/eso/test-runtime-health.sh

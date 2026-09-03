@@ -54,6 +54,29 @@ ESO_IMAGE_TAG="${ESO_CHART_APP_VERSION}@${ESO_IMAGE_DIGEST}"
 ESO_NS_OWNER_LABEL_KEY="eks-gitops-lab-lite.local/owner"
 ESO_NS_OWNER_LABEL_VALUE="eso-bootstrap"
 
+# Stable, project-specific field manager for every CRD server-side
+# apply this bootstrap ever performs. Never combined with
+# --force-conflicts: a conflict against any OTHER field manager must
+# stop the install with no mutation, not be forced through. Re-applying
+# from this same manager is always conflict-free by definition (a
+# manager never conflicts with its own prior claims), which is what
+# makes ordinary idempotent re-installs work without force.
+ESO_CRD_FIELD_MANAGER="eks-gitops-lab-lite-eso-bootstrap"
+
+# eso-staging is the fixed, arbitrary owner of the cluster-wide
+# webhook/cert-controller singletons (see the file header). This makes
+# that dependency explicit and checkable in code, not just in comments:
+# eso-production's admission validation (ExternalSecret/SecretStore)
+# and CA management depend on eso-staging's webhook/cert-controller
+# Deployments - removing eso-staging while eso-production still exists
+# would silently break admission control for both environments.
+ESO_SINGLETON_OWNER_ENV="staging"
+ESO_SINGLETON_OWNER_NS="eso-staging"
+ESO_SINGLETON_OWNER_RELEASE="eso-staging"
+ESO_DEPENDENT_ENV="production"
+ESO_DEPENDENT_NS="eso-production"
+ESO_DEPENDENT_RELEASE="eso-production"
+
 HELM_BIN=".tools/bin/helm"
 
 require_eso_chart() {
@@ -237,4 +260,116 @@ EOF
 eso_release_exists() {
   ns="$1"; release="$2"
   phelm list -n "$ns" -o json 2>/dev/null | grep -q "\"name\":\"${release}\""
+}
+
+# Structural (field-aware) scan for a literal "*" value inside any RBAC
+# rule field - apiGroups, resources, verbs, resourceNames,
+# nonResourceURLs - across a rendered multi-document manifest. Prints
+# one "WILDCARD: ..." line per violation found and returns 1; prints
+# nothing and returns 0 if none exist. Deliberately field-aware rather
+# than a blind `grep '"\*"'` over the whole file, which would (a) miss
+# an unquoted `- *` list item, (b) miss a single-line inline/flow list
+# like `resources: ["*"]` or `verbs: [*, get]`, (c) miss a multi-line
+# inline list whose closing `]` is on a later line, and (d) can never
+# tell which of these five specific fields a matched "*" actually
+# belongs to (a `resourceNames` entry that is the literal string "*"
+# is exactly the case this must catch; an unrelated key elsewhere in
+# the document containing a literal asterisk substring must not be a
+# false positive).
+#
+# Handles:
+#   - block list items, quoted or unquoted:      - "*"  |  - '*'  |  - *
+#   - single-line inline/flow lists:              resources: ["*", "foo"]
+#   - multi-line inline/flow lists spanning until a closing `]`
+#   - the key line itself optionally prefixed by "- " (the first key of
+#     a `rules:` list entry, e.g. "  - apiGroups:")
+eso_check_no_rbac_wildcards() {
+  infile="$1"
+  awk '
+    function strip(s) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+      gsub(/^"/, "", s); gsub(/"$/, "", s)
+      gsub(/^'"'"'/, "", s); gsub(/'"'"'$/, "", s)
+      return s
+    }
+    function is_star(s,    t) {
+      t = strip(s)
+      return (t == "*")
+    }
+    function scan_inline(k, body,    n, items, i) {
+      n = split(body, items, ",")
+      for (i = 1; i <= n; i++) {
+        if (items[i] == "") { continue }
+        if (is_star(items[i])) {
+          print "WILDCARD: inline " k " contains \"*\" at line " NR
+          fail = 1
+        }
+      }
+    }
+    BEGIN { key = ""; in_inline = 0; inline_key = ""; inline_buf = ""; fail = 0 }
+
+    # already collecting a multi-line inline list - keep buffering until
+    # the closing bracket appears.
+    in_inline {
+      line = $0
+      if (line ~ /\]/) {
+        sub(/\].*$/, "", line)
+        inline_buf = inline_buf line
+        scan_inline(inline_key, inline_buf)
+        in_inline = 0; inline_buf = ""; inline_key = ""
+        next
+      }
+      inline_buf = inline_buf line ","
+      next
+    }
+
+    # single-line or multi-line-opening inline/flow list:
+    #   key: [ ... ]          (single line)
+    #   key: [ ...            (opens, continues below)
+    /^[[:space:]]*-?[[:space:]]*(apiGroups|resources|verbs|resourceNames|nonResourceURLs):[[:space:]]*\[/ {
+      k = $0; sub(/:.*/, "", k); gsub(/^[[:space:]]*-?[[:space:]]*/, "", k)
+      line = $0
+      sub(/^[^\[]*\[/, "", line)
+      if (line ~ /\]/) {
+        sub(/\].*$/, "", line)
+        scan_inline(k, line)
+      } else {
+        in_inline = 1; inline_key = k; inline_buf = line ","
+      }
+      key = ""
+      next
+    }
+
+    # block-list key header (optionally "- " prefixed as the first key
+    # of a rules[] entry), with nothing after the colon - list items
+    # follow on subsequent "- " lines.
+    /^[[:space:]]*-?[[:space:]]*(apiGroups|resources|verbs|resourceNames|nonResourceURLs):[[:space:]]*$/ {
+      key = $0
+      sub(/:[[:space:]]*$/, "", key)
+      gsub(/^[[:space:]]*-?[[:space:]]*/, "", key)
+      next
+    }
+
+    # a block-list item belonging to the current key.
+    key != "" && /^[[:space:]]*-[[:space:]]*/ {
+      val = $0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", val)
+      if (is_star(val)) {
+        print "WILDCARD: " key " contains \"*\" at line " NR
+        fail = 1
+      }
+      next
+    }
+
+    # any other real content line (not a list item) ends the current
+    # block-list key context.
+    /^[[:space:]]*[^[:space:]#-]/ { key = "" }
+    /^[[:space:]]*-[[:space:]]*[a-zA-Z]/ && key != "" {
+      # a "- somethingElse:" line that is not one of the five tracked
+      # keys also ends the block-list context (new rules[] entry).
+      if ($0 !~ /(apiGroups|resources|verbs|resourceNames|nonResourceURLs):/) { key = "" }
+    }
+
+    END { exit fail }
+  ' "$infile"
 }

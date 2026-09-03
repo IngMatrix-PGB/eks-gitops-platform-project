@@ -154,11 +154,23 @@ if awk -F'\t' '$2=="ClusterRole" && $4 ~ /-external-secrets-controller$/' "$comb
 fi
 echo "OK: each controller's Role is scoped to exactly its own namespace; no controller ClusterRole exists"
 
-if grep -c '"\*"' "$workdir/render-staging.yaml" "$workdir/render-production.yaml" | grep -v ':0$' >/dev/null 2>&1; then
-  echo "FAIL: a wildcard (\"*\") apiGroup/resource/verb was rendered" >&2
+# Structural (field-aware) scan, not a blind grep for the substring
+# '"*"' - catches unquoted block items, single-line inline/flow lists,
+# and multi-line inline/flow lists, and only ever flags a value that is
+# exactly "*" in one of apiGroups/resources/verbs/resourceNames/
+# nonResourceURLs (see eso_check_no_rbac_wildcards in scripts/eso/_lib.sh).
+wildcard_fail=0
+for label in staging production; do
+  hits="$(eso_check_no_rbac_wildcards "$workdir/render-${label}.yaml")" || wildcard_fail=1
+  if [ -n "$hits" ]; then
+    echo "FAIL: structural RBAC wildcard scan found violation(s) in $label:" >&2
+    printf '%s\n' "$hits" >&2
+  fi
+done
+if [ "$wildcard_fail" -ne 0 ]; then
   fail=1
 else
-  echo "OK: no wildcard apiGroup/resource/verb in either scoped release"
+  echo "OK: structural scan of apiGroups/resources/verbs/resourceNames/nonResourceURLs found no wildcard in either scoped release"
 fi
 
 # --- every rendered image is digest-pinned, never a mutable tag alone ---

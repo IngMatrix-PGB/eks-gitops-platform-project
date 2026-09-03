@@ -1,12 +1,31 @@
 #!/bin/sh
-# Uninstalls only the two scoped controller releases (production, then
-# staging - a fixed, deterministic order), and their operator
+# Uninstalls the two scoped controller releases and their operator
 # namespaces if left clean. Deliberately NEVER touches the 25 CRDs -
 # they are owned by no Helm release (see lab/eso/install.sh) and are
 # only ever removed by a separate, explicit, destructive step that
 # does not exist yet in this phase (Phase 2.6.1 scope is bootstrap
-# only). Idempotent: absent releases/namespaces are a no-op. Backs
-# `make eso-uninstall`.
+# only). Idempotent: absent releases/namespaces are a no-op.
+#
+# Usage:
+#   sh lab/eso/uninstall.sh              # both, in order: production then staging
+#   sh lab/eso/uninstall.sh production   # production only - always safe
+#   sh lab/eso/uninstall.sh staging      # staging only - REFUSED while
+#                                        # production still exists (see
+#                                        # the singleton-dependency guard
+#                                        # below)
+#
+# eso-staging is the fixed owner of the cluster-wide webhook/cert-
+# controller singletons (scripts/eso/_lib.sh). eso-production has no
+# webhook or cert-controller of its own and depends on eso-staging's
+# for ExternalSecret/SecretStore admission validation and CA
+# management. Removing eso-staging while eso-production still exists
+# would silently break admission control for BOTH environments -
+# production would keep running with no visible symptom until the next
+# ExternalSecret/SecretStore create or update, which would then hang or
+# fail validation. This is why production must always be uninstalled
+# first when removing both, and why removing staging alone is refused
+# outright while production still exists. Backs `make eso-uninstall`
+# (optionally `ENV=staging|production`).
 set -eu
 
 if [ ! -f "scripts/lab/_lib.sh" ]; then
@@ -25,10 +44,35 @@ if ! check_cluster_identity; then
   exit 1
 fi
 
-# production first, staging second (fixed, documented order) - reverse
-# of install, matching this project's established sync-wave-style
-# "delete in reverse of create" discipline.
-for env_name in production staging; do
+target="${1:-}"
+case "$target" in
+  ""|production|staging) : ;;
+  *)
+    echo "FAIL: unrecognized target '$target' - expected no argument, 'staging', or 'production'" >&2
+    exit 1
+    ;;
+esac
+
+if [ "$target" = "$ESO_SINGLETON_OWNER_ENV" ]; then
+  if eso_release_exists "$ESO_DEPENDENT_NS" "$ESO_DEPENDENT_RELEASE"; then
+    echo "FAIL: refusing to uninstall '$ESO_SINGLETON_OWNER_RELEASE' - it owns the cluster-wide webhook/cert-controller that '$ESO_DEPENDENT_RELEASE' depends on for admission validation, and '$ESO_DEPENDENT_RELEASE' still exists. Uninstall '$ESO_DEPENDENT_RELEASE' first (sh lab/eso/uninstall.sh $ESO_DEPENDENT_ENV), or uninstall both together with no argument." >&2
+    exit 1
+  fi
+fi
+
+if [ -z "$target" ]; then
+  envs="production staging"
+else
+  envs="$target"
+fi
+
+# production first, staging second when uninstalling both (fixed,
+# documented order) - reverse of install, matching this project's
+# established sync-wave-style "delete in reverse of create" discipline;
+# also exactly satisfies the singleton dependency above without a
+# special case, since staging (the dependency) is never touched before
+# production (the dependent) is already gone.
+for env_name in $envs; do
   ns=""
   release=""
   while IFS='|' read -r e n r wc cc; do
@@ -47,7 +91,17 @@ EOF
   fi
 
   if pkubectl get namespace "$ns" >/dev/null 2>&1; then
-    owner_label="$(pkubectl get namespace "$ns" -o jsonpath="{.metadata.labels.${ESO_NS_OWNER_LABEL_KEY}}" 2>/dev/null || true)"
+    # Bracket-notation jsonpath with every "." in the key backslash-
+    # escaped: the label key itself contains a literal "."
+    # (eks-gitops-lab-lite.local/owner). Verified empirically that BOTH
+    # dotted field access (.metadata.labels.<key>) AND unescaped
+    # bracket notation (.metadata.labels['<key>']) silently return
+    # empty for this key - kubectl's jsonpath parser treats an
+    # unescaped "." as a path separator even inside brackets. Only the
+    # backslash-escaped bracket form (.metadata.labels['eks\.gitops...'])
+    # actually resolves the field.
+    escaped_owner_key="$(printf '%s' "$ESO_NS_OWNER_LABEL_KEY" | sed 's/\./\\./g')"
+    owner_label="$(pkubectl get namespace "$ns" -o jsonpath="{.metadata.labels['${escaped_owner_key}']}" 2>/dev/null || true)"
     if [ "$owner_label" != "$ESO_NS_OWNER_LABEL_VALUE" ]; then
       echo "eso-uninstall: namespace '$ns' is not owned by this bootstrap (label mismatch) - leaving it in place" >&2
       continue

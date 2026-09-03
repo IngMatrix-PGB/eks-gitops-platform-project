@@ -1,8 +1,15 @@
 #!/bin/sh
 # Read-only health/identity report for the External Secrets Operator
 # bootstrap: CRD count and Established status, both scoped releases'
-# Helm status, and their Deployments' readiness. Never mutates
-# anything. Backs `make eso-status`.
+# Helm status, and their Deployments' readiness. Additionally enforces
+# the singleton dependency (scripts/eso/_lib.sh): if the production
+# release exists, staging's shared webhook and cert-controller
+# Deployments must also exist and be Ready - production has none of
+# its own and depends entirely on staging's for ExternalSecret/
+# SecretStore admission validation and CA management, so a report that
+# only checked each release "in isolation" could show both as
+# individually healthy while admission control for production was
+# silently broken. Never mutates anything. Backs `make eso-status`.
 set -eu
 
 if [ ! -f "scripts/lab/_lib.sh" ]; then
@@ -60,6 +67,30 @@ while IFS='|' read -r env_name ns release webhook_create cert_create; do
 done <<EOF
 $(eso_environments)
 EOF
+
+echo "--- singleton dependency check ---"
+if eso_release_exists "$ESO_DEPENDENT_NS" "$ESO_DEPENDENT_RELEASE"; then
+  singleton_healthy=1
+  if ! pkubectl get validatingwebhookconfiguration externalsecret-validate secretstore-validate >/dev/null 2>&1; then
+    echo "FAIL: '$ESO_DEPENDENT_RELEASE' exists but the shared webhook ValidatingWebhookConfigurations are missing" >&2
+    singleton_healthy=0
+  fi
+  for dep in "${ESO_SINGLETON_OWNER_RELEASE}-external-secrets-webhook" "${ESO_SINGLETON_OWNER_RELEASE}-external-secrets-cert-controller"; do
+    ready="$(pkubectl -n "$ESO_SINGLETON_OWNER_NS" get deployment "$dep" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)" || ready=""
+    desired="$(pkubectl -n "$ESO_SINGLETON_OWNER_NS" get deployment "$dep" -o jsonpath='{.spec.replicas}' 2>/dev/null)" || desired=""
+    if [ -z "$desired" ] || [ "$ready" != "$desired" ]; then
+      echo "FAIL: '$ESO_DEPENDENT_RELEASE' exists but shared Deployment/$dep (owned by '$ESO_SINGLETON_OWNER_RELEASE') is not Ready (ready='$ready' desired='$desired')" >&2
+      singleton_healthy=0
+    fi
+  done
+  if [ "$singleton_healthy" -eq 1 ]; then
+    echo "OK: '$ESO_DEPENDENT_RELEASE' exists and its shared webhook/cert-controller singletons (owned by '$ESO_SINGLETON_OWNER_RELEASE') are healthy"
+  else
+    fail=1
+  fi
+else
+  echo "OK: '$ESO_DEPENDENT_RELEASE' does not exist - no singleton dependency to check"
+fi
 
 if [ "$fail" -ne 0 ]; then
   echo "eso-status: FAILED"

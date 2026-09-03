@@ -191,17 +191,25 @@ namespace. The webhook and cert-controller components are cluster-wide
 singletons by construction (their object names are fixed, not
 release-qualified) and run from `eso-staging` only — proven, not
 assumed, by a collision/ownership gate that renders the full
-architecture offline before anything is ever applied:
+architecture offline before anything is ever applied. CRDs are applied
+under a single stable field manager with a `--dry-run=server` preflight
+first — a genuine field-ownership conflict stops the install with the
+CRD completely untouched; `--force-conflicts` is never used. Because
+`eso-production` has no webhook/cert-controller of its own, it depends
+on `eso-staging`'s — `make eso-uninstall ENV=staging` is refused
+outright while `eso-production` still exists, and `make eso-status`
+fails if `eso-production` exists but that shared webhook/cert-controller
+is unhealthy:
 
 ```bash
 make eso-chart-fetch          # download + checksum-verify the pinned external-secrets-2.10.0 chart (only target allowed to fetch it)
-make eso-render                # fully offline render + collision/ownership proof (25 CRDs, no cross-release collision, webhook/cert-controller singleton, zero wildcard RBAC, digest-only images)
+make eso-render                # fully offline render + collision/ownership proof (25 CRDs, no cross-release collision, webhook/cert-controller singleton, zero structural wildcard RBAC, digest-only images)
 make check-eso-chart           # helm lint + the same proof (standalone - requires the network-fetched chart, so not part of `make validate`)
-make eso-install                # fail-closed idempotent install: CRDs + both scoped releases
-make eso-status                 # read-only CRD/release/Deployment health report
+make eso-install                # fail-closed idempotent install: CRD preflight (no force) + both scoped releases
+make eso-status                 # read-only CRD/release/Deployment health report, including the shared-singleton dependency check
 make eso-test-runtime-health   # read-only health checks against an installed bootstrap
-make eso-test-lifecycle        # mutating: proves install/no-op/uninstall(CRDs retained)/no-op/restore end-to-end
-make eso-uninstall              # uninstall both scoped releases (production then staging); never touches the CRDs
+make eso-test-lifecycle        # mutating: proves install/no-op/singleton guards/CRD-conflict fail-closed/uninstall(CRDs retained)/no-op/restore end-to-end
+make eso-uninstall              # uninstall both scoped releases (production then staging; ENV=staging|production for one at a time); never touches the CRDs; refuses staging while production exists
 ```
 
 No `SecretStore`, `ExternalSecret`, or Kubernetes `Secret` exists yet —
