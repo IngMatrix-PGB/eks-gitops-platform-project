@@ -6,7 +6,9 @@
 	argocd-chart-fetch argocd-render argocd-install argocd-status argocd-uninstall argocd-port-forward \
 	argocd-test-runtime-health argocd-test-lifecycle \
 	gitops-repo-setup gitops-repo-check gitops-repo-remove gitops-render gitops-bootstrap \
-	gitops-status gitops-test gitops-uninstall gitops-test-lifecycle
+	gitops-status gitops-test gitops-uninstall gitops-test-lifecycle \
+	eso-chart-fetch eso-render check-eso-chart eso-install eso-status eso-uninstall \
+	eso-test-runtime-health eso-test-lifecycle
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
@@ -147,3 +149,27 @@ gitops-uninstall: ## Delete the root Application (foreground cascade) and owned 
 
 gitops-test-lifecycle: ## Mutating: proves bootstrap/no-op/self-heal/isolation/uninstall/no-op end-to-end (requires REVISION=<pushed branch>)
 	@sh tests/gitops/test-lifecycle.sh
+
+eso-chart-fetch: ## Download and checksum-verify the pinned External Secrets Operator chart (only target allowed to fetch it)
+	@sh lab/eso/chart-fetch.sh
+
+eso-render: ## Fully offline render + collision/ownership proof for the decoupled CRD set and both scoped controller releases
+	@sh lab/eso/render.sh
+
+check-eso-chart: ## Offline lint + collision/ownership proof for the ESO chart (standalone - requires a network chart fetch, so not part of `make validate`)
+	@sh scripts/validate/check-eso-chart.sh
+
+eso-install: ## Fail-closed idempotent install: 25 CRDs (kubectl apply, no Helm ownership) + two scoped Helm releases
+	@sh lab/eso/install.sh
+
+eso-status: ## Report CRD/release/Deployment health for both scoped releases (read-only)
+	@sh lab/eso/status.sh
+
+eso-uninstall: ## Uninstall both scoped releases (production then staging); never touches the 25 CRDs
+	@sh lab/eso/uninstall.sh
+
+eso-test-runtime-health: ## Read-only runtime health checks against an already-installed ESO bootstrap
+	@sh tests/eso/test-runtime-health.sh
+
+eso-test-lifecycle: ## Mutating: proves install/no-op/uninstall(CRDs retained)/no-op/restore end-to-end
+	@sh tests/eso/test-idempotency.sh
