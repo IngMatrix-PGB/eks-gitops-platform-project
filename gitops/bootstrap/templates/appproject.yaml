@@ -17,10 +17,9 @@ metadata:
     argocd.argoproj.io/sync-wave: "0"
 spec:
   description: >-
-    Phase 2.3 platform environments (staging/production). Exact-scoped:
-    exactly one source repository, exactly the staging/production
-    destination namespaces, no project roles, the single minimum
-    cluster-scoped grant proven necessary for CreateNamespace=true.
+    Phase 2.4 platform environments. Exact-scoped: one source repo,
+    staging/production destinations only, one minimal cluster grant
+    (Namespace), exactly the 4 kinds the workload chart renders.
   sourceRepos:
     - {{ .Values.repoURL }}
   destinations:
@@ -42,3 +41,9 @@ spec:
   namespaceResourceWhitelist:
     - group: ""
       kind: ConfigMap
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ServiceAccount
+    - group: "apps"
+      kind: Deployment

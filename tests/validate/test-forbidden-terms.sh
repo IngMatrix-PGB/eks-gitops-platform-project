@@ -47,6 +47,33 @@ SHA256="$(hexstr 64)"
 HEX39="$(hexstr 39)"
 HEX41="$(hexstr 41)"
 
+# Builds a fixed-length, purely-numeric string at runtime from a short
+# literal pattern (3 digits - never itself a 12+ digit run in this
+# source file, even where the pattern name is repeated on one line),
+# the same way hexstr() above avoids ever writing a real hex secret
+# literal. Used to build AWS-account-ID-shaped (or longer) digit runs
+# without ever putting one directly in this file's source.
+digitstr() {
+  count="$1"
+  pattern="184"
+  result=""
+  while [ "${#result}" -lt "$count" ]; do
+    result="${result}${pattern}"
+  done
+  printf '%s' "$result" | cut -c "1-${count}"
+}
+
+AWS12="$(digitstr 12)"
+# A well-formed 64-hex-character value that is ALL digits - trivially
+# contains (and is entirely made of) a 12+ digit run, while still being
+# a syntactically valid SHA256-shaped hex string (digits are valid hex
+# digits too).
+CHK_WITH_DIGITS="$(digitstr 64)"
+# A well-formed 64-hex-character value with no 12-digit run at all
+# (hexstr()'s letter/digit-alternating pattern never repeats a digit
+# twice in a row) - the "legitimate checksum, nothing to flag" fixture.
+CHK_VALID="$SHA256"
+
 new_case_dir() {
   # mktemp -d guarantees a fresh, unique directory on every call -
   # deliberately not a counter variable incremented inside this
@@ -199,6 +226,56 @@ run_case "39-character hex string (not 40)" accept \
 
 run_case "41-character hex string (not 40)" accept \
   "notes.md" "token ${HEX41} end
+"
+
+# --- scripts/lab/tool-versions.txt's narrow aws_account_pattern
+# exception: masks ONLY fields 7 and 8 (download_sha256,
+# installed_sha256), ONLY when each is exactly a well-formed 64-hex
+# value, ONLY at this exact path. -------------------------------------
+
+run_case "AWS-account-ID-shaped digit run inside download_sha256 (field 7)" accept \
+  "scripts/lab/tool-versions.txt" \
+  "kind|v0.33.0|linux-amd64|kind|raw||${CHK_WITH_DIGITS}|${CHK_VALID}|https://example.invalid/kind
+"
+
+run_case "AWS-account-ID-shaped digit run inside installed_sha256 (field 8)" accept \
+  "scripts/lab/tool-versions.txt" \
+  "kind|v0.33.0|linux-amd64|kind|raw||${CHK_VALID}|${CHK_WITH_DIGITS}|https://example.invalid/kind
+"
+
+run_case "AWS-account-ID-shaped digit run inside both SHA256 fields" accept \
+  "scripts/lab/tool-versions.txt" \
+  "kind|v0.33.0|linux-amd64|kind|raw||${CHK_WITH_DIGITS}|${CHK_WITH_DIGITS}|https://example.invalid/kind
+"
+
+run_case "AWS-account-ID-shaped digit run in the url field, valid checksums" reject \
+  "scripts/lab/tool-versions.txt" \
+  "kind|v0.33.0|linux-amd64|kind|raw||${CHK_VALID}|${CHK_VALID}|https://example.invalid/${AWS12}/kind
+"
+
+run_case "AWS-account-ID-shaped digit run in the filename field, valid checksums" reject \
+  "scripts/lab/tool-versions.txt" \
+  "kind|v0.33.0|linux-amd64|kind-${AWS12}|raw||${CHK_VALID}|${CHK_VALID}|https://example.invalid/kind
+"
+
+run_case "AWS-account-ID-shaped digit run in the version field, valid checksums" reject \
+  "scripts/lab/tool-versions.txt" \
+  "kind|v${AWS12}|linux-amd64|kind|raw||${CHK_VALID}|${CHK_VALID}|https://example.invalid/kind
+"
+
+run_case "AWS-account-ID-shaped digit run in archive_member, immediately beside valid checksums" reject \
+  "scripts/lab/tool-versions.txt" \
+  "helm|v4.2.4|linux-amd64|helm|tar.gz|linux-amd64/helm-${AWS12}|${CHK_VALID}|${CHK_VALID}|https://example.invalid/helm.tar.gz
+"
+
+run_case "malformed row: a 12-digit, non-64-hex download_sha256 is not masked" reject \
+  "scripts/lab/tool-versions.txt" \
+  "kind|v0.33.0|linux-amd64|kind|raw||${AWS12}|${CHK_VALID}|https://example.invalid/kind
+"
+
+run_case "identical accept-worthy row content outside scripts/lab/tool-versions.txt" reject \
+  "scripts/lab/other-tool-versions.txt" \
+  "kind|v0.33.0|linux-amd64|kind|raw||${CHK_WITH_DIGITS}|${CHK_VALID}|https://example.invalid/kind
 "
 
 echo ""

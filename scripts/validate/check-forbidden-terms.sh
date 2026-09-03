@@ -29,6 +29,41 @@ fail=0
 checked=0
 
 aws_account_pattern='[0-9]{12}'      # AWS-account-ID-shaped number
+
+# Narrow, single-purpose exception: scripts/lab/tool-versions.txt's own
+# documented 9-field pipe format
+# (name|version|platform|filename|archive_type|archive_member|
+# download_sha256|installed_sha256|url) pins real, externally-fixed
+# SHA256 checksums verified against each tool's official upstream
+# release - a 64-hex-character digest can coincidentally contain a run
+# of 12+ consecutive digits (true of at least one of kind's published
+# checksums) with no way to change even one character without breaking
+# the checksum it exists to verify. This masks ONLY fields 7 and 8
+# (download_sha256, installed_sha256), and ONLY when each is exactly a
+# well-formed 64-hex-character value, before running
+# $aws_account_pattern against what remains of the line - never the
+# whole line, never any other field, never a malformed checksum, never
+# any file other than this exact path.
+tool_versions_row_pattern='^([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([0-9A-Fa-f]{64})\|([0-9A-Fa-f]{64})\|([^|]*)$'
+
+aws_account_hit_in_file() {
+  local file="$1"
+  if [ "$file" = "scripts/lab/tool-versions.txt" ]; then
+    local line masked
+    while IFS= read -r line || [ -n "$line" ]; do
+      if [[ "$line" =~ $tool_versions_row_pattern ]]; then
+        masked="${BASH_REMATCH[1]}|${BASH_REMATCH[2]}|${BASH_REMATCH[3]}|${BASH_REMATCH[4]}|${BASH_REMATCH[5]}|${BASH_REMATCH[6]}|SHA256-FIELD|SHA256-FIELD|${BASH_REMATCH[9]}"
+      else
+        masked="$line"
+      fi
+      if [[ "$masked" =~ $aws_account_pattern ]]; then
+        return 0
+      fi
+    done < "$file"
+    return 1
+  fi
+  grep -EIqn "$aws_account_pattern" "$file" 2>/dev/null
+}
 # Exact-length match with explicit non-hex boundaries, not \b: a
 # 40-hex-char SHA-1-shaped token must never match as a substring of a
 # legitimate longer digest (e.g. a 64-char SHA256), and \b is
@@ -63,7 +98,7 @@ while IFS= read -r f; do
   [ -f "$f" ] || continue
   checked=$((checked + 1))
 
-  if grep -EIqn "$aws_account_pattern" "$f" 2>/dev/null; then
+  if aws_account_hit_in_file "$f"; then
     echo "FAIL: $f matches a restricted pattern class ($aws_account_pattern) - confirm this is not a private identifier before committing"
     fail=1
   fi

@@ -32,16 +32,19 @@ the [Technical Architecture Document](docs/architecture/technical-architecture.m
 ## Current status
 
 **Phase 1 (documentation foundation), Phase 2.1 (local tooling and
-`kind` foundation), Phase 2.2 (Argo CD bootstrap), and Phase 2.3
-(private GitOps bootstrap) are implemented** — a single, pinned
-`lab-lite` `kind` cluster running a pinned, digest-verified Argo CD
-control plane, reconciling this repository's own `gitops/` directory
-over a read-only SSH deploy key into a `staging` and a `production`
-namespace, each holding one GitOps-managed `ConfigMap`. No application
-workload beyond that smoke `ConfigMap` exists yet, and no Keycloak. No
-Terraform. An `Accepted` ADR records an approved decision, not
-necessarily a fully implemented one. See the TAD's evidence table and
-delivery roadmap for what exists versus what is proposed.
+`kind` foundation), Phase 2.2 (Argo CD bootstrap), Phase 2.3 (private
+GitOps bootstrap), and Phase 2.4 (standard workload contract) are
+implemented** — a single, pinned `lab-lite` `kind` cluster running a
+pinned, digest-verified Argo CD control plane, reconciling this
+repository's own `gitops/` directory over a read-only SSH deploy key
+into a `staging` and a `production` namespace, each running a real
+Restricted-PSS-compliant `Deployment`/`Service`/`ServiceAccount`/
+`ConfigMap` (`charts/standard-workload`, a pinned, non-root
+`podinfo` image) instead of the earlier smoke `ConfigMap`. No Keycloak
+yet — postponed, not rejected (ADR-0008). No Terraform. An `Accepted`
+ADR records an approved decision, not necessarily a fully implemented
+one. See the TAD's evidence table and delivery roadmap for what exists
+versus what is proposed.
 
 ## Local lab
 
@@ -120,6 +123,28 @@ private half never enters Git: it lives only at
 `.local/gitops/github-deploy-key` (gitignored, mode `0600`) and as the
 Argo CD repository Secret in-cluster — no script ever prints it.
 
+## Local lab: standard workload contract
+
+Phase 2.4 replaces the ConfigMap-only smoke example with a real,
+reusable Helm chart at `charts/standard-workload/` — `Deployment`,
+`Service`, `ServiceAccount`, `ConfigMap` only, Restricted-Pod-Security-
+Standards-compliant by default (non-root UID/GID `65532`, dropped
+capabilities, read-only root filesystem, `seccompProfile:
+RuntimeDefault`), running a digest-pinned, non-root, multi-arch
+`podinfo` image. `staging`/`production` differ in replica count,
+resources, and a `PODINFO_UI_MESSAGE` value sourced from the chart's
+own `ConfigMap` — proven functionally consumed via `GET /api/info`, not
+just checksum-decoration. Ingress/HPA/PodDisruptionBudget/NetworkPolicy/
+ServiceMonitor remain deliberately unimplemented (ADR-0006's
+phased-implementation note) — never dead-configured.
+
+```bash
+make check-standard-workload-chart  # offline lint/render/schema/PSS/dry-run validation for both environments (also runs as part of `make validate`)
+```
+
+See [ADR-0008](docs/adr/0008-standard-workload-before-sso.md) for why
+this phase came before Keycloak/SSO, not instead of it.
+
 ## Main components
 
 | Component | Role |
@@ -134,8 +159,8 @@ Argo CD repository Secret in-cluster — no script ever prints it.
 
 ## Architecture Decision Records
 
-All seven are `Accepted` — an approved decision, not necessarily a fully
-implemented one (0001–0003 and 0007 have code behind them today).
+All eight are `Accepted` — an approved decision, not necessarily a fully
+implemented one (0001–0003, 0006, 0007, and 0008 have code behind them today).
 
 | ADR | Decision |
 |---|---|
@@ -146,6 +171,7 @@ implemented one (0001–0003 and 0007 have code behind them today).
 | [0005](docs/adr/0005-sso-bootstrap-and-cluster-access.md) | SSO, bootstrap, and cluster access |
 | [0006](docs/adr/0006-standard-workload-contract.md) | Standard workload contract |
 | [0007](docs/adr/0007-private-gitops-bootstrap.md) | Private repository GitOps bootstrap |
+| [0008](docs/adr/0008-standard-workload-before-sso.md) | Standard workload contract before SSO |
 
 ## Working locally
 

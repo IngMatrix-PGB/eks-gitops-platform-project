@@ -226,13 +226,19 @@ bootstraps exactly one root `Application`.
   tracks the exact same revision as the root itself.
 - **Environment generation**: a deterministic Helm `list` generator (not
   a `git`/`directory` generator) produces exactly two `Application`
-  objects, `platform-smoke-staging` and `platform-smoke-production`,
-  each reading its own `gitops/environments/<env>/` path — a third
-  environment requires an explicit, reviewed chart change, never a
-  stray file drop.
+  objects, `platform-smoke-staging` and `platform-smoke-production` —
+  both now single-Helm-source Applications reading the constant path
+  `charts/standard-workload` (Phase 2.4) with a per-environment
+  `helm.valueFiles` entry, rather than a per-environment plain-manifest
+  path — a third environment requires an explicit, reviewed chart
+  change, never a stray file drop.
 - **AppProject**: exactly one `sourceRepos` entry, exactly the
-  `staging`/`production` destinations, an empty
-  `clusterResourceWhitelist`, no project `roles`.
+  `staging`/`production` destinations, exactly one cluster-scoped grant
+  (`{group:"",kind:Namespace}`, proven necessary for `CreateNamespace=true`
+  — an empty whitelist makes it fail, see ADR-0007) and, as of Phase 2.4,
+  exactly the four namespace-scoped kinds `charts/standard-workload`
+  renders (`ConfigMap`, `Service`, `ServiceAccount`,
+  `apps/Deployment`) — no project `roles`, no wildcard group or kind.
 - **Self-heal and prune** are enabled throughout — this is a single
   local `kind` cluster with no other tenant and no shared blast radius,
   so the tradeoffs that justify disabling `selfHeal` in a real
@@ -487,6 +493,7 @@ a fresh, explicit authorization.**
 | [ADR-0005](../adr/0005-sso-bootstrap-and-cluster-access.md) | SSO, bootstrap, and cluster access | Accepted |
 | [ADR-0006](../adr/0006-standard-workload-contract.md) | Standard workload contract | Accepted |
 | [ADR-0007](../adr/0007-private-gitops-bootstrap.md) | Private repository GitOps bootstrap | Accepted |
+| [ADR-0008](../adr/0008-standard-workload-before-sso.md) | Standard workload contract before SSO | Accepted |
 
 Each ADR above records an **approved decision**, not an implemented one
 — every capability it describes is tracked honestly in "Evidence and
@@ -519,7 +526,8 @@ Implementation Status" below.
 | `lab-multicluster` | `NOT IMPLEMENTED` | Reserved for Phase 2.5, not created |
 | Argo CD control-plane bootstrap in `lab-lite` (`make argocd-*`) | `VERIFIED`, scoped to exactly what was exercised (Argo CD's own install/uninstall/upgrade lifecycle — not `ApplicationSet`/`Application` reconciliation behavior, which remains `NOT IMPLEMENTED` until Phase 2.3) | `make argocd-chart-fetch` downloaded and checksum-verified `argo-cd-10.4.2.tgz`; `make argocd-render` confirmed all 7 rendered image occurrences (2 distinct images) are digest-pinned and dex/notifications are absent; `make argocd-test-lifecycle` proved install→install(true no-op: Helm revision, live-manifest sha256, and every managed workload's `.metadata.generation` byte-identical)→uninstall(exactly the 3 pinned CRDs retained and `kubectl diff`-compatible)→uninstall(no-op)→restoration install using those retained CRDs, ending installed and healthy; a further two `make argocd-install` runs confirmed persistence (second run a true no-op) |
 | Private repository GitOps bootstrap (`make gitops-*`) | `PARTIALLY VERIFIED` at commit time — offline render and repository-authentication provisioning verified pre-merge; the runtime bootstrap/self-heal/uninstall lifecycle is verified via this phase's own PR feature-branch lifecycle test, whose result is recorded in that PR's description (and, if a correction was needed after that run, in a follow-up commit's message) rather than asserted here in advance | `make gitops-render` confirmed the chart renders exactly 1 `AppProject`, 1 `ApplicationSet` with exactly 2 generator elements, 0 `Secret` objects, no wildcard permissions, and correct revision propagation; `make gitops-repo-setup` provisioned the deploy key/GitHub deploy key/repository Secret and was confirmed idempotent (re-run is a true no-op); client- and server-side `kubectl apply --dry-run` passed for the root Application, the rendered AppProject/ApplicationSet, and both environment ConfigMaps |
-| Argo CD reconciliation / `ApplicationSet` behavior | See "Private repository GitOps bootstrap" row above | Phase 2.3 is the first phase to exercise this; scope is exactly `platform`/`platform-environments`/`platform-smoke-{staging,production}` — no other `Application`/`ApplicationSet`/`AppProject` exists |
+| Argo CD reconciliation / `ApplicationSet` behavior | `VERIFIED`, scoped to exactly what Phase 2.4's lifecycle test exercises | Scope is exactly `platform`/`platform-environments`/`platform-smoke-{staging,production}`, each now rendering `charts/standard-workload` (`Deployment`/`Service`/`ServiceAccount`/`ConfigMap`) instead of a bare `ConfigMap` — no other `Application`/`ApplicationSet`/`AppProject` exists |
+| Standard workload contract (`charts/standard-workload`) | `VERIFIED`, scoped to the mandatory baseline only (Ingress/HPA/PDB/NetworkPolicy/ServiceMonitor remain `NOT IMPLEMENTED`, tracked in ADR-0006's phased-implementation note) | `make check-standard-workload-chart` proved the rendered-kind allowlist, digest-only images, Restricted-PSS fields, matching Service/Deployment selectors, and 13 deterministic post-merge negative schema cases; the Phase 2.4 lifecycle test proved both environments' Deployment/Service/ServiceAccount/ConfigMap, in-cluster reachability, correct differing `/api/info` messages, a checksum-triggered rollout via two real Git commits, and production's isolation from the staging-only change |
 | EKS Pod Identity workload access | `UNKNOWN` | Requires a real, temporary, authorized EKS cluster |
 | Workload-identity (cluster/namespace/ServiceAccount) contract | `NOT IMPLEMENTED` | No contract test exists |
 | Per-cluster External Secrets reconciliation under the layered model | `NOT IMPLEMENTED` | No cluster or ESO installation exists |
@@ -539,8 +547,8 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
 - **Phase 2 — Local GitOps lab:**
   - **2.1 — Local tooling and `kind` foundation:** implemented (pinned `lab-lite` cluster, project-local toolchain and kubeconfig; no Argo CD, no Keycloak, no `ApplicationSet` yet).
   - **2.2 — Argo CD bootstrap:** implemented (pinned, digest-verified Argo CD control plane installed offline via Helm into `lab-lite`; fail-closed idempotent install, proven true no-op, CRD retention, and restoration; dex/notifications disabled; no `ApplicationSet`/`Application`/`AppProject` yet).
-  - **2.3 — Private repository GitOps bootstrap:** implemented (read-only SSH deploy key; root `Application` applied imperatively; `platform` `AppProject`, `platform-environments` `ApplicationSet`, and `staging`/`production` with a `platform-smoke` `ConfigMap` each, all reconciled declaratively from Git; see ADR-0007). A future increment (proposed name TBD) should add real workloads and the standard chart in place of the smoke `ConfigMap`.
-  - **2.4 — Keycloak OIDC and Argo CD RBAC:** not started.
+  - **2.3 — Private repository GitOps bootstrap:** implemented (read-only SSH deploy key; root `Application` applied imperatively; `platform` `AppProject`, `platform-environments` `ApplicationSet`, and `staging`/`production` with a `platform-smoke` `ConfigMap` each, all reconciled declaratively from Git; see ADR-0007).
+  - **2.4 — Standard workload contract:** implemented (`charts/standard-workload` - `Deployment`/`Service`/`ServiceAccount`/`ConfigMap`, Restricted-PSS-compliant, digest-pinned `podinfo`, replacing the ConfigMap-only smoke example; see ADR-0006's phased-implementation note and ADR-0008). Keycloak OIDC/Argo CD RBAC is **postponed, not rejected**, per ADR-0008 — still unnumbered as a future phase.
   - **2.5 — Multicluster profile:** not started.
   - **2.6 — Evidence and hardening:** not started.
 - **Phase 3 — Terraform/EKS, plan-only:** not started.

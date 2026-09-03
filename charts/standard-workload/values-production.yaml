@@ -1,0 +1,16 @@
+# Environment overrides for production only. Everything not listed here
+# is inherited from values.yaml. This file is never touched by the
+# Phase 2.4 rollout-verification commit - its stability across that
+# change is the isolation proof.
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+configMap:
+  uiMessage: "podinfo production — phase 2.4"

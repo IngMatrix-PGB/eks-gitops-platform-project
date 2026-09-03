@@ -1,0 +1,73 @@
+# charts/standard-workload/values.yaml — Phase 2.4 explicit contract.
+# Every key here is backed by a template that reads it (values.schema.json
+# additionalProperties:false makes any unread key a hard validation error,
+# not silent dead config). See docs/adr/0006-standard-workload-contract.md
+# and docs/adr/0008-standard-workload-before-sso.md.
+
+image:
+  repository: ghcr.io/stefanprodan/podinfo
+  digest: "sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da"
+
+replicaCount: 1
+revisionHistoryLimit: 3
+terminationGracePeriodSeconds: 30
+
+strategy:
+  type: RollingUpdate
+  maxUnavailable: 0
+  maxSurge: 1
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
+
+readinessProbe:
+  path: /readyz
+  periodSeconds: 5
+  failureThreshold: 3
+
+livenessProbe:
+  path: /healthz
+  periodSeconds: 10
+  failureThreshold: 3
+
+startupProbe:
+  enabled: false
+  path: /healthz
+  periodSeconds: 5
+  failureThreshold: 30
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+serviceAccount:
+  automountServiceAccountToken: false
+
+service:
+  port: 9898
+
+volumes:
+  dataEmptyDir: true
+  tmpEmptyDir: true
+
+configMap:
+  uiMessage: "podinfo — override per environment"
+
+podAnnotations: {}
+podLabels: {}

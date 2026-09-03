@@ -10,14 +10,18 @@ gitRevision: main
 project:
   name: platform
 
+# Phase 2.4: both environments render the same chart (the standard
+# workload contract) - only the environment name/namespace and the
+# per-environment values file differ. A single constant path, not a
+# per-environment one, is therefore the correct shape now.
+workloadChartPath: charts/standard-workload
+
 # Exactly two environments. Adding a third here is intentionally not
 # supported by templates/applicationset.yaml without an explicit,
-# separately-reviewed change - Phase 2.3 authorizes staging/production
+# separately-reviewed change - Phase 2.3/2.4 authorize staging/production
 # only.
 environments:
   - name: staging
     namespace: staging
-    path: gitops/environments/staging
   - name: production
     namespace: production
-    path: gitops/environments/production

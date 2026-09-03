@@ -5,7 +5,61 @@
 # one validated, regular-file member. Never installs globally, never
 # uses Homebrew, never uses sudo, never modifies $PATH. Backs
 # `make tools-install` only.
+#
+# Supports exactly two platforms - darwin-arm64 and linux-amd64 -
+# detected via `uname`, matched against scripts/lab/tool-versions.txt's
+# own `platform` column. Idempotent: a destination binary that already
+# matches its pinned checksum and executes successfully is left alone,
+# never re-downloaded.
 set -eu
+
+# --- pure, offline platform-normalization logic -----------------------
+# Deliberately separated from every filesystem/network side effect below
+# so tests/lab/test-tool-platforms.sh can source this file with
+# INSTALL_TOOLS_SOURCE_ONLY=1 and exercise normalize_platform()/
+# detect_platform() directly, against synthetic uname(1) output, with no
+# repository, cluster, or network dependency at all.
+
+# $1=uname -s output, $2=uname -m output. On stdout: the normalized
+# "<os>-<arch>" string for exactly the two supported platform pairs.
+# Fails closed (nothing printed, non-zero return) for anything else -
+# no aliasing across the two supported pairs, no fallback.
+normalize_platform() {
+  raw_os="$1"; raw_arch="$2"
+  case "$raw_os" in
+    Darwin) os="darwin" ;;
+    Linux) os="linux" ;;
+    *) return 1 ;;
+  esac
+  case "$raw_arch" in
+    arm64|aarch64) arch="arm64" ;;
+    x86_64|amd64) arch="amd64" ;;
+    *) return 1 ;;
+  esac
+  case "${os}-${arch}" in
+    darwin-arm64|linux-amd64) printf '%s' "${os}-${arch}"; return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Sets PLATFORM from the real `uname`, or fails closed with a clear,
+# named error - never silently falls back to a different platform's
+# pinned tools.
+detect_platform() {
+  raw_os="$(uname -s)"
+  raw_arch="$(uname -m)"
+  if ! PLATFORM="$(normalize_platform "$raw_os" "$raw_arch")"; then
+    echo "FAIL: unsupported platform '$raw_os/$raw_arch' - only Darwin/arm64 (darwin-arm64) and Linux/amd64 (linux-amd64) are supported; no fallback" >&2
+    return 1
+  fi
+}
+
+# Test-only early exit: everything below this point touches the real
+# repository, filesystem, and network, and must never run just because
+# this file was sourced for unit testing.
+if [ "${INSTALL_TOOLS_SOURCE_ONLY:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 if [ ! -f "scripts/lab/_lib.sh" ]; then
   echo "FAIL: must be run from the repository root (scripts/lab/_lib.sh not found)" >&2
@@ -14,6 +68,26 @@ fi
 # shellcheck source=_lib.sh
 . scripts/lab/_lib.sh
 require_repo_root
+
+if ! detect_platform; then
+  exit 1
+fi
+echo "tools-install: detected platform $PLATFORM"
+
+# Confirms an installed binary actually runs, not just that its bytes
+# match a checksum - a wrong-platform binary (e.g. a darwin binary
+# copied onto a linux host) passes a checksum check but fails here with
+# "Exec format error", which is exactly the failure this whole platform
+# match/idempotency design exists to prevent.
+verify_executable() {
+  name="$1"; dest="$2"
+  case "$name" in
+    kind) "$dest" version >/dev/null 2>&1 ;;
+    kubectl) "$dest" version --client >/dev/null 2>&1 ;;
+    helm) "$dest" version >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
 
 versions_file="scripts/lab/tool-versions.txt"
 if [ ! -f "$versions_file" ]; then
@@ -116,14 +190,38 @@ extract_pinned_member() {
   return 0
 }
 
+all_names=""
+matched_names=""
 while IFS='|' read -r name version platform filename archive_type archive_member download_sha installed_sha url; do
   [ -z "$name" ] && continue
   case "$name" in \#*) continue ;; esac
+  case " $all_names " in
+    *" $name "*) : ;;
+    *) all_names="$all_names $name" ;;
+  esac
+  [ "$platform" = "$PLATFORM" ] || continue
+  case " $matched_names " in
+    *" $name "*) : ;;
+    *) matched_names="$matched_names $name" ;;
+  esac
 
   dest=".tools/bin/${filename}"
+
+  # Idempotency: a destination that already carries the pinned checksum
+  # and actually runs needs no work. A checksum match with a broken
+  # executable (e.g. truncated by an interrupted previous run) is not
+  # trusted - it falls through and is reinstalled from scratch.
+  if [ -x "$dest" ]; then
+    existing_sha="$(shasum -a 256 "$dest" | awk '{print $1}')"
+    if [ "$existing_sha" = "$installed_sha" ] && verify_executable "$name" "$dest"; then
+      echo "OK: $name $version already installed at $dest for $PLATFORM (idempotent - checksum verified, executes successfully)"
+      continue
+    fi
+  fi
+
   tmp_dest="${tmpdir}/${filename}.download"
 
-  echo "tools-install: downloading $name $version from $url ..."
+  echo "tools-install: downloading $name $version ($PLATFORM) from $url ..."
   if ! curl -fsSL -o "$tmp_dest" "$url"; then
     echo "FAIL: download failed for $name from $url" >&2
     fail=1
@@ -142,22 +240,43 @@ while IFS='|' read -r name version platform filename archive_type archive_member
     raw)
       chmod +x "$tmp_dest"
       mv "$tmp_dest" "$dest"
-      echo "OK: $name $version installed at $dest (checksum verified)"
       ;;
     tar.gz)
-      if extract_pinned_member "$tmp_dest" "$archive_member" "$installed_sha" "$dest"; then
-        echo "OK: $name $version installed at $dest (archive checksum + extracted binary checksum verified)"
-      else
+      if ! extract_pinned_member "$tmp_dest" "$archive_member" "$installed_sha" "$dest"; then
         echo "FAIL: archive installation failed for $name" >&2
         fail=1
+        continue
       fi
       ;;
     *)
       echo "FAIL: unknown archive_type '$archive_type' for $name" >&2
       fail=1
+      continue
       ;;
   esac
+
+  if ! verify_executable "$name" "$dest"; then
+    echo "FAIL: $name $version installed at $dest but failed to execute successfully (wrong-platform or corrupt binary)" >&2
+    fail=1
+    continue
+  fi
+  echo "OK: $name $version installed at $dest for $PLATFORM (checksum verified, executes successfully)"
 done < "$versions_file"
+
+if [ -z "$all_names" ]; then
+  echo "FAIL: $versions_file has no tool entries at all" >&2
+  fail=1
+else
+  for name in $all_names; do
+    case " $matched_names " in
+      *" $name "*) : ;;
+      *)
+        echo "FAIL: $name has no $versions_file entry for detected platform $PLATFORM - fail-closed, not silently skipped" >&2
+        fail=1
+        ;;
+    esac
+  done
+fi
 
 if [ "$fail" -ne 0 ]; then
   echo "tools-install: FAILED"

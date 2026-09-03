@@ -1,5 +1,5 @@
 #!/bin/sh
-# Mutating pre-merge lifecycle test for the Phase 2.3 GitOps bootstrap.
+# Mutating pre-merge lifecycle test for the Phase 2.3/2.4 GitOps bootstrap.
 # Requires REVISION (the pushed feature branch) so the root Application
 # reads gitops/bootstrap from the remote branch under test, never from
 # an uncommitted local edit. Backs `make gitops-test-lifecycle` only.
@@ -9,7 +9,7 @@
 # ConfigMaps -> bootstrap again (true no-op, resourceVersions
 # unchanged) -> controlled single-environment drift -> self-heal proof
 # -> other-environment-unaffected proof -> uninstall (foreground
-# cascade) -> uninstall again (no-op) -> end with Phase 2.3 workload
+# cascade) -> uninstall again (no-op) -> end with Phase 2.4 workload
 # resources absent. Argo CD itself, its CRDs, the repository Secret,
 # and the deploy key are never touched by this test.
 set -eu
@@ -125,15 +125,104 @@ echo "test-lifecycle(gitops): step 9 - wait for both generated Applications Sync
 gitops_wait_for_synced_healthy "platform-smoke-staging" 180
 gitops_wait_for_synced_healthy "platform-smoke-production" 180
 
-echo "test-lifecycle(gitops): step 10 - verify environment-specific ConfigMaps"
+# Reachability check via the already-pinned podinfo image's own curl -
+# reused verbatim by the manual two-commit rollout proof this test
+# hands off to. Ephemeral, labeled distinctly from Argo-CD-managed
+# resources, never AppProject-scoped (applied directly by this script's
+# own kubeconfig, not by Argo CD on behalf of any Application).
+gitops_check_workload_endpoint() {
+  ns="$1"; svc="$2"; expected_message="$3"
+  pod="reachability-check-$$"
+  cleanup_reachability_pod() { pkubectl -n "$ns" delete pod "$pod" --ignore-not-found --wait >/dev/null 2>&1 || true; }
+  trap cleanup_reachability_pod EXIT INT TERM
+  cat <<EOF | pkubectl apply -f - >/dev/null
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${pod}
+  namespace: ${ns}
+  labels:
+    eks-gitops-lab-lite.local/owner: lifecycle-test-ephemeral
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: check
+      image: ghcr.io/stefanprodan/podinfo@sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da
+      command: ["sh", "-c"]
+      args:
+        - |
+          set -eu
+          curl -fsS "http://${svc}.${ns}.svc.cluster.local:9898/healthz"
+          curl -fsS "http://${svc}.${ns}.svc.cluster.local:9898/readyz"
+          curl -fsS "http://${svc}.${ns}.svc.cluster.local:9898/api/info"
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+EOF
+  pkubectl -n "$ns" wait --for=jsonpath='{.status.phase}'=Succeeded --timeout=60s pod/"$pod" >/dev/null 2>&1 || true
+  info_json="$(pkubectl -n "$ns" logs pod/"$pod" 2>/dev/null | tail -1)"
+  phase="$(pkubectl -n "$ns" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  cleanup_reachability_pod
+  trap - EXIT INT TERM
+  if [ "$phase" != "Succeeded" ]; then
+    echo "FAIL: reachability check pod in '$ns' did not succeed (phase=$phase)" >&2
+    return 1
+  fi
+  case "$info_json" in
+    *"\"message\":\"${expected_message}\""*) : ;;
+    *) echo "FAIL: '$ns' /api/info did not contain expected message '$expected_message': $info_json" >&2; return 1 ;;
+  esac
+  echo "OK: '$ns' Service reachable, /healthz+/readyz OK, /api/info message='$expected_message'"
+}
+
+echo "test-lifecycle(gitops): step 10 - verify Deployment/Service/ServiceAccount/ConfigMap in both environments"
 for ns in staging production; do
-  actual="$(pkubectl -n "$ns" get configmap platform-smoke -o jsonpath='{.data.environment}' 2>/dev/null || true)"
-  if [ "$actual" != "$ns" ]; then
-    echo "FAIL: namespace '$ns' configmap/platform-smoke data.environment='${actual:-<absent>}', expected '$ns'" >&2
+  dep="platform-smoke-${ns}-standard-workload"
+  avail="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
+  desired="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.replicas}' 2>/dev/null || true)"
+  if [ -z "$desired" ] || [ "$avail" != "$desired" ]; then
+    echo "FAIL: namespace '$ns' Deployment/$dep availableReplicas='${avail:-<absent>}', expected '$desired'" >&2
     exit 1
   fi
+  digest="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+  case "$digest" in
+    *"@sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da") : ;;
+    *) echo "FAIL: namespace '$ns' Deployment/$dep image is not the pinned digest: $digest" >&2; exit 1 ;;
+  esac
+  uid="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.template.spec.securityContext.runAsUser}' 2>/dev/null || true)"
+  gid="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.template.spec.securityContext.runAsGroup}' 2>/dev/null || true)"
+  if [ "$uid" != "65532" ] || [ "$gid" != "65532" ]; then
+    echo "FAIL: namespace '$ns' Deployment/$dep runAsUser/runAsGroup='$uid'/'$gid', expected 65532/65532" >&2
+    exit 1
+  fi
+  if ! pkubectl -n "$ns" get service "$dep" >/dev/null 2>&1; then
+    echo "FAIL: namespace '$ns' Service/$dep absent" >&2
+    exit 1
+  fi
+  if ! pkubectl -n "$ns" get serviceaccount "$dep" >/dev/null 2>&1; then
+    echo "FAIL: namespace '$ns' ServiceAccount/$dep absent" >&2
+    exit 1
+  fi
+  if ! pkubectl -n "$ns" get configmap "${dep}-config" >/dev/null 2>&1; then
+    echo "FAIL: namespace '$ns' ConfigMap/${dep}-config absent" >&2
+    exit 1
+  fi
+  echo "OK: namespace '$ns' Deployment ($avail/$desired Available), digest-pinned, UID/GID 65532/65532, Service/ServiceAccount/ConfigMap present"
 done
-echo "OK: step 10 - both ConfigMaps present with correct, differing per-environment data"
+
+expected_staging_message="podinfo staging — phase 2.4 initial rollout"
+expected_production_message="podinfo production — phase 2.4"
+gitops_check_workload_endpoint staging "platform-smoke-staging-standard-workload" "$expected_staging_message"
+gitops_check_workload_endpoint production "platform-smoke-production-standard-workload" "$expected_production_message"
+echo "OK: step 10 - both environments' Deployment/Service/ServiceAccount/ConfigMap verified, both endpoints reachable with correct, differing per-environment messages"
 
 echo "test-lifecycle(gitops): step 11-12 - bootstrap again, prove true no-op via resourceVersions"
 root_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.metadata.resourceVersion}')"
@@ -151,21 +240,23 @@ if [ "$root_rv_before" != "$root_rv_after" ]; then
 fi
 echo "OK: step 11-12 - root Application resourceVersion unchanged ($root_rv_after); AppProject rv=$proj_rv_before, ApplicationSet rv=$appset_rv_before, staging app rv=$staging_app_rv_before, production app rv=$prod_app_rv_before (recorded, all driven by the same unchanged root)"
 
-echo "test-lifecycle(gitops): step 13 - introduce controlled drift in the staging ConfigMap only"
-pkubectl -n staging patch configmap platform-smoke --type=merge -p '{"data":{"environment":"DRIFTED"}}'
-drifted="$(pkubectl -n staging get configmap platform-smoke -o jsonpath='{.data.environment}')"
+echo "test-lifecycle(gitops): step 13 - introduce controlled live drift in the staging ConfigMap only"
+staging_cm="platform-smoke-staging-standard-workload-config"
+production_cm="platform-smoke-production-standard-workload-config"
+pkubectl -n staging patch configmap "$staging_cm" --type=merge -p '{"data":{"ui-message":"DRIFTED"}}'
+drifted="$(pkubectl -n staging get configmap "$staging_cm" -o jsonpath='{.data.ui-message}')"
 if [ "$drifted" != "DRIFTED" ]; then
   echo "FAIL: could not introduce the controlled drift (got '$drifted')" >&2
   exit 1
 fi
-echo "OK: step 13 - staging configmap/platform-smoke drifted to '$drifted'"
+echo "OK: step 13 - staging configmap/$staging_cm drifted to '$drifted'"
 
 echo "test-lifecycle(gitops): step 14 - verify self-heal restores Git state"
 elapsed=0
 healed=0
 while [ "$elapsed" -lt 90 ]; do
-  current="$(pkubectl -n staging get configmap platform-smoke -o jsonpath='{.data.environment}' 2>/dev/null || true)"
-  if [ "$current" = "staging" ]; then
+  current="$(pkubectl -n staging get configmap "$staging_cm" -o jsonpath='{.data.ui-message}' 2>/dev/null || true)"
+  if [ "$current" = "$expected_staging_message" ]; then
     healed=1
     break
   fi
@@ -173,18 +264,18 @@ while [ "$elapsed" -lt 90 ]; do
   elapsed=$((elapsed + 3))
 done
 if [ "$healed" -ne 1 ]; then
-  echo "FAIL: self-heal did not restore staging configmap/platform-smoke within 90s (last value: '$current')" >&2
+  echo "FAIL: self-heal did not restore staging configmap/$staging_cm within 90s (last value: '$current')" >&2
   exit 1
 fi
-echo "OK: step 14 - self-heal restored staging configmap/platform-smoke to data.environment='staging'"
+echo "OK: step 14 - self-heal restored staging configmap/$staging_cm to data.ui-message='$expected_staging_message'"
 
 echo "test-lifecycle(gitops): step 15 - verify production was never affected"
-prod_value="$(pkubectl -n production get configmap platform-smoke -o jsonpath='{.data.environment}' 2>/dev/null || true)"
-if [ "$prod_value" != "production" ]; then
-  echo "FAIL: production configmap/platform-smoke data.environment='${prod_value:-<absent>}' - expected it to be unaffected ('production')" >&2
+prod_value="$(pkubectl -n production get configmap "$production_cm" -o jsonpath='{.data.ui-message}' 2>/dev/null || true)"
+if [ "$prod_value" != "$expected_production_message" ]; then
+  echo "FAIL: production configmap/$production_cm data.ui-message='${prod_value:-<absent>}' - expected it to be unaffected ('$expected_production_message')" >&2
   exit 1
 fi
-echo "OK: step 15 - production configmap/platform-smoke unaffected (data.environment='$prod_value')"
+echo "OK: step 15 - production configmap/$production_cm unaffected (data.ui-message='$prod_value')"
 
 echo "test-lifecycle(gitops): step 16-19 - delete root bootstrap (foreground cascade), preserving Argo CD/CRDs/repo Secret/deploy key"
 sh lab/gitops/uninstall.sh
