@@ -17,9 +17,9 @@ metadata:
     argocd.argoproj.io/sync-wave: "0"
 spec:
   description: >-
-    Phase 2.4 platform environments. Exact-scoped: one source repo,
+    Phase 2.6.2 platform environments. Exact-scoped: one source repo,
     staging/production destinations only, one minimal cluster grant
-    (Namespace), exactly the 4 kinds the workload chart renders.
+    (Namespace), exactly the 6 kinds the workload chart renders.
   sourceRepos:
     - {{ .Values.repoURL }}
   destinations:
@@ -47,3 +47,12 @@ spec:
       kind: ServiceAccount
     - group: "apps"
       kind: Deployment
+    # Phase 2.6.2: exactly the two namespaced kinds the workload chart's
+    # new templates/secretstore.yaml and templates/externalsecret.yaml
+    # render. Never Secret - the generated target Secret is created by
+    # ESO directly, never by any chart template Argo CD applies, so
+    # Argo CD is never granted permission to manage a Secret.
+    - group: "external-secrets.io"
+      kind: SecretStore
+    - group: "external-secrets.io"
+      kind: ExternalSecret
