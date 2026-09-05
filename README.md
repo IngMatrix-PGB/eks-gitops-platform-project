@@ -131,9 +131,9 @@ make gitops-repo-remove      # remove the repository Secret/deploy key (requires
 
 Phase 2.6.3a hardens three GitOps lifecycle operations discovered to be
 unsafe while testing Phase 2.6.2 against a cluster that also has ESO
-installed (see
-[the hardening plan](.local/evidence/phase-2.6.3-gitops-lifecycle-hardening-plan.md)
-for the full root-cause analysis):
+installed (see `.local/evidence/phase-2.6.3-gitops-lifecycle-hardening-plan.md`,
+local-only/gitignored like every other phase's planning document, for
+the full root-cause analysis):
 
 ```bash
 make gitops-switch-revision              # safely switch the root Application's targetRevision in place (patch, never delete+recreate); preserves UID/finalizers; requires 3 consecutive stable reads; rolls back automatically on failure (REVISION=<value>)
