@@ -51,9 +51,17 @@ if ! check_cluster_identity; then
   exit 1
 fi
 
-if ! gitops_root_app_exists; then
-  echo "OK: root Application '$GITOPS_ROOT_APP_NAME' already absent"
-  exit 0
+# Deliberately does NOT exit early when the root Application is
+# already absent: a prior run may have deleted it and then hit its own
+# --wait timeout (or any other partial failure) before ever reaching
+# the namespace-cleanup step below - re-running must be able to finish
+# that job, not just declare victory because the most visible object
+# is already gone. "A partial failure must allow retry or safe
+# recovery" (Phase 2.6.3a) - Phase A/B below both tolerate the root
+# Application being absent already.
+root_app_was_present=0
+if gitops_root_app_exists; then
+  root_app_was_present=1
 fi
 
 # ============================================================
@@ -61,8 +69,8 @@ fi
 # ============================================================
 echo "gitops-uninstall: Phase A - preflight (read-only) ..."
 
-pre_uid="$(gitops_app_uid "$GITOPS_ROOT_APP_NAME")"
-pre_generation="$(gitops_app_generation "$GITOPS_ROOT_APP_NAME")"
+pre_uid="$(gitops_app_uid "$GITOPS_ROOT_APP_NAME" || true)"
+pre_generation="$(gitops_app_generation "$GITOPS_ROOT_APP_NAME" || true)"
 echo "OK: captured pre-preflight root Application state (uid=$pre_uid generation=$pre_generation)"
 
 preflight_fail=0
@@ -163,22 +171,26 @@ echo "OK: Phase A preflight passed (staging=$staging_decision production=$produc
 # Phase B - execution (only reached if Phase A passed)
 # ============================================================
 echo "gitops-uninstall: Phase B - execution ..."
-echo "gitops-uninstall: deleting root Application '$GITOPS_ROOT_APP_NAME' (foreground cascade via finalizer) ..."
-# Observed empirically: the root's own finalizer deletes its two
-# rendered children (AppProject, ApplicationSet) without an ordering
-# guarantee between them. If the AppProject disappears first, the
-# ApplicationSet's already-generated Applications briefly fail to
-# resolve their project reference; the application-controller's next
-# resync (informer-cache-bound, observed up to ~2-3 minutes even on a
-# healthy chain) retries and completes the delete correctly on its
-# own - never a real deadlock, just slower than a short timeout
-# suggests. 300s comfortably covers that, without ever force-removing
-# a finalizer.
-if ! pkubectl -n "$ARGOCD_NAMESPACE" delete application "$GITOPS_ROOT_APP_NAME" --wait --timeout=300s; then
-  echo "FAIL: root Application delete timed out - safe to re-run (idempotent)" >&2
-  exit 2
+if [ "$root_app_was_present" -eq 1 ]; then
+  echo "gitops-uninstall: deleting root Application '$GITOPS_ROOT_APP_NAME' (foreground cascade via finalizer) ..."
+  # Observed empirically: the root's own finalizer deletes its two
+  # rendered children (AppProject, ApplicationSet) without an ordering
+  # guarantee between them. If the AppProject disappears first, the
+  # ApplicationSet's already-generated Applications briefly fail to
+  # resolve their project reference; the application-controller's next
+  # resync (informer-cache-bound, observed up to ~2-3 minutes even on a
+  # healthy chain) retries and completes the delete correctly on its
+  # own - never a real deadlock, just slower than a short timeout
+  # suggests. 300s comfortably covers that, without ever force-removing
+  # a finalizer.
+  if ! pkubectl -n "$ARGOCD_NAMESPACE" delete application "$GITOPS_ROOT_APP_NAME" --wait --timeout=300s; then
+    echo "FAIL: root Application delete timed out - safe to re-run (idempotent)" >&2
+    exit 2
+  fi
+  echo "OK: root Application deleted (cascade removed AppProject/ApplicationSet/generated Applications/ConfigMaps)"
+else
+  echo "OK: root Application '$GITOPS_ROOT_APP_NAME' already absent (a prior run got this far) - verifying the rest of the cascade completed"
 fi
-echo "OK: root Application deleted (cascade removed AppProject/ApplicationSet/generated Applications/ConfigMaps)"
 
 cascade_fail=0
 if gitops_appproject_exists; then
