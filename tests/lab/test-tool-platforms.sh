@@ -102,6 +102,49 @@ source_for_test "$check_prereq_src" CHECK_PREREQUISITES_SOURCE_ONLY
 run_normalize_matrix "check-prerequisites.sh"
 
 # ======================================================================
+# A2. Pure zip_inventory_is_safe() matrix (Phase 2.7.1, Terraform's zip
+# distribution) - no real zip file is constructed here at all; a
+# well-behaved zip CLI refuses to create a genuinely adversarial
+# (".."/absolute-path) entry in the first place, so the traversal/
+# absolute-path cases below exercise the pure inventory-text logic
+# directly, exactly like the normalize_platform() matrix above. Real,
+# legitimate zip fixtures (built with the standard zip CLI) cover the
+# end-to-end extraction path, including symlink rejection, in section C.
+# ======================================================================
+
+source_for_test "$install_tools_src" INSTALL_TOOLS_SOURCE_ONLY
+
+check_zip_inventory_case() {
+  # $1=label  $2=inventory text  $3=expected member  $4=0 (must pass) / 1 (must fail)
+  label="$1"; inventory="$2"; member="$3"; want_ok="$4"
+  if printf '%s' "$inventory" | zip_inventory_is_safe "$member" >/dev/null 2>&1; then
+    rc=0
+  else
+    rc=1
+  fi
+  ok=0
+  [ "$rc" = "$want_ok" ] || ok=1
+  report "$ok" "zip_inventory_is_safe: $label"
+}
+
+check_zip_inventory_case "well-formed single member accepted" \
+  "terraform" "terraform" 0
+check_zip_inventory_case "well-formed member alongside an extra unrelated member accepted" \
+  "$(printf 'terraform\nLICENSE.txt')" "terraform" 0
+check_zip_inventory_case "path-traversal entry rejected even when unrelated to the requested member" \
+  "$(printf 'terraform\n../evil')" "terraform" 1
+check_zip_inventory_case "absolute-path entry rejected even when unrelated to the requested member" \
+  "$(printf 'terraform\n/etc/evil')" "terraform" 1
+check_zip_inventory_case "requested member itself using a traversal path is rejected" \
+  "../terraform" "../terraform" 1
+check_zip_inventory_case "requested member missing from inventory rejected" \
+  "some-other-file" "terraform" 1
+check_zip_inventory_case "requested member duplicated in inventory rejected" \
+  "$(printf 'terraform\nterraform')" "terraform" 1
+check_zip_inventory_case "empty inventory rejected" \
+  "" "terraform" 1
+
+# ======================================================================
 # B. Integration matrix against a synthetic fixture repository.
 # ======================================================================
 
@@ -392,6 +435,251 @@ EOF
   report "$ok" "check-prerequisites.sh fails closed on an unsupported platform (Linux/aarch64)"
 }
 test_check_prerequisites_unsupported_platform
+
+# ======================================================================
+# C. Integration matrix for archive_type "zip" (Phase 2.7.1, Terraform)
+# against the same synthetic fixture repository/fake-curl harness as
+# section B - proves the real extract_pinned_member_zip() code path,
+# not a re-implementation of it. Every zip fixture here is a real,
+# well-formed archive built with the standard zip CLI (never a
+# genuinely adversarial one - the zip CLI itself refuses to create a
+# ".."/absolute-path entry, which is exactly why those cases are
+# instead covered at the pure zip_inventory_is_safe() level in section
+# A2 above); this section proves end-to-end extraction, checksum
+# verification, symlink rejection, and idempotency for a real zip.
+# ======================================================================
+
+zip_build_counter=0
+
+# Builds a real zip containing one executable "binary" fixture member
+# (stands in for terraform) and, optionally, one additional unrelated
+# member (Terraform's own release zip also carries LICENSE.txt) -
+# proves an extra member never interferes with extracting just the one
+# requested. $4=1 includes the extra member, 0 omits it.
+make_zip_fixture() {
+  out="$1"; member="$2"; tag="$3"; with_extra="$4"
+  zip_build_counter=$((zip_build_counter + 1))
+  build_dir="$root/zipbuild-${zip_build_counter}"
+  mkdir -p "$build_dir"
+  printf '#!/bin/sh\n# fixture:%s\nexit 0\n' "$tag" > "$build_dir/$member"
+  chmod +x "$build_dir/$member"
+  if [ "$with_extra" = "1" ]; then
+    printf 'license text\n' > "$build_dir/LICENSE.txt"
+    (cd "$build_dir" && zip -q "$out" "$member" LICENSE.txt)
+  else
+    (cd "$build_dir" && zip -q "$out" "$member")
+  fi
+}
+
+make_broken_zip_fixture() {
+  out="$1"; member="$2"; tag="$3"
+  zip_build_counter=$((zip_build_counter + 1))
+  build_dir="$root/zipbuild-${zip_build_counter}"
+  mkdir -p "$build_dir"
+  printf '#!/bin/sh\n# fixture:%s\nexit 1\n' "$tag" > "$build_dir/$member"
+  chmod +x "$build_dir/$member"
+  (cd "$build_dir" && zip -q "$out" "$member")
+}
+
+# A zip whose requested member is a stored Unix symlink, not a regular
+# file - real-world zips can carry these; extract_pinned_member_zip()
+# must reject this post-extraction (a plain-name zip inventory does
+# not reveal entry type up front, unlike tar's verbose listing).
+make_symlink_zip_fixture() {
+  out="$1"; member="$2"
+  zip_build_counter=$((zip_build_counter + 1))
+  build_dir="$root/zipbuild-${zip_build_counter}"
+  mkdir -p "$build_dir"
+  printf 'real target content\n' > "$build_dir/realfile"
+  (cd "$build_dir" && ln -s realfile "$member" && zip -q -y "$out" "$member" realfile)
+}
+
+# --- C1/C2: correct platform's zip row is selected; checksum/exec
+# verification mirrors the tar.gz path exactly (reuses the same
+# run_install_tools()/test harness as section B, just with archive_type
+# "zip").
+tf_zip_darwin="$root/tf-darwin.zip"; make_zip_fixture "$tf_zip_darwin" terraform darwin-variant 1
+tf_zip_linux="$root/tf-linux.zip"; make_zip_fixture "$tf_zip_linux" terraform linux-variant 1
+
+test_zip_platform_selection() {
+  os="$1"; arch="$2"; want_variant="$3"; label="$4"
+  setup_fixture_repo
+  setup_fakes
+  cat > "$fixture_repo/scripts/lab/tool-versions.txt" <<EOF
+terraform|v1.16.1|darwin-arm64|terraform|zip|terraform|$(sha_of "$tf_zip_darwin")|EXPECT_DARWIN|https://example.invalid/darwin-arm64/terraform.zip
+terraform|v1.16.1|linux-amd64|terraform|zip|terraform|$(sha_of "$tf_zip_linux")|EXPECT_LINUX|https://example.invalid/linux-amd64/terraform.zip
+EOF
+  # installed_sha256 is the checksum of the extracted member, not the
+  # zip itself - compute it for real rather than hardcoding placeholder
+  # text above.
+  darwin_member_sha="$(cd "$root" && rm -rf zip-extract-probe && mkdir zip-extract-probe && cd zip-extract-probe && unzip -q -o "$tf_zip_darwin" terraform && shasum -a 256 terraform | awk '{print $1}')"
+  linux_member_sha="$(cd "$root" && rm -rf zip-extract-probe && mkdir zip-extract-probe && cd zip-extract-probe && unzip -q -o "$tf_zip_linux" terraform && shasum -a 256 terraform | awk '{print $1}')"
+  sed -i.bak "s/EXPECT_DARWIN/$darwin_member_sha/; s/EXPECT_LINUX/$linux_member_sha/" "$fixture_repo/scripts/lab/tool-versions.txt"
+  rm -f "$fixture_repo/scripts/lab/tool-versions.txt.bak"
+  map_url "https://example.invalid/darwin-arm64/terraform.zip" "$tf_zip_darwin"
+  map_url "https://example.invalid/linux-amd64/terraform.zip" "$tf_zip_linux"
+
+  if [ "$want_variant" = darwin-variant ]; then want_sha="$darwin_member_sha"; else want_sha="$linux_member_sha"; fi
+
+  ok=0
+  if ! FAKE_UNAME_S="$os" FAKE_UNAME_M="$arch" run_install_tools >"$root/out.log" 2>&1; then
+    ok=1
+  fi
+  got_sha="$(sha_of "$fixture_repo/.tools/bin/terraform" 2>/dev/null || echo none)"
+  [ "$got_sha" = "$want_sha" ] || ok=1
+  # The extra LICENSE.txt member must never land in .tools/bin/.
+  [ ! -e "$fixture_repo/.tools/bin/LICENSE.txt" ] || ok=1
+  report "$ok" "$label"
+}
+test_zip_platform_selection Linux x86_64 linux-variant "install-tools.sh (zip) on Linux/x86_64 installs the linux-amd64 row, not darwin-arm64, and ignores the extra LICENSE.txt member"
+test_zip_platform_selection Darwin arm64 darwin-variant "install-tools.sh (zip) on Darwin/arm64 installs the darwin-arm64 row, not linux-amd64, and ignores the extra LICENSE.txt member"
+
+# --- C3: download checksum mismatch fails closed (the zip's own
+# checksum, verified before any extraction is attempted).
+test_zip_download_checksum_mismatch() {
+  setup_fixture_repo
+  setup_fakes
+  fixture="$root/tf-checksum-test.zip"; make_zip_fixture "$fixture" terraform checksum-test 0
+  cat > "$fixture_repo/scripts/lab/tool-versions.txt" <<EOF
+terraform|v1.16.1|linux-amd64|terraform|zip|terraform|not-a-real-checksum|not-a-real-checksum|https://example.invalid/linux-amd64/terraform.zip
+EOF
+  map_url "https://example.invalid/linux-amd64/terraform.zip" "$fixture"
+  ok=0
+  if FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 run_install_tools >"$root/out.log" 2>&1; then
+    ok=1
+  fi
+  grep -qi "checksum mismatch" "$root/out.log" || ok=1
+  [ ! -e "$fixture_repo/.tools/bin/terraform" ] || ok=1
+  report "$ok" "install-tools.sh (zip) fails closed on a download checksum mismatch"
+}
+test_zip_download_checksum_mismatch
+
+# --- C4: installed (post-extraction) checksum mismatch fails closed -
+# distinct from C3, this proves the extracted MEMBER's checksum is
+# independently verified, not just the zip's own download checksum.
+test_zip_installed_checksum_mismatch() {
+  setup_fixture_repo
+  setup_fakes
+  fixture="$root/tf-installed-checksum-test.zip"; make_zip_fixture "$fixture" terraform installed-checksum-test 0
+  cat > "$fixture_repo/scripts/lab/tool-versions.txt" <<EOF
+terraform|v1.16.1|linux-amd64|terraform|zip|terraform|$(sha_of "$fixture")|not-the-real-installed-checksum|https://example.invalid/linux-amd64/terraform.zip
+EOF
+  map_url "https://example.invalid/linux-amd64/terraform.zip" "$fixture"
+  ok=0
+  if FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 run_install_tools >"$root/out.log" 2>&1; then
+    ok=1
+  fi
+  grep -qi "extracted binary checksum mismatch" "$root/out.log" || ok=1
+  [ ! -e "$fixture_repo/.tools/bin/terraform" ] || ok=1
+  report "$ok" "install-tools.sh (zip) fails closed on an installed (post-extraction) checksum mismatch"
+}
+test_zip_installed_checksum_mismatch
+
+# --- C5: a symlink-shaped member is rejected, never installed.
+test_zip_symlink_rejected() {
+  setup_fixture_repo
+  setup_fakes
+  fixture="$root/tf-symlink-test.zip"; make_symlink_zip_fixture "$fixture" terraform
+  cat > "$fixture_repo/scripts/lab/tool-versions.txt" <<EOF
+terraform|v1.16.1|linux-amd64|terraform|zip|terraform|$(sha_of "$fixture")|PLACEHOLDER-NEVER-COMPARED-NOT-A-REAL-HASH|https://example.invalid/linux-amd64/terraform.zip
+EOF
+  map_url "https://example.invalid/linux-amd64/terraform.zip" "$fixture"
+  ok=0
+  if FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 run_install_tools >"$root/out.log" 2>&1; then
+    ok=1
+  fi
+  grep -qi "is a symlink" "$root/out.log" || ok=1
+  [ ! -e "$fixture_repo/.tools/bin/terraform" ] || ok=1
+  report "$ok" "install-tools.sh (zip) rejects a symlink-shaped archive member, never installs it"
+}
+test_zip_symlink_rejected
+
+# --- C6: a checksum-valid but non-executable extracted binary is
+# never trusted, mirroring B7 for tar.gz.
+test_zip_checksum_ok_but_not_executable() {
+  setup_fixture_repo
+  setup_fakes
+  broken="$root/tf-broken.zip"; make_broken_zip_fixture "$broken" terraform broken-variant
+  broken_member_sha="$(cd "$root" && rm -rf zip-extract-probe && mkdir zip-extract-probe && cd zip-extract-probe && unzip -q -o "$broken" terraform && shasum -a 256 terraform | awk '{print $1}')"
+  cat > "$fixture_repo/scripts/lab/tool-versions.txt" <<EOF
+terraform|v1.16.1|linux-amd64|terraform|zip|terraform|$(sha_of "$broken")|$broken_member_sha|https://example.invalid/linux-amd64/terraform.zip
+EOF
+  map_url "https://example.invalid/linux-amd64/terraform.zip" "$broken"
+  ok=0
+  if FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 run_install_tools >"$root/out.log" 2>&1; then
+    ok=1
+  fi
+  grep -qi "failed to execute successfully" "$root/out.log" || ok=1
+  report "$ok" "install-tools.sh (zip) rejects a checksum-valid extracted binary that fails to execute"
+}
+test_zip_checksum_ok_but_not_executable
+
+# --- C7: idempotency for archive_type "zip" - a second run against an
+# already-correct, already-executable install performs zero additional
+# downloads, mirroring B6 for the raw archive_type.
+test_zip_idempotent_second_run() {
+  setup_fixture_repo
+  setup_fakes
+  fixture="$root/tf-idempotent-test.zip"; make_zip_fixture "$fixture" terraform idempotent-test 0
+  member_sha="$(cd "$root" && rm -rf zip-extract-probe && mkdir zip-extract-probe && cd zip-extract-probe && unzip -q -o "$fixture" terraform && shasum -a 256 terraform | awk '{print $1}')"
+  cat > "$fixture_repo/scripts/lab/tool-versions.txt" <<EOF
+terraform|v1.16.1|linux-amd64|terraform|zip|terraform|$(sha_of "$fixture")|$member_sha|https://example.invalid/linux-amd64/terraform.zip
+EOF
+  map_url "https://example.invalid/linux-amd64/terraform.zip" "$fixture"
+
+  ok=0
+  FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 run_install_tools >"$root/out1.log" 2>&1 || ok=1
+  first_calls="$(wc -l < "$curl_calls" | tr -d ' ')"
+  [ "$first_calls" = "1" ] || ok=1
+
+  FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 run_install_tools >"$root/out2.log" 2>&1 || ok=1
+  second_calls="$(wc -l < "$curl_calls" | tr -d ' ')"
+  [ "$second_calls" = "1" ] || ok=1
+  grep -qi "already installed" "$root/out2.log" || ok=1
+  report "$ok" "install-tools.sh (zip) second run is idempotent (zero additional downloads)"
+}
+test_zip_idempotent_second_run
+
+# --- C8: an empty/missing archive_member for a zip row fails closed,
+# the same as the malformed-metadata case already proven for tar.gz.
+test_zip_missing_archive_member() {
+  setup_fixture_repo
+  setup_fakes
+  fixture="$root/tf-missing-member.zip"; make_zip_fixture "$fixture" terraform missing-member-test 0
+  cat > "$fixture_repo/scripts/lab/tool-versions.txt" <<EOF
+terraform|v1.16.1|linux-amd64|terraform|zip||$(sha_of "$fixture")|PLACEHOLDER-NEVER-COMPARED-NOT-A-REAL-HASH|https://example.invalid/linux-amd64/terraform.zip
+EOF
+  map_url "https://example.invalid/linux-amd64/terraform.zip" "$fixture"
+  ok=0
+  if FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 run_install_tools >"$root/out.log" 2>&1; then
+    ok=1
+  fi
+  grep -qi "unsafe or empty archive member" "$root/out.log" || ok=1
+  [ ! -e "$fixture_repo/.tools/bin/terraform" ] || ok=1
+  report "$ok" "install-tools.sh (zip) fails closed on an empty archive_member"
+}
+test_zip_missing_archive_member
+
+# --- C9: an unsupported platform fails closed before any network
+# access, even when the only row present uses archive_type "zip".
+test_zip_unsupported_platform_end_to_end() {
+  setup_fixture_repo
+  setup_fakes
+  fixture="$root/tf-unsupported-platform.zip"; make_zip_fixture "$fixture" terraform unsupported-platform-test 0
+  cat > "$fixture_repo/scripts/lab/tool-versions.txt" <<EOF
+terraform|v1.16.1|linux-amd64|terraform|zip|terraform|$(sha_of "$fixture")|PLACEHOLDER-NEVER-COMPARED-NOT-A-REAL-HASH|https://example.invalid/linux-amd64/terraform.zip
+EOF
+  map_url "https://example.invalid/linux-amd64/terraform.zip" "$fixture"
+  ok=0
+  if FAKE_UNAME_S=Linux FAKE_UNAME_M=aarch64 run_install_tools >"$root/out.log" 2>&1; then
+    ok=1
+  fi
+  grep -qi "unsupported platform" "$root/out.log" || ok=1
+  calls="$(wc -l < "$curl_calls" | tr -d ' ')"
+  [ "$calls" = "0" ] || ok=1
+  report "$ok" "install-tools.sh (zip) fails closed on an unsupported platform before touching the network"
+}
+test_zip_unsupported_platform_end_to_end
 
 echo
 echo "test-tool-platforms: $pass passed, $fail failed"
