@@ -11,7 +11,8 @@
 	gitops-test-revision-switch gitops-test-appproject-kind-retirement \
 	eso-chart-fetch eso-render check-eso-chart eso-install eso-status eso-uninstall \
 	eso-test-runtime-health eso-test-lifecycle \
-	eso-provision-source-secret eso-test-secret-lifecycle eso-test-provision-source-secret-idempotency
+	eso-provision-source-secret eso-test-secret-lifecycle eso-test-provision-source-secret-idempotency \
+	terraform-fmt terraform-init terraform-validate terraform-test terraform-validate-offline
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
@@ -200,3 +201,30 @@ eso-test-secret-lifecycle: ## Phase 2.6.2: mutating end-to-end proof of the Secr
 
 eso-test-provision-source-secret-idempotency: ## Phase 2.6.3b: mutating proof of provision-source-secret.sh's ensure/--rotate/--delete semantics and the global kubeconfig fingerprint helper's isolation (restores the pre-test value/state on exit)
 	@sh tests/eso/test-provision-source-secret-idempotency.sh
+
+# Phase 2.7.1: Terraform toolchain and offline validation only. No
+# target below ever runs `plan`/`apply` against real AWS, contacts an
+# AWS endpoint, or requires an AWS account/credential/profile - see
+# .local/evidence/phase-2.7-eks-aws-foundation-plan.md and
+# docs/adr/0011-terraform-foundation.md. `terraform` itself is
+# installed exclusively via `make tools-install` (the same pinned,
+# checksum-verified .tools/bin/ pipeline as kind/kubectl/helm) - never
+# globally, never via a GitHub Action.
+terraform-fmt: ## Phase 2.7.1: terraform fmt -check against terraform/ (fully offline, zero AWS contact)
+	@.tools/bin/terraform -chdir=terraform fmt -check -diff -recursive
+
+terraform-init: ## Phase 2.7.1: terraform init -backend=false against terraform/ (only network contact is the public Terraform Registry fetching the pinned provider binary; zero AWS contact, no backend, no state)
+	@.tools/bin/terraform -chdir=terraform init -backend=false
+
+terraform-validate: ## Phase 2.7.1: terraform validate against terraform/ (syntax/internal-consistency only; run terraform-init first; never contacts AWS or any provider API)
+	@.tools/bin/terraform -chdir=terraform validate
+
+terraform-test: ## Phase 2.7.1: terraform test against terraform/tests/ using mock_provider "aws" (zero AWS credentials, zero AWS network contact, zero real resources created; run terraform-init first)
+	@.tools/bin/terraform -chdir=terraform test
+
+terraform-validate-offline: ## Phase 2.7.1: full offline Terraform toolchain validation in one pass (fmt -check, init -backend=false, validate, test/mock_provider); never plan/apply against AWS, zero AWS contact
+	@.tools/bin/terraform -chdir=terraform fmt -check -diff -recursive
+	@.tools/bin/terraform -chdir=terraform init -backend=false
+	@.tools/bin/terraform -chdir=terraform validate
+	@.tools/bin/terraform -chdir=terraform test
+	@echo "OK: terraform-validate-offline passed - fmt/init(-backend=false)/validate/test all offline, zero AWS contact"
