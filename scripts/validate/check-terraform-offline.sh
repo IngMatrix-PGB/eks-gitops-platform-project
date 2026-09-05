@@ -1,15 +1,43 @@
 #!/usr/bin/env bash
-# Deterministic, permanent enforcement of the Phase 2.7.1 offline
-# contract (.local/evidence/phase-2.7-eks-aws-foundation-plan.md):
-# Terraform/AWS provider pinned exactly, a real lock file naming the
-# expected provider, no active backend, no real infrastructure
-# resource/data source outside a narrow documented allowlist, no
-# operative `provider "aws"` block, every AWS-referencing Terraform
-# test declares mock_provider "aws", no real (shell/Makefile/workflow)
-# `terraform plan`/`terraform apply` invocation, no GitHub Actions
-# id-token/aws-actions/AWS-credential surface, no real AWS account
-# ID/role ARN, offline targets use `terraform init -backend=false`, and
-# no .terraform/ cache, state, plan, zip, or binary is tracked in Git.
+# Deterministic, permanent enforcement of the Terraform offline
+# contract (originally Phase 2.7.1, extended in Phase 3.1 - see
+# docs/adr/0011-terraform-foundation.md and
+# docs/adr/0012-network-eks-iac-foundation.md): Terraform/AWS provider
+# pinned exactly IN EVERY ROOT MODULE, a real lock file naming the
+# expected provider in every root module, no configured (non-empty)
+# backend block anywhere, no real infrastructure resource/data source
+# outside a narrow documented allowlist, no operative `provider "aws"`
+# block, every AWS-referencing Terraform test declares mock_provider
+# "aws", no real (shell/Makefile/workflow) `terraform plan`/`terraform
+# apply` invocation, no GitHub Actions id-token/aws-actions/AWS-
+# credential surface, no real AWS account ID/role ARN, offline targets
+# use `terraform init -backend=false`, and no .terraform/ cache, state,
+# plan, zip, or binary is tracked in Git.
+#
+# Root-module discovery (Phase 3.1): the canonical plan
+# (.local/evidence/phase-2.7-eks-aws-foundation-plan.md, S5.1) requires
+# several independent Terraform root modules, each with its own
+# versions.tf/.terraform.lock.hcl/state - terraform/ itself,
+# terraform/bootstrap/, and one directory per terraform/envs/<name>/.
+# discover_terraform_root_modules() below finds these by DIRECTORY
+# STRUCTURE alone, never a manually-maintained list and never by
+# checking for the presence of any specific file inside a candidate -
+# a root module directory that is missing its own versions.tf is still
+# discovered by this rule and then fails checks 1/2 for exactly that
+# reason, rather than being silently skipped because the very file
+# whose absence is the failure was also the discovery key. Adding a new
+# terraform/envs/<anything>/ is enforced automatically, with no
+# tooling change and no registration step to forget.
+#
+# Backend-block semantic exception (Phase 3.1): a `backend "s3" {}`
+# (or any backend block whose body contains only blank lines/comments)
+# is an intentionally EMPTY/PARTIAL declaration - the real
+# bucket/key/region are supplied later via `-backend-config` flags at
+# a real, future, separately-authorized `terraform init`, never
+# hardcoded now. This is allowed. A backend block carrying ANY real
+# attribute (bucket, key, region, dynamodb_table, profile,
+# access_key, ...) is a configured, active backend and still fails
+# closed - see check 5 and find_configured_backend_blocks() below.
 #
 # Semantic exception, deliberately NOT flagged as a real terraform
 # apply: `command = apply` inside a `.tftest.hcl` run block is HCL
@@ -47,8 +75,17 @@ fail=0
 ok() { echo "OK: $1"; }
 bad() { echo "FAIL: $1" >&2; fail=1; }
 
-versions_tf="terraform/versions.tf"
-lock_file="terraform/.terraform.lock.hcl"
+# Root-module discovery is NOT re-implemented here - it is sourced,
+# purely for its function definition, from
+# scripts/lab/terraform-root-modules.sh, the single source of truth
+# both this checker and the Makefile's terraform-* targets share. See
+# that file's own header comment for the exact discovery rule.
+# shellcheck source=../lab/terraform-root-modules.sh
+TERRAFORM_ROOT_MODULES_SOURCE_ONLY=1 . "$here/../lab/terraform-root-modules.sh"
+
+root_modules="$(discover_terraform_root_modules)"
+root_module_count="$(printf '%s\n' "$root_modules" | grep -c . || true)"
+ok "discovered $root_module_count Terraform root module(s): $(printf '%s' "$root_modules" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
 
 # Every check below that scans "all .tf files" does so over exactly
 # this list - tracked-or-would-be-tracked .tf files under terraform/ -
@@ -73,57 +110,125 @@ $tf_files
 EOF_TF
 }
 
-# --- 1/2. Terraform CLI and AWS provider each pinned EXACTLY (a bare
-# "=" constraint, never ~>, >=, or an unconstrained version). ---------
-if [ ! -f "$versions_tf" ]; then
-  bad "$versions_tf not found"
-else
-  if grep -Eq '^[[:space:]]*required_version[[:space:]]*=[[:space:]]*"=[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+"[[:space:]]*"?[[:space:]]*$' "$versions_tf"; then
-    ok "Terraform required_version is pinned exactly in $versions_tf"
+# --- 1/2/3/4, per discovered root module: Terraform CLI and AWS
+# provider each pinned EXACTLY (a bare "=" constraint, never ~>, >=, or
+# an unconstrained version); a real lock file present and naming the
+# expected provider. Runs once per root module discovered above, never
+# once total - a root module missing any of this is reported by its
+# own path, not conflated with any other root's result. ----------------
+while IFS= read -r root; do
+  [ -z "$root" ] && continue
+  versions_tf="$root/versions.tf"
+  lock_file="$root/.terraform.lock.hcl"
+
+  if [ ! -f "$versions_tf" ]; then
+    bad "$versions_tf not found"
   else
-    bad "$versions_tf does not pin required_version exactly (expected required_version = \"= X.Y.Z\")"
+    if grep -Eq '^[[:space:]]*required_version[[:space:]]*=[[:space:]]*"=[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+"[[:space:]]*"?[[:space:]]*$' "$versions_tf"; then
+      ok "Terraform required_version is pinned exactly in $versions_tf"
+    else
+      bad "$versions_tf does not pin required_version exactly (expected required_version = \"= X.Y.Z\")"
+    fi
+
+    if awk '
+      /source[[:space:]]*=[[:space:]]*"hashicorp\/aws"/ { found_source=1 }
+      found_source && /^[[:space:]]*version[[:space:]]*=[[:space:]]*"=[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+"[[:space:]]*$/ { found_version=1 }
+      END { exit !(found_source && found_version) }
+    ' "$versions_tf"; then
+      ok "AWS provider (hashicorp/aws) is pinned exactly in $versions_tf"
+    else
+      bad "$versions_tf does not pin the hashicorp/aws provider exactly (expected version = \"= X.Y.Z\" under source = \"hashicorp/aws\")"
+    fi
   fi
 
-  if awk '
-    /source[[:space:]]*=[[:space:]]*"hashicorp\/aws"/ { found_source=1 }
-    found_source && /^[[:space:]]*version[[:space:]]*=[[:space:]]*"=[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+"[[:space:]]*$/ { found_version=1 }
-    END { exit !(found_source && found_version) }
-  ' "$versions_tf"; then
-    ok "AWS provider (hashicorp/aws) is pinned exactly in $versions_tf"
+  if [ ! -f "$lock_file" ]; then
+    bad "$lock_file not found"
   else
-    bad "$versions_tf does not pin the hashicorp/aws provider exactly (expected version = \"= X.Y.Z\" under source = \"hashicorp/aws\")"
+    ok "$lock_file is present"
+    if grep -q 'provider "registry.terraform.io/hashicorp/aws"' "$lock_file"; then
+      ok "$lock_file records the expected provider (registry.terraform.io/hashicorp/aws)"
+    else
+      bad "$lock_file does not record registry.terraform.io/hashicorp/aws"
+    fi
   fi
-fi
+done <<EOF_ROOTS
+$root_modules
+EOF_ROOTS
 
-# --- 3/4. Lock file present and names the expected provider. ---------
-if [ ! -f "$lock_file" ]; then
-  bad "$lock_file not found"
-else
-  ok "$lock_file is present"
-  if grep -q 'provider "registry.terraform.io/hashicorp/aws"' "$lock_file"; then
-    ok "$lock_file records the expected provider (registry.terraform.io/hashicorp/aws)"
-  else
-    bad "$lock_file does not record registry.terraform.io/hashicorp/aws"
-  fi
-fi
+# --- 5. No CONFIGURED backend block anywhere in tracked Terraform
+# files. An empty/partial backend block ("backend \"s3\" {}", or a
+# multi-line block whose body is only blank lines/comments) is
+# explicitly allowed (Phase 3.1, header comment) - only a block
+# carrying a real attribute (bucket, key, region, dynamodb_table,
+# profile, access_key, ...) fails closed. Block-aware, not a per-line
+# pattern match, since "configured or not" is a property of the whole
+# block body, not any single line. ------------------------------------
+find_configured_backend_blocks() {
+  file="$1"
+  awk '
+    BEGIN { in_backend = 0; has_attr = 0; start_line = 0 }
+    /^[[:space:]]*backend[[:space:]]*"[A-Za-z0-9_]+"[[:space:]]*\{[[:space:]]*\}[[:space:]]*$/ { next }
+    /^[[:space:]]*backend[[:space:]]*"[A-Za-z0-9_]+"[[:space:]]*\{[[:space:]]*$/ {
+      in_backend = 1; has_attr = 0; start_line = NR; next
+    }
+    in_backend && /^[[:space:]]*\}[[:space:]]*$/ {
+      if (has_attr) { printf "%s:%d: configured backend block (real attribute present)\n", FILENAME, start_line }
+      in_backend = 0
+      next
+    }
+    in_backend {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (line != "" && substr(line, 1, 1) != "#" && substr(line, 1, 2) != "//") { has_attr = 1 }
+    }
+  ' "$file"
+}
 
-# --- 5. No active backend anywhere in tracked Terraform files. -------
-backend_hits="$(grep_over_tf_files '^[[:space:]]*backend[[:space:]]*"[A-Za-z0-9_]+"[[:space:]]*\{')"
+backend_hits=""
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  [ -f "$f" ] || continue
+  hit="$(find_configured_backend_blocks "$f")"
+  [ -n "$hit" ] && backend_hits="$backend_hits
+$hit"
+done <<EOF_TF
+$tf_files
+EOF_TF
+
 if [ -n "$backend_hits" ]; then
-  bad "an active backend block was found (Phase 2.7.1 must use only terraform init -backend=false, no backend configured):"
+  bad "a configured (non-empty) backend block was found - only an empty/partial backend declaration (e.g. backend \"s3\" {}) is allowed, never a real bucket/key/region/credential:"
   printf '%s\n' "$backend_hits" >&2
 else
-  ok "no active backend block exists in any tracked .tf file"
+  ok "no configured backend block exists in any tracked .tf file (an empty/partial backend declaration, if any, is allowed)"
 fi
 
-# --- 6a. Zero resource "aws_*" blocks anywhere - Phase 2.7.1 designs
-# no infrastructure resource, full stop, no exception. ----------------
-resource_hits="$(grep_over_tf_files '^[[:space:]]*resource[[:space:]]*"aws_[A-Za-z0-9_]+"')"
+# --- 6a. Zero resource "aws_*" blocks in the ROOT terraform/ module
+# (terraform/*.tf directly - the Phase 2.7.1 toolchain smoke-test
+# module, which stays permanently resource-free, no exception). Phase
+# 3.1 explicitly authorizes real (never-applied) AWS resource blocks in
+# terraform/bootstrap/ and terraform/envs/*/ - that is the entire
+# purpose of those modules (e.g. bootstrap/'s aws_s3_bucket state
+# bucket) - so this check is scoped to the root module only, never
+# repo-wide. Inertness is enforced by the OTHER checks (no configured
+# backend, no operative provider "aws" block, no real plan/apply, no
+# credentials) - never by pretending no resource can be written. -------
+root_tf_files="$(printf '%s\n' "$tf_files" | grep -E '^terraform/[^/]+\.tf$' || true)"
+resource_hits=""
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  [ -f "$f" ] || continue
+  hit="$(grep -Hn -E '^[[:space:]]*resource[[:space:]]*"aws_[A-Za-z0-9_]+"' "$f" 2>/dev/null || true)"
+  [ -n "$hit" ] && resource_hits="$resource_hits
+$hit"
+done <<EOF_ROOT_TF
+$root_tf_files
+EOF_ROOT_TF
 if [ -n "$resource_hits" ]; then
-  bad "a real AWS resource block was found (none is authorized in Phase 2.7.1):"
+  bad "a real AWS resource block was found in the root terraform/ module (not authorized there - it must stay the permanently resource-free toolchain smoke test; bootstrap/ and envs/*/ are the authorized locations):"
   printf '%s\n' "$resource_hits" >&2
 else
-  ok "no AWS resource block exists in any tracked .tf file"
+  ok "no AWS resource block exists in the root terraform/ module (terraform/*.tf)"
 fi
 
 # --- 6b. data "aws_*" blocks are allowed ONLY for the narrow,
