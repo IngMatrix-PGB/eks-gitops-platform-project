@@ -164,7 +164,24 @@ deletion_policy="$(pkubectl get externalsecret "$externalsecret_name" -n "$env_n
 echo "OK: captured ExternalSecret '$externalsecret_name' deletionPolicy='${deletion_policy:-<absent>}' before deletion"
 
 echo "retire-appproject-kind: step 2 - deleting SecretStore/ExternalSecret in $env_name while still whitelisted ..."
-pkubectl delete externalsecret "$externalsecret_name" -n "$env_name" --ignore-not-found
+# Confirmed empirically: creationPolicy: Owner sets a real Kubernetes
+# ownerReference on the target Secret, and Kubernetes' own background
+# garbage collector cascade-deletes it as soon as the ExternalSecret is
+# deleted, REGARDLESS of deletionPolicy: Retain - that policy only
+# governs ESO's own controller behavior (e.g. what to do when the
+# ExternalSecret's data[] list shrinks), not Kubernetes' native
+# ownerReference GC. --cascade=orphan is what actually prevents that
+# native GC from racing ahead of ESO's own Retain-aware finalizer
+# cleanup - the standard Kubernetes idiom for "delete the owner,
+# intentionally leave what it owns behind" (the same pattern as
+# `kubectl delete deployment --cascade=orphan` leaving its Pods
+# running). Only applied when the captured deletionPolicy is actually
+# Retain - a Delete policy should keep normal cascade behavior.
+if [ "$deletion_policy" = "Retain" ]; then
+  pkubectl delete externalsecret "$externalsecret_name" -n "$env_name" --ignore-not-found --cascade=orphan --wait --timeout=60s
+else
+  pkubectl delete externalsecret "$externalsecret_name" -n "$env_name" --ignore-not-found --wait --timeout=60s
+fi
 pkubectl delete secretstore "$secretstore_name" -n "$env_name" --ignore-not-found
 
 RETIRE_NS="$env_name"; RETIRE_SS="$secretstore_name"; RETIRE_ES="$externalsecret_name"
