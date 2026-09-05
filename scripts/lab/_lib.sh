@@ -37,6 +37,52 @@ pkubectl() {
   KUBECONFIG="$PROJECT_KUBECONFIG" "$KUBECTL_BIN" --kubeconfig "$PROJECT_KUBECONFIG" "$@"
 }
 
+# Phase 2.6.3b (Gap 5): reads the TRUE global kubeconfig state at $1
+# (default $HOME/.kube/config), immune to any KUBECONFIG already
+# exported in the calling shell - `env -u KUBECONFIG` unsets it for
+# exactly this one command, and the explicit --kubeconfig flag (which
+# kubectl always prioritizes over the environment variable regardless)
+# is passed too, so neither mechanism alone has to be trusted. Uses
+# this project's own pinned kubectl binary, never a dependency on an
+# ambient system kubectl. Never creates or modifies the file. Never
+# prints certificate/token/user/cluster content - only a SHA256 of the
+# raw file bytes and the resolved context NAME, or the literal string
+# "ABSENT" for either field when the file does not exist (a stable,
+# comparable representation - never empty-string, which a caller could
+# mistake for "not yet read" rather than "genuinely absent").
+# Prints "<sha256-or-ABSENT> <context-or-ABSENT>" on one line.
+global_kubeconfig_fingerprint() {
+  gkf_path="${1:-$HOME/.kube/config}"
+  if [ -f "$gkf_path" ]; then
+    gkf_sha="$(shasum -a 256 "$gkf_path" | awk '{print $1}')"
+    gkf_ctx="$(env -u KUBECONFIG "$KUBECTL_BIN" --kubeconfig "$gkf_path" config current-context 2>/dev/null || true)"
+    [ -z "$gkf_ctx" ] && gkf_ctx="ABSENT"
+  else
+    gkf_sha="ABSENT"
+    gkf_ctx="ABSENT"
+  fi
+  printf '%s %s\n' "$gkf_sha" "$gkf_ctx"
+}
+
+# Phase 2.6.3b (Gap 5): fails if the project's own kubeconfig
+# ($PROJECT_KUBECONFIG) resolves to the SAME file as the global
+# kubeconfig at $1 (default $HOME/.kube/config) - a defensive guard
+# against ever measuring the same file twice under two different names
+# and mistaking that for genuine isolation. Compares resolved absolute
+# paths only, never file content.
+assert_kubeconfig_paths_distinct() {
+  akpd_global="${1:-$HOME/.kube/config}"
+  if [ -f "$PROJECT_KUBECONFIG" ] && [ -f "$akpd_global" ]; then
+    akpd_local_abs="$(cd "$(dirname "$PROJECT_KUBECONFIG")" && pwd)/$(basename "$PROJECT_KUBECONFIG")"
+    akpd_global_abs="$(cd "$(dirname "$akpd_global")" && pwd)/$(basename "$akpd_global")"
+    if [ "$akpd_local_abs" = "$akpd_global_abs" ]; then
+      echo "FAIL: project kubeconfig ($PROJECT_KUBECONFIG) resolves to the same path as the global kubeconfig ($akpd_global) - refusing to treat this as isolated" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
 kind_cluster_exists() {
   "$KIND_BIN" get clusters 2>/dev/null | grep -qxF "$PROJECT_CLUSTER_NAME"
 }
