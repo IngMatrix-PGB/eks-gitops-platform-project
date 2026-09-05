@@ -57,12 +57,24 @@ tool_versions_row_pattern='^([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)
 # way to change even one character without invalidating the checksum it
 # exists to verify - the same root cause already solved once for
 # scripts/lab/tool-versions.txt above, applied to this file's own fixed
-# format. A line matching either exact shape is skipped entirely (its
-# whole content IS the hash); any other line in the file (provider
-# name, version, constraints, the `hashes = [`/`]` bracket lines) is
-# scanned normally, never blindly excluded.
+# format.
+#
+# This is NOT a blanket per-line shape match: a line is masked only
+# when it is BOTH exactly one of these two shapes AND structurally
+# inside a `hashes = [ ... ]` array nested inside a `provider "..." {
+# ... }` block - tracked by a small state machine below, not assumed.
+# A well-shaped h1:/zh: token appearing anywhere else in the file (a
+# comment, the provider address line, `version`/`constraints`, outside
+# any hashes array, or in a file whose provider/hashes blocks never
+# properly open) is never masked and is scanned normally - the file
+# must genuinely be a well-formed lock file for this exception to apply
+# at all, never merely "any line that looks like a hash".
 terraform_lock_h1_line_pattern='^[[:space:]]*"h1:[A-Za-z0-9+/]{43}=",?[[:space:]]*$'
 terraform_lock_zh_line_pattern='^[[:space:]]*"zh:[0-9A-Fa-f]{64}",?[[:space:]]*$'
+terraform_lock_provider_open_pattern='^[[:space:]]*provider[[:space:]]+"[^"]+"[[:space:]]*\{[[:space:]]*$'
+terraform_lock_hashes_open_pattern='^[[:space:]]*hashes[[:space:]]*=[[:space:]]*\[[[:space:]]*$'
+terraform_lock_hashes_close_pattern='^[[:space:]]*\][[:space:]]*$'
+terraform_lock_block_close_pattern='^[[:space:]]*\}[[:space:]]*$'
 
 aws_account_hit_in_file() {
   local file="$1"
@@ -81,10 +93,29 @@ aws_account_hit_in_file() {
     return 1
   fi
   if [ "$file" = "terraform/.terraform.lock.hcl" ]; then
-    local line
+    local line in_provider=0 in_hashes=0
     while IFS= read -r line || [ -n "$line" ]; do
-      if [[ "$line" =~ $terraform_lock_h1_line_pattern ]] || [[ "$line" =~ $terraform_lock_zh_line_pattern ]]; then
-        continue
+      # Track structural nesting first, on every line, regardless of
+      # whether this line ends up masked - a provider/hashes block
+      # boundary is never itself eligible for masking (it can't match
+      # the h1:/zh: shape anyway), so updating state before the mask
+      # check is safe and keeps the state machine exact.
+      if [ "$in_provider" -eq 0 ] && [[ "$line" =~ $terraform_lock_provider_open_pattern ]]; then
+        in_provider=1
+        in_hashes=0
+      elif [ "$in_provider" -eq 1 ] && [ "$in_hashes" -eq 0 ] && [[ "$line" =~ $terraform_lock_hashes_open_pattern ]]; then
+        in_hashes=1
+      elif [ "$in_hashes" -eq 1 ] && [[ "$line" =~ $terraform_lock_hashes_close_pattern ]]; then
+        in_hashes=0
+      elif [ "$in_provider" -eq 1 ] && [[ "$line" =~ $terraform_lock_block_close_pattern ]]; then
+        in_provider=0
+        in_hashes=0
+      fi
+
+      if [ "$in_provider" -eq 1 ] && [ "$in_hashes" -eq 1 ]; then
+        if [[ "$line" =~ $terraform_lock_h1_line_pattern ]] || [[ "$line" =~ $terraform_lock_zh_line_pattern ]]; then
+          continue
+        fi
       fi
       if [[ "$line" =~ $aws_account_pattern ]]; then
         return 0

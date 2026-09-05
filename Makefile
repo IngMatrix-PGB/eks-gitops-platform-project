@@ -12,13 +12,14 @@
 	eso-chart-fetch eso-render check-eso-chart eso-install eso-status eso-uninstall \
 	eso-test-runtime-health eso-test-lifecycle \
 	eso-provision-source-secret eso-test-secret-lifecycle eso-test-provision-source-secret-idempotency \
-	terraform-fmt terraform-init terraform-validate terraform-test terraform-validate-offline
+	terraform-fmt terraform-init terraform-validate terraform-test terraform-validate-offline \
+	check-terraform-offline check-terraform-offline-regression
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-tool-platforms-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -228,3 +229,9 @@ terraform-validate-offline: ## Phase 2.7.1: full offline Terraform toolchain val
 	@.tools/bin/terraform -chdir=terraform validate
 	@.tools/bin/terraform -chdir=terraform test
 	@echo "OK: terraform-validate-offline passed - fmt/init(-backend=false)/validate/test all offline, zero AWS contact"
+
+check-terraform-offline: ## Phase 2.7.1 pre-merge hardening: deterministic enforcement of the offline contract (exact pins, lockfile names the expected provider, no active backend, no real AWS resource/data source outside the narrow toolchain-smoke allowlist, no operative provider "aws" block, every AWS-referencing Terraform test declares mock_provider, no real terraform plan/apply in scripts/Makefile/workflows, no id-token/aws-actions/AWS-credential surface, no real account id/ARN, offline targets use -backend=false, nothing tracked that should not be)
+	@bash scripts/validate/check-terraform-offline.sh
+
+check-terraform-offline-regression: ## Regression-test check-terraform-offline.sh's accept/reject matrix against throwaway fixture repositories
+	@sh tests/terraform/test-offline-contract.sh
