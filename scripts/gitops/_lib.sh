@@ -3,8 +3,11 @@
 # POSIX-compatible shell only. Sourced, never executed directly. Assumes
 # the caller's working directory is the repository root, and that
 # scripts/lab/_lib.sh (project cluster/kubeconfig constants, pkubectl)
-# and scripts/argocd/_lib.sh (phelm, ARGOCD_NAMESPACE) have already been
-# sourced first.
+# and scripts/argocd/_lib.sh (phelm, ARGOCD_NAMESPACE,
+# list_namespace_resource_names) have already been sourced first. The
+# classifier functions below (Phase 2.6.3a) also call into
+# scripts/eso/_lib.sh (eso_release_owns_object) - callers that use them
+# must source that file too.
 
 GITOPS_GITHUB_ACCOUNT="IngMatrix-PGB"
 GITOPS_OWNER_REPO="IngMatrix-PGB/eks-gitops-platform-project"
@@ -159,4 +162,210 @@ EOF
   done
   echo "FAIL: Application/$app did not reach Synced/Healthy within ${timeout}s (last: sync=$sync health=$health)" >&2
   return 1
+}
+
+gitops_app_uid() {
+  pkubectl -n "$ARGOCD_NAMESPACE" get application "$1" -o jsonpath='{.metadata.uid}' 2>/dev/null
+}
+
+gitops_app_finalizers() {
+  pkubectl -n "$ARGOCD_NAMESPACE" get application "$1" -o jsonpath='{.metadata.finalizers}' 2>/dev/null
+}
+
+gitops_app_generation() {
+  pkubectl -n "$ARGOCD_NAMESPACE" get application "$1" -o jsonpath='{.metadata.generation}' 2>/dev/null
+}
+
+# Generic "N consecutive stable reads" loop (Phase 2.6.3a): $1 is the
+# NAME of a predicate function (called with no arguments - POSIX sh has
+# no closures, so predicates read module-global variables the caller
+# sets beforehand) that must return 0 for "condition currently true".
+# $2=required consecutive successes (default 3) $3=poll interval
+# seconds (default 15) $4=overall timeout seconds (default 420 - the
+# empirically-observed worst case for a stale self-heal retry storm to
+# exhaust its own retry budget, per .local/evidence/phase-2.6.3-*). A
+# single true read is never sufficient evidence on its own - this is
+# the direct fix for the false-positive this project hit twice during
+# Phase 2.6.2 testing.
+gitops_wait_stable() {
+  predicate="$1"; required="${2:-3}"; interval="${3:-15}"; timeout="${4:-420}"
+  stable=0
+  elapsed=0
+  while [ "$elapsed" -lt "$timeout" ] && [ "$stable" -lt "$required" ]; do
+    if "$predicate"; then
+      stable=$((stable + 1))
+    else
+      stable=0
+    fi
+    [ "$stable" -ge "$required" ] && break
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+  done
+  [ "$stable" -ge "$required" ]
+}
+
+# Detects a stuck/stale queued operation on Application $1: its
+# embedded source revision (.operation.sync.source.targetRevision)
+# differs from the Application's OWN current spec revision
+# (.spec.source.targetRevision). Confirmed live during Phase 2.6.2
+# testing: self-heal can retry an operation computed against an old
+# revision even after spec.source.targetRevision has already moved on,
+# because the operation's own manifest snapshot was taken at queue
+# time and is never re-evaluated on retry.
+gitops_detect_stale_operation() {
+  app="$1"
+  op_src_rev="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$app" -o jsonpath='{.operation.sync.source.targetRevision}' 2>/dev/null)"
+  [ -n "$op_src_rev" ] || return 1
+  spec_rev="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$app" -o jsonpath='{.spec.source.targetRevision}' 2>/dev/null)"
+  [ "$op_src_rev" != "$spec_rev" ]
+}
+
+# Clears a stuck/queued operation via a merge PATCH only - never a
+# delete of the Application. If automated sync is still enabled,
+# self-heal re-queues a fresh, correctly-computed operation on its own
+# immediately afterward.
+gitops_clear_stale_operation() {
+  pkubectl patch application "$1" -n "$ARGOCD_NAMESPACE" --type=merge -p '{"operation":null}' >/dev/null 2>&1
+}
+
+# Pauses automated sync (self-heal+prune) on Application $1 via a merge
+# PATCH only - never deletes or recreates the Application. This
+# project's Applications are always rendered with
+# {selfHeal:true,prune:true} (see gitops_root_app_desired_fingerprint),
+# so gitops_resume_automated_sync always restores that literal value
+# rather than a captured one - avoiding ever persisting a paused state
+# if a capture step had failed.
+gitops_pause_automated_sync() {
+  pkubectl patch application "$1" -n "$ARGOCD_NAMESPACE" --type=merge -p '{"spec":{"syncPolicy":{"automated":null}}}' >/dev/null
+}
+
+gitops_resume_automated_sync() {
+  pkubectl patch application "$1" -n "$ARGOCD_NAMESPACE" --type=merge -p '{"spec":{"syncPolicy":{"automated":{"selfHeal":true,"prune":true}}}}' >/dev/null
+}
+
+gitops_automated_sync_paused() {
+  val="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$1" -o jsonpath='{.spec.syncPolicy.automated}' 2>/dev/null)"
+  [ -z "$val" ]
+}
+
+# Classifies one discovered namespaced object (as printed by `kubectl
+# get <type> -o name`, e.g. "role.rbac.authorization.k8s.io/x") into
+# exactly one of: argocd-tracked | helm-eso-scoped | kubernetes-builtin
+# | unknown. $1=object $2=namespace $3=the Argo CD Application name
+# expected to track objects in this namespace. Uses only verifiable
+# metadata (the object's own argocd.argoproj.io/tracking-id annotation
+# value, or scripts/eso/_lib.sh's Helm-ownership check) - never a
+# name-prefix guess.
+# Returns 0 if the tracking-id annotation VALUE (never the object's own
+# name) on $1 (type/name), namespace $2, structurally parses as
+# "<app>:<group>/<kind>:<namespace>/<name>" with the app field exactly
+# equal to $3 and the namespace field exactly equal to $2. Deliberately
+# tolerant of the kind/name portion: verified empirically this project
+# hits two cases where Kubernetes/a controller copies an owning
+# object's tracking-id annotation verbatim onto a child it creates -
+# a Deployment's ReplicaSet carries the *Deployment's* tracking-id
+# (kind reads "Deployment", not "ReplicaSet"), and ESO's target Secret
+# (creationPolicy: Owner) carries its *owning ExternalSecret's*
+# tracking-id (kind reads "ExternalSecret", not "Secret"). Requiring an
+# exact kind/name match would misclassify both as foreign objects, so
+# the exact, verified fields are the ones that actually distinguish
+# "belongs to this Application" from "belongs to something else": the
+# Application name and the namespace, parsed as real annotation
+# structure - never a raw substring/prefix match on the whole value,
+# and never the object's own name.
+gitops_tracking_id_matches_app() {
+  gtim_obj="$1"; gtim_ns="$2"; gtim_expected_app="$3"
+  gtim_tid="$(pkubectl -n "$gtim_ns" get "$gtim_obj" -o jsonpath='{.metadata.annotations.argocd\.argoproj\.io/tracking-id}' 2>/dev/null)"
+  [ -n "$gtim_tid" ] || return 1
+  gtim_app="${gtim_tid%%:*}"
+  gtim_rest="${gtim_tid#*:}"
+  gtim_nsname="${gtim_rest#*:}"
+  [ "$gtim_app" = "$gtim_expected_app" ] || return 1
+  case "$gtim_nsname" in
+    "${gtim_ns}/"*) return 0 ;;
+  esac
+  return 1
+}
+
+gitops_classify_namespaced_object() {
+  obj="$1"; ns="$2"; expected_app="$3"
+
+  case "$obj" in
+    serviceaccount/default|configmap/kube-root-ca.crt)
+      echo "kubernetes-builtin"; return 0 ;;
+    event/*|event.events.k8s.io/*)
+      echo "kubernetes-builtin"; return 0 ;;
+    endpoints/*)
+      # Legacy, deprecated (Kubernetes v1.33+) auto-mirror of a
+      # Service with no ownerReference of its own to verify against -
+      # an expected byproduct of any Service, not a name-prefix guess.
+      echo "kubernetes-builtin"; return 0 ;;
+  esac
+
+  if gitops_tracking_id_matches_app "$obj" "$ns" "$expected_app"; then
+    echo "argocd-tracked"; return 0
+  fi
+
+  # Kubernetes-controller-derived objects that carry no tracking-id of
+  # their own at all (confirmed empirically: Pod, EndpointSlice) -
+  # resolve exactly one hop via their REAL ownerReference (never a name
+  # guess) to a known parent kind this project's workloads always
+  # produce, and inherit that parent's classification.
+  case "$obj" in
+    pod/*)
+      owner_kind="$(pkubectl -n "$ns" get "$obj" -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null)"
+      owner_name="$(pkubectl -n "$ns" get "$obj" -o jsonpath='{.metadata.ownerReferences[0].name}' 2>/dev/null)"
+      if [ "$owner_kind" = "ReplicaSet" ] && [ -n "$owner_name" ] \
+        && gitops_tracking_id_matches_app "replicaset.apps/${owner_name}" "$ns" "$expected_app"; then
+        echo "argocd-tracked"; return 0
+      fi
+      ;;
+    endpointslice.discovery.k8s.io/*)
+      owner_kind="$(pkubectl -n "$ns" get "$obj" -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null)"
+      owner_name="$(pkubectl -n "$ns" get "$obj" -o jsonpath='{.metadata.ownerReferences[0].name}' 2>/dev/null)"
+      if [ "$owner_kind" = "Service" ] && [ -n "$owner_name" ] \
+        && gitops_tracking_id_matches_app "service/${owner_name}" "$ns" "$expected_app"; then
+        echo "argocd-tracked"; return 0
+      fi
+      ;;
+  esac
+
+  if eso_release_owns_object "$obj" "$ns"; then
+    echo "helm-eso-scoped"; return 0
+  fi
+
+  echo "unknown"
+  return 0
+}
+
+# Discovers and classifies every namespaced object in $1, paired with
+# $2 (the expected tracking Application name for that namespace).
+# Writes one "<class> <object>" line per object to $3. Returns 0 on
+# successful discovery+classification (regardless of what was found -
+# the caller inspects $3 for any "unknown " line to decide whether to
+# abort), 2 on a discovery error (fail closed).
+gitops_classify_namespace() {
+  # Distinctly-prefixed local variable names throughout: POSIX sh has
+  # no real function-local scope, and list_namespace_resource_names()/
+  # gitops_classify_namespaced_object() below reassign their own
+  # same-named globals (ns, out_file, obj, ...) as a side effect of
+  # being called - a same-named variable here would silently be
+  # clobbered by the callee. Verified empirically: an earlier version
+  # of this function using "ns"/"out_file" directly lost its own
+  # output file path this way.
+  gcn_ns="$1"; gcn_expected_app="$2"; gcn_out_file="$3"
+  gcn_nsinv_tmp="$(mktemp)" || return 2
+  if ! list_namespace_resource_names "$gcn_ns" "$gcn_nsinv_tmp"; then
+    rm -f "$gcn_nsinv_tmp"
+    return 2
+  fi
+
+  : > "$gcn_out_file"
+  while IFS= read -r gcn_obj; do
+    [ -z "$gcn_obj" ] && continue
+    gcn_class="$(gitops_classify_namespaced_object "$gcn_obj" "$gcn_ns" "$gcn_expected_app")"
+    printf '%s %s\n' "$gcn_class" "$gcn_obj" >> "$gcn_out_file"
+  done < "$gcn_nsinv_tmp"
+  rm -f "$gcn_nsinv_tmp"
+  return 0
 }

@@ -7,6 +7,8 @@
 	argocd-test-runtime-health argocd-test-lifecycle \
 	gitops-repo-setup gitops-repo-check gitops-repo-remove gitops-render gitops-bootstrap \
 	gitops-status gitops-test gitops-uninstall gitops-test-lifecycle \
+	gitops-switch-revision gitops-retire-appproject-kind gitops-resume-appproject-kind \
+	gitops-test-revision-switch gitops-test-appproject-kind-retirement \
 	eso-chart-fetch eso-render check-eso-chart eso-install eso-status eso-uninstall \
 	eso-test-runtime-health eso-test-lifecycle \
 	eso-provision-source-secret eso-test-secret-lifecycle
@@ -145,11 +147,26 @@ gitops-status: ## Report root Application/AppProject/ApplicationSet/generated Ap
 gitops-test: ## Read-only runtime health checks against an already-bootstrapped Phase 2.3 state
 	@sh tests/gitops/test-runtime-health.sh
 
-gitops-uninstall: ## Delete the root Application (foreground cascade) and owned namespaces only; preserves Argo CD/CRDs/repo Secret/deploy key
+gitops-uninstall: ## Two-phase transactional uninstall (Phase 2.6.3a): read-only preflight classification of staging/production, zero mutation on any unclassifiable object; then deletes the root Application (foreground cascade) and only namespaces Phase A cleared; retains a namespace an active ESO scoped release still targets; preserves Argo CD/CRDs/repo Secret/deploy key
 	@sh lab/gitops/uninstall.sh
+
+gitops-switch-revision: ## Phase 2.6.3a: safely switch the root Application's targetRevision in place (patch, never delete+recreate); preserves UID/finalizers; requires 3 stable reads; rolls back automatically on failure (REVISION=<value>)
+	@sh lab/gitops/switch-revision.sh
+
+gitops-retire-appproject-kind: ## Phase 2.6.3a: drain SecretStore/ExternalSecret from one environment before narrowing the AppProject whitelist (ENV=staging|production ACTION=--drain)
+	@sh lab/gitops/retire-appproject-kind.sh $(ENV) $(ACTION)
+
+gitops-resume-appproject-kind: ## Phase 2.6.3a: resume automated sync after retire-appproject-kind's drain + the whitelist-narrowing Git change have both landed (ENV=staging|production)
+	@sh lab/gitops/retire-appproject-kind.sh $(ENV) --resume
 
 gitops-test-lifecycle: ## Mutating: proves bootstrap/no-op/self-heal/isolation/uninstall/no-op end-to-end (requires REVISION=<pushed branch>)
 	@sh tests/gitops/test-lifecycle.sh
+
+gitops-test-revision-switch: ## Phase 2.6.3a: mutating, proves switch-revision.sh converges/rolls-back correctly (requires REVISION=<pushed branch>)
+	@sh tests/gitops/test-revision-switch.sh
+
+gitops-test-appproject-kind-retirement: ## Phase 2.6.3a: mutating, proves the 8-step SecretStore/ExternalSecret drain/resume sequence end-to-end
+	@sh tests/gitops/test-appproject-kind-retirement.sh
 
 eso-chart-fetch: ## Download and checksum-verify the pinned External Secrets Operator chart (only target allowed to fetch it)
 	@sh lab/eso/chart-fetch.sh

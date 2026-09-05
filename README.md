@@ -35,8 +35,9 @@ the [Technical Architecture Document](docs/architecture/technical-architecture.m
 `kind` foundation), Phase 2.2 (Argo CD bootstrap), Phase 2.3 (private
 GitOps bootstrap), Phase 2.4 (standard workload contract), Phase 2.5
 (repository governance baseline), Phase 2.6.1 (External Secrets
-Operator bootstrap), and Phase 2.6.2 (External Secrets workload
-contract) are implemented** — a single, pinned `lab-lite`
+Operator bootstrap), Phase 2.6.2 (External Secrets workload
+contract), and Phase 2.6.3a (transactional GitOps lifecycle and safe
+revision rollback) are implemented** — a single, pinned `lab-lite`
 `kind` cluster running a pinned, digest-verified Argo CD control plane,
 reconciling this repository's own `gitops/` directory over a read-only
 SSH deploy key into a `staging` and a `production` namespace, each
@@ -124,9 +125,34 @@ make gitops-bootstrap        # fail-closed idempotent apply of the root Applicat
 make gitops-status           # read-only status report
 make gitops-test             # read-only runtime health checks
 make gitops-test-lifecycle   # mutating: proves bootstrap/no-op/self-heal/isolation/uninstall/no-op (REVISION=<pushed branch>)
-make gitops-uninstall        # delete the root Application (foreground cascade) and owned namespaces only
+make gitops-uninstall        # two-phase transactional uninstall (Phase 2.6.3a): read-only preflight classification first, zero mutation on any unclassifiable object; retains a namespace an active ESO scoped release still targets
 make gitops-repo-remove      # remove the repository Secret/deploy key (requires CONFIRM=REMOVE; never run by the lifecycle test)
 ```
+
+Phase 2.6.3a hardens three GitOps lifecycle operations discovered to be
+unsafe while testing Phase 2.6.2 against a cluster that also has ESO
+installed (see `.local/evidence/phase-2.6.3-gitops-lifecycle-hardening-plan.md`,
+local-only/gitignored like every other phase's planning document, for
+the full root-cause analysis):
+
+```bash
+make gitops-switch-revision              # safely switch the root Application's targetRevision in place (patch, never delete+recreate); preserves UID/finalizers; requires 3 consecutive stable reads; rolls back automatically on failure (REVISION=<value>)
+make gitops-test-revision-switch         # mutating: proves the above end-to-end (REVISION=<pushed branch>)
+make gitops-retire-appproject-kind       # drain SecretStore/ExternalSecret from one environment before narrowing the AppProject whitelist - pauses self-heal, deletes while still whitelisted, verifies target-Secret retention, never leaves self-heal silently disabled (ENV=staging|production ACTION=--drain)
+make gitops-resume-appproject-kind       # resume automated sync after the drain + the whitelist-narrowing Git change have both landed (ENV=staging|production)
+make gitops-test-appproject-kind-retirement  # mutating: proves the full 8-step drain/resume sequence end-to-end
+```
+
+`gitops-uninstall`'s previous single-phase version deleted the root
+Application first and only checked namespace contents afterward -
+once ESO's scoped-RBAC `Role`/`RoleBinding` objects exist inside
+`staging`/`production` (Phase 2.6.1), that check always refused to
+delete the namespace, but the workloads were already gone by then. The
+two-phase version classifies every namespaced object
+(`argocd-tracked`/`helm-eso-scoped`/`kubernetes-builtin`/`unknown`,
+verified via real tracking-id/Helm-ownership metadata, never a name
+guess) **before** touching the root Application, and aborts with zero
+mutation if anything is unclassifiable.
 
 The deploy key is repository-scoped and read-only — see
 [ADR-0007](docs/adr/0007-private-gitops-bootstrap.md) for the full
