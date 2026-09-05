@@ -277,7 +277,108 @@ if [ "$prod_value" != "$expected_production_message" ]; then
 fi
 echo "OK: step 15 - production configmap/$production_cm unaffected (data.ui-message='$prod_value')"
 
-echo "test-lifecycle(gitops): step 16-19 - delete root bootstrap (foreground cascade), preserving Argo CD/CRDs/repo Secret/deploy key"
+echo "test-lifecycle(gitops): step 15b (Phase 2.6.3a) - preflight fail-closed on an unclassifiable object, zero mutation"
+fixture_name="phase263a-preflight-fixture-$$"
+cleanup_fixture() { pkubectl delete configmap "$fixture_name" -n staging --ignore-not-found >/dev/null 2>&1 || true; }
+trap cleanup_fixture EXIT INT TERM
+pkubectl create configmap "$fixture_name" -n staging --from-literal=marker=unknown >/dev/null
+pre_fixture_uid="$(gitops_app_uid "$GITOPS_ROOT_APP_NAME")"
+pre_fixture_generation="$(gitops_app_generation "$GITOPS_ROOT_APP_NAME")"
+preflight_out="$(mktemp)"
+if sh lab/gitops/uninstall.sh >"$preflight_out" 2>&1; then
+  echo "FAIL: gitops-uninstall should have aborted with the unclassifiable fixture present" >&2
+  cat "$preflight_out" >&2
+  rm -f "$preflight_out"
+  exit 1
+fi
+if ! grep -q "$fixture_name" "$preflight_out"; then
+  echo "FAIL: preflight abort output did not name the unclassifiable fixture" >&2
+  cat "$preflight_out" >&2
+  rm -f "$preflight_out"
+  exit 1
+fi
+rm -f "$preflight_out"
+echo "OK: gitops-uninstall correctly aborted (nonzero exit) with the unclassifiable fixture named in its output"
+post_fixture_uid="$(gitops_app_uid "$GITOPS_ROOT_APP_NAME")"
+post_fixture_generation="$(gitops_app_generation "$GITOPS_ROOT_APP_NAME")"
+if [ "$post_fixture_uid" != "$pre_fixture_uid" ] || [ "$post_fixture_generation" != "$pre_fixture_generation" ]; then
+  echo "FAIL: root Application UID/generation changed despite the preflight abort (uid: $pre_fixture_uid -> $post_fixture_uid; generation: $pre_fixture_generation -> $post_fixture_generation)" >&2
+  exit 1
+fi
+echo "OK: root Application UID/generation unchanged - zero mutation before the abort"
+dep_avail="$(pkubectl -n staging get deployment platform-smoke-staging-standard-workload -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
+if [ -z "$dep_avail" ] || [ "$dep_avail" -lt 1 ]; then
+  echo "FAIL: staging workload was affected by the aborted preflight (availableReplicas='${dep_avail:-<absent>}')" >&2
+  exit 1
+fi
+echo "OK: staging workload untouched (availableReplicas=$dep_avail) - the aborted preflight performed zero deletion"
+cleanup_fixture
+trap - EXIT INT TERM
+echo "OK: step 15b - unclassifiable-fixture fixture cleaned up via trap"
+
+echo "test-lifecycle(gitops): step 15c (Phase 2.6.3a) - ESO ownership: scoped RBAC inside staging/production must retain the namespace, never block or lose it"
+sh lab/eso/install.sh >/dev/null
+sh tests/eso/test-runtime-health.sh >/dev/null
+for ns in staging production; do
+  role="eso-${ns}-external-secrets-controller"
+  if ! pkubectl get role "$role" -n "$ns" >/dev/null 2>&1; then
+    echo "FAIL: expected ESO scoped Role '$role' in namespace '$ns' not found after 'make eso-install'" >&2
+    exit 1
+  fi
+  managed_by="$(pkubectl get role "$role" -n "$ns" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null)"
+  release_name="$(pkubectl get role "$role" -n "$ns" -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null)"
+  if [ "$managed_by" != "Helm" ] || [ "$release_name" != "eso-${ns}" ]; then
+    echo "FAIL: ESO scoped Role '$role' in '$ns' does not carry the expected Helm ownership metadata (managed-by='$managed_by' release-name='$release_name')" >&2
+    exit 1
+  fi
+  echo "OK: ESO scoped Role '$role' verified in '$ns' via exact Helm ownership metadata (managed-by=Helm, release-name=eso-${ns})"
+done
+
+sh lab/gitops/uninstall.sh
+for app in $GITOPS_GENERATED_APPS; do
+  if gitops_generated_app_exists "$app"; then
+    echo "FAIL: generated Application '$app' still present after uninstall (should have cascaded even with ESO present)" >&2
+    exit 1
+  fi
+done
+for ns in staging production; do
+  if ! pkubectl get namespace "$ns" >/dev/null 2>&1; then
+    echo "FAIL: namespace '$ns' was deleted while an active ESO scoped release still targeted it - must be retained" >&2
+    exit 1
+  fi
+  role="eso-${ns}-external-secrets-controller"
+  if ! pkubectl get role "$role" -n "$ns" >/dev/null 2>&1; then
+    echo "FAIL: ESO scoped Role '$role' in '$ns' was deleted by gitops-uninstall - it must never touch Helm/ESO-owned RBAC" >&2
+    exit 1
+  fi
+  echo "OK: namespace '$ns' retained, ESO scoped Role '$role' untouched, after gitops-uninstall with ESO active"
+done
+if ! argocd_release_exists; then
+  echo "FAIL: Argo CD itself was affected by gitops-uninstall (ESO-present case)" >&2
+  exit 1
+fi
+echo "OK: step 15c - gitops-uninstall correctly retained staging/production and their ESO-owned RBAC while ESO was active; generated Applications still cascaded away; Argo CD untouched"
+
+echo "test-lifecycle(gitops): step 15d (Phase 2.6.3a) - now uninstall ESO too, then re-run gitops-uninstall to reach true absence"
+sh lab/eso/uninstall.sh
+for ns in staging production; do
+  role="eso-${ns}-external-secrets-controller"
+  if pkubectl get role "$role" -n "$ns" >/dev/null 2>&1; then
+    echo "FAIL: ESO scoped Role '$role' in '$ns' still present after 'make eso-uninstall'" >&2
+    exit 1
+  fi
+done
+echo "OK: ESO scoped RBAC gone from staging/production after eso-uninstall"
+sh lab/gitops/uninstall.sh
+for ns in staging production; do
+  if pkubectl get namespace "$ns" >/dev/null 2>&1; then
+    echo "FAIL: namespace '$ns' still present after the second gitops-uninstall (ESO is now gone - it should delete cleanly)" >&2
+    exit 1
+  fi
+done
+echo "OK: step 15d - staging/production fully deleted now that ESO no longer depends on them"
+
+echo "test-lifecycle(gitops): step 16-19 - uninstall again (true no-op), preserving Argo CD/CRDs/repo Secret/deploy key"
 sh lab/gitops/uninstall.sh
 
 echo "test-lifecycle(gitops): step 17 - verify generated Applications and managed resources disappeared"
