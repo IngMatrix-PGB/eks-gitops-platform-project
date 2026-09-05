@@ -4,25 +4,39 @@
 # environment - this script, not Git, not any chart template, is the
 # only place secret material ever passes through in this phase.
 #
+# Phase 2.6.3b semantics (see
+# .local/evidence/phase-2.6.3-gitops-lifecycle-hardening-plan.md, Gap
+# 4): the DEFAULT (no-flag) invocation is ensure/create-if-absent -
+# if the Secret already exists, this is a TRUE no-op: it is never
+# read, never re-applied, and the value is never prompted for or
+# consumed from stdin. A second identical invocation preserves the
+# Secret's UID, resourceVersion, content hash, and every RBAC/
+# namespace object untouched. Rotating an EXISTING value requires the
+# explicit --rotate flag.
+#
 # The value is read ONLY from stdin (piped, or interactively with echo
 # disabled) - never a CLI argument, never an environment variable set
 # on the command line, never a literal in this script's own source.
 # This script never echoes, cats, or otherwise prints the value; its
-# own stdout is limited to resource names, namespaces, byte length, and
-# a SHA256 of the value (for later drift comparison) - never the value
-# itself. No `set -x` anywhere in this file.
+# own stdout is limited to resource names, namespaces, byte length,
+# UID/resourceVersion, and a SHA256 of the value (for later drift
+# comparison) - never the value itself. No `set -x` anywhere in this
+# file; tracing is also explicitly disabled right before any sensitive
+# material is read, in case the caller's shell inherited it enabled.
 #
 # Usage:
-#   printf '%s' "$VALUE" | sh lab/eso/provision-source-secret.sh staging
-#   sh lab/eso/provision-source-secret.sh staging          # interactive prompt, echo disabled
-#   sh lab/eso/provision-source-secret.sh staging --delete # idempotent teardown
+#   sh lab/eso/provision-source-secret.sh staging               # ensure: create if absent, true no-op if present (never reads stdin/prompt when present)
+#   printf '%s' "$VALUE" | sh lab/eso/provision-source-secret.sh staging --rotate   # rotate an EXISTING Secret's value only
+#   sh lab/eso/provision-source-secret.sh staging --delete       # idempotent teardown (unchanged, unrelated to ensure/rotate)
 #
 # Also idempotently creates the source namespace and the narrow
 # Role/RoleBinding granting exactly the environment's dedicated auth
 # ServiceAccount (staging-secretstore-reader / production-
 # secretstore-reader - rendered by charts/standard-workload, not this
 # script) get/list/watch on exactly the one named source Secret - never
-# a wildcard resourceName, never cluster-scoped.
+# a wildcard resourceName, never cluster-scoped. Only done on the
+# create path (Secret absent) - never touched on the ensure no-op path
+# or the --rotate path, which only ever update the Secret itself.
 set -eu
 
 if [ ! -f "scripts/lab/_lib.sh" ]; then
@@ -39,6 +53,8 @@ OWNER_LABEL_VALUE="eso-source-bootstrap"
 env_name="${1:-}"
 action="${2:-}"
 
+# Closed allowlist - reject any other value BEFORE any mutation, and
+# before reading anything from stdin.
 case "$env_name" in
   staging)
     source_ns="eso-source-staging"
@@ -53,7 +69,15 @@ case "$env_name" in
     auth_sa="production-secretstore-reader"
     ;;
   *)
-    echo "FAIL: usage: sh lab/eso/provision-source-secret.sh <staging|production> [--delete]" >&2
+    echo "FAIL: usage: sh lab/eso/provision-source-secret.sh <staging|production> [--rotate|--delete]" >&2
+    exit 1
+    ;;
+esac
+
+case "$action" in
+  ""|--rotate|--delete) : ;;
+  *)
+    echo "FAIL: unrecognized second argument '$action' - only '--rotate' or '--delete' is supported" >&2
     exit 1
     ;;
 esac
@@ -66,7 +90,8 @@ fi
 escaped_owner_key="$(printf '%s' "$OWNER_LABEL_KEY" | sed 's/\./\\./g')"
 
 # --- teardown: idempotent, ownership-checked, no secret material
-# involved at all. ---
+# involved at all. Unchanged from before - never a side effect of
+# ensure or --rotate. ---
 if [ "$action" = "--delete" ]; then
   if pkubectl get namespace "$source_ns" >/dev/null 2>&1; then
     owner_label="$(pkubectl get namespace "$source_ns" -o jsonpath="{.metadata.labels['${escaped_owner_key}']}" 2>/dev/null || true)"
@@ -82,18 +107,51 @@ if [ "$action" = "--delete" ]; then
   exit 0
 fi
 
-if [ -n "$action" ]; then
-  echo "FAIL: unrecognized second argument '$action' - only '--delete' is supported" >&2
+secret_exists=0
+if pkubectl get secret "$source_secret" -n "$source_ns" >/dev/null 2>&1; then
+  secret_exists=1
+fi
+
+# --- ensure (no flag), Secret already present: TRUE no-op. Never
+# reads stdin/prompt, never re-applies anything, never touches
+# namespace/RBAC - the exact state (UID, resourceVersion, content
+# hash, and every other object) is left byte-for-byte as it was. ---
+if [ "$action" = "" ] && [ "$secret_exists" -eq 1 ]; then
+  existing_uid="$(pkubectl get secret "$source_secret" -n "$source_ns" -o jsonpath='{.metadata.uid}')"
+  existing_rv="$(pkubectl get secret "$source_secret" -n "$source_ns" -o jsonpath='{.metadata.resourceVersion}')"
+  existing_sha256="$(pkubectl get secret "$source_secret" -n "$source_ns" -o jsonpath='{.data.message}' | base64 -d | shasum -a 256 | awk '{print $1}')"
+  echo "OK: Secret '$source_secret' already exists in '$source_ns' - true no-op (uid=${existing_uid} resourceVersion=${existing_rv} sha256=${existing_sha256}) - value never printed, never read, never re-applied"
+  exit 0
+fi
+
+if [ "$action" = "--rotate" ] && [ "$secret_exists" -eq 0 ]; then
+  echo "FAIL: --rotate requires the Secret '$source_secret' to already exist in '$source_ns' - omit the flag to create it first" >&2
   exit 1
 fi
 
+# --- capture pre-mutation state (for --rotate's before/after evidence;
+# harmless no-op reads for the plain create path where nothing exists
+# yet). ---
+pre_uid=""
+pre_rv=""
+pre_sha256=""
+if [ "$secret_exists" -eq 1 ]; then
+  pre_uid="$(pkubectl get secret "$source_secret" -n "$source_ns" -o jsonpath='{.metadata.uid}')"
+  pre_rv="$(pkubectl get secret "$source_secret" -n "$source_ns" -o jsonpath='{.metadata.resourceVersion}')"
+  pre_sha256="$(pkubectl get secret "$source_secret" -n "$source_ns" -o jsonpath='{.data.message}' | base64 -d | shasum -a 256 | awk '{print $1}')"
+fi
+
 # --- read the value: piped stdin if available, otherwise an
-# interactive, echo-disabled prompt. Never a CLI argument. ---
+# interactive, echo-disabled prompt. Never a CLI argument, never
+# --from-literal. Tracing explicitly disabled right before any
+# sensitive material is read or written, regardless of whether it was
+# already off (defense in depth against an inherited `set -x`). ---
+set +x 2>/dev/null || true
 umask 077
-mkdir -p .local
-tmpfile="$(mktemp .local/tmp.XXXXXX)"
+tmpdir="$(mktemp -d .local/tmp.XXXXXX)"
+tmpfile="${tmpdir}/message"
 cleanup() {
-  rm -f "$tmpfile"
+  rm -rf "$tmpdir"
 }
 trap cleanup EXIT INT TERM
 
@@ -117,7 +175,31 @@ fi
 value_sha256="$(shasum -a 256 "$tmpfile" | awk '{print $1}')"
 value_bytes="$(wc -c < "$tmpfile" | tr -d ' ')"
 
-# --- source namespace (idempotent, owner-labeled) ---
+if [ "$action" = "--rotate" ]; then
+  # --- rotate: update only. Never touches the namespace or RBAC -
+  # both already exist (the Secret existing implies they do too, since
+  # the create path always provisions them together). ---
+  pkubectl create secret generic "$source_secret" \
+    --namespace "$source_ns" \
+    --from-file="message=${tmpfile}" \
+    --dry-run=client -o yaml \
+    | pkubectl apply -f - >/dev/null
+  post_uid="$(pkubectl get secret "$source_secret" -n "$source_ns" -o jsonpath='{.metadata.uid}')"
+  post_rv="$(pkubectl get secret "$source_secret" -n "$source_ns" -o jsonpath='{.metadata.resourceVersion}')"
+  if [ "$post_uid" != "$pre_uid" ]; then
+    echo "FAIL: Secret UID changed during rotate ($pre_uid -> $post_uid) - this must be an update, never a delete+recreate" >&2
+    exit 1
+  fi
+  if [ "$value_sha256" = "$pre_sha256" ]; then
+    echo "OK: rotate applied the same value to '$source_secret' in '$source_ns' - hash unchanged (sha256 ${value_sha256}), uid unchanged (${post_uid}), resourceVersion ${pre_rv} -> ${post_rv}, ${value_bytes} bytes - value never printed"
+  else
+    echo "OK: rotated '$source_secret' in '$source_ns' - sha256 ${pre_sha256} -> ${value_sha256}, uid unchanged (${post_uid}), resourceVersion ${pre_rv} -> ${post_rv}, ${value_bytes} bytes - value never printed"
+  fi
+  exit 0
+fi
+
+# --- create (ensure, Secret absent): namespace + Secret + RBAC,
+# exactly as before. ---
 if ! pkubectl get namespace "$source_ns" >/dev/null 2>&1; then
   pkubectl create namespace "$source_ns"
   pkubectl label namespace "$source_ns" "${OWNER_LABEL_KEY}=${OWNER_LABEL_VALUE}" --overwrite
@@ -126,20 +208,14 @@ else
   echo "OK: namespace '$source_ns' already exists"
 fi
 
-# --- source Secret: create-or-update, never printing the decoded
-# value, never passing it as a CLI argument (kubectl reads the file
-# directly via --from-file). ---
 pkubectl create secret generic "$source_secret" \
   --namespace "$source_ns" \
   --from-file="message=${tmpfile}" \
   --dry-run=client -o yaml \
   | pkubectl apply -f - >/dev/null
-echo "OK: Secret '$source_secret' provisioned in namespace '$source_ns' (sha256 ${value_sha256}, ${value_bytes} bytes) - value never printed"
+created_uid="$(pkubectl get secret "$source_secret" -n "$source_ns" -o jsonpath='{.metadata.uid}')"
+echo "OK: Secret '$source_secret' created in namespace '$source_ns' (uid=${created_uid} sha256=${value_sha256} ${value_bytes} bytes) - value never printed"
 
-# --- narrow Role/RoleBinding: exactly get/list/watch on exactly this
-# one named Secret, for exactly the dedicated auth ServiceAccount in
-# the target (workload) namespace - never a wildcard resourceName,
-# never cluster-scoped. ---
 role_name="${source_secret}-reader"
 cat <<EOF | pkubectl apply -f - >/dev/null
 apiVersion: rbac.authorization.k8s.io/v1

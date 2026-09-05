@@ -11,7 +11,7 @@
 	gitops-test-revision-switch gitops-test-appproject-kind-retirement \
 	eso-chart-fetch eso-render check-eso-chart eso-install eso-status eso-uninstall \
 	eso-test-runtime-health eso-test-lifecycle \
-	eso-provision-source-secret eso-test-secret-lifecycle
+	eso-provision-source-secret eso-test-secret-lifecycle eso-test-provision-source-secret-idempotency
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
@@ -197,3 +197,6 @@ eso-provision-source-secret: ## Phase 2.6.2: create/rotate (default) or delete (
 
 eso-test-secret-lifecycle: ## Phase 2.6.2: mutating end-to-end proof of the SecretStore/ExternalSecret contract (provision/reconcile/mount/rotate/propagate/delete-recreate/no-op/uninstall/restore); prints only hashes and states, never secret values; reconciles from the current pushed branch, restores to main
 	@sh tests/eso/test-secret-lifecycle.sh
+
+eso-test-provision-source-secret-idempotency: ## Phase 2.6.3b: mutating proof of provision-source-secret.sh's ensure/--rotate/--delete semantics and the global kubeconfig fingerprint helper's isolation (restores the pre-test value/state on exit)
+	@sh tests/eso/test-provision-source-secret-idempotency.sh

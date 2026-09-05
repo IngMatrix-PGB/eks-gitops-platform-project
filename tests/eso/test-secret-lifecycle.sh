@@ -32,14 +32,19 @@ require_eso_chart
 fail=0
 current_branch="$(git rev-parse --abbrev-ref HEAD)"
 
-# --- 1. baseline (hash/context only, never content) ---
-global_kubeconfig="$HOME/.kube/config"
-if [ -f "$global_kubeconfig" ]; then
-  global_sha_before="$(shasum -a 256 "$global_kubeconfig" | awk '{print $1}')"
-else
-  global_sha_before="<absent>"
+# --- 1. baseline (hash/context only, never content). Phase 2.6.3b:
+# uses global_kubeconfig_fingerprint (scripts/lab/_lib.sh), immune to
+# any KUBECONFIG this shell may have inherited, instead of the
+# previous ad-hoc inline check - which was found live to give
+# inconsistent readings across separate invocations specifically
+# because it trusted an inherited KUBECONFIG rather than always
+# passing the global path explicitly. ---
+if ! assert_kubeconfig_paths_distinct; then
+  exit 1
 fi
-global_ctx_before="$(command -v kubectl >/dev/null 2>&1 && kubectl config current-context 2>/dev/null || echo "<no-global-kubectl>")"
+read -r global_sha_before global_ctx_before <<EOF
+$(global_kubeconfig_fingerprint)
+EOF
 kind_clusters_before="$(.tools/bin/kind get clusters 2>/dev/null)"
 echo "OK: captured baseline (kubeconfig sha256 ${global_sha_before}, context ${global_ctx_before}, kind clusters: ${kind_clusters_before})"
 
@@ -72,12 +77,21 @@ fi
 
 # --- 5. independent, synthetic, lab-only source secrets for both
 # environments - random, never printed, generated locally, exclusive to
-# this lab. Never the same value. ---
+# this lab. Never the same value. This test is itself re-runnable, and
+# Phase 2.6.3b's default (no-flag) path is now a true no-op when the
+# Secret already exists (by design) - so a re-run must use --rotate to
+# actually force in a fresh, this-run-only value; --rotate requires
+# the Secret to pre-exist, so the first-ever run (absent) still uses
+# the plain create path. ---
 echo "test-secret-lifecycle: provisioning independent source secrets ..."
 staging_source_value="lab-$(date +%s)-$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-16)-staging"
 production_source_value="lab-$(date +%s)-$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-16)-production"
-printf '%s' "$staging_source_value" | sh lab/eso/provision-source-secret.sh staging
-printf '%s' "$production_source_value" | sh lab/eso/provision-source-secret.sh production
+staging_provision_flag=""
+pkubectl get secret local-backend-staging -n eso-source-staging >/dev/null 2>&1 && staging_provision_flag="--rotate"
+production_provision_flag=""
+pkubectl get secret local-backend-production -n eso-source-production >/dev/null 2>&1 && production_provision_flag="--rotate"
+printf '%s' "$staging_source_value" | sh lab/eso/provision-source-secret.sh staging $staging_provision_flag
+printf '%s' "$production_source_value" | sh lab/eso/provision-source-secret.sh production $production_provision_flag
 staging_source_sha="$(printf '%s' "$staging_source_value" | shasum -a 256 | awk '{print $1}')"
 production_source_sha="$(printf '%s' "$production_source_value" | shasum -a 256 | awk '{print $1}')"
 if [ "$staging_source_sha" = "$production_source_sha" ]; then
@@ -314,10 +328,12 @@ fi
 production_target_rv_before="$(pkubectl get secret "$production_target" -n production -o jsonpath='{.metadata.resourceVersion}')"
 production_pod_uid_before="$(pkubectl get pod "$production_pod_1" -n production -o jsonpath='{.metadata.uid}')"
 
-# --- 13. rotate staging's source secret only ---
+# --- 13. rotate staging's source secret only. Phase 2.6.3b: the
+# script's default (no-flag) path is now a true no-op on an existing
+# Secret - --rotate is required to actually change its value. ---
 echo "test-secret-lifecycle: rotating staging's source secret ..."
 staging_source_value_2="lab-$(date +%s)-$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-16)-rotated"
-printf '%s' "$staging_source_value_2" | sh lab/eso/provision-source-secret.sh staging
+printf '%s' "$staging_source_value_2" | sh lab/eso/provision-source-secret.sh staging --rotate
 staging_source_sha_2="$(printf '%s' "$staging_source_value_2" | shasum -a 256 | awk '{print $1}')"
 if [ "$staging_source_sha_2" = "$staging_source_sha" ]; then
   echo "FAIL: rotated staging value hashes to the same value as before - test fixture is broken" >&2
@@ -529,47 +545,36 @@ for app in platform-bootstrap $GITOPS_GENERATED_APPS; do
   wait_for_no_out_of_sync_resources "$app" 180 || fail=1
 done
 
-# Empirically discovered on this exact cluster: once the AppProject
-# (now back at main's definition) drops SecretStore/ExternalSecret from
-# its namespaceResourceWhitelist, Argo CD's sync/prune can no longer
-# see or manage existing live objects of those kinds at all - they are
-# outside what the Application is permitted to reconcile, so "Synced"
-# is reported without them ever being pruned. Reverting a kind out of
-# the whitelist does not retroactively clean up what it already
-# created; that cleanup has to be explicit. Deleted here (never
-# recreated by anything on main) - the target Secrets go with them,
-# since nothing on main references them and retaining orphaned Secrets
-# would not be a faithful restore of the pre-test baseline.
-#
-# Also observed empirically: deleting a resource that still carries the
-# argocd.argoproj.io/tracking-id annotation can make self-heal briefly
-# react as if a tracked resource "disappeared" and try to recreate it
-# from a stale, branch-sourced manifest snapshot - always failing
-# (correctly - the whitelist blocks it) and retrying with backoff for a
-# few minutes before Argo CD's own retry budget exhausts and it settles
-# permanently. Stripping the tracking annotation first, before
-# deleting, avoids ever entering that transient retry storm. ---
-for res in "secretstore staging-kubernetes-backend staging" "secretstore production-kubernetes-backend production" \
-  "externalsecret $staging_target staging" "externalsecret $production_target production" \
-  "secret $staging_target staging" "secret $production_target production"; do
-  set -- $res
-  pkubectl annotate "$1" "$2" -n "$3" argocd.argoproj.io/tracking-id- >/dev/null 2>&1 || true
-  pkubectl delete "$1" "$2" -n "$3" --ignore-not-found >/dev/null 2>&1 || true
-done
-
-# Stabilization gate: require the absence of those objects AND a fully
-# Synced/Healthy, zero-OutOfSync state on both generated Applications
-# to hold for 3 consecutive checks (45s), not just once - this is what
-# actually distinguishes "converged" from "transiently clean, about to
-# oscillate again," which a single read cannot tell apart.
+# Phase 2.6.3b fix: this block used to delete SecretStore/
+# ExternalSecret/the target Secret and wait for their ABSENCE, on the
+# assumption that "main" did not yet have the feature (Phase 2.6.2 was
+# still unmerged at the time this was first written). main has since
+# merged Phase 2.6.2 - its own AppProject still whitelists
+# SecretStore/ExternalSecret, and both environments' values files still
+# set externalSecret.enabled: true, so main WANTS these objects to
+# exist and be Ready. The old delete-and-wait-for-absence logic was
+# racing against self-heal recreating exactly what it had just deleted
+# (main renders them), which could never converge - reproduced live,
+# consistently, at this exact step. The correct restore-to-main
+# condition is the opposite: SecretStore/ExternalSecret present and
+# Ready, and the target Secret present - stable across 3 consecutive
+# checks (45s), not just once, to distinguish "converged" from
+# "transiently clean, about to change again," which a single read
+# cannot tell apart. ---
 stable_checks=0
 elapsed=0
 while [ "$elapsed" -lt 420 ] && [ "$stable_checks" -lt 3 ]; do
   clean=1
-  pkubectl get secretstore staging-kubernetes-backend -n staging >/dev/null 2>&1 && clean=0
-  pkubectl get secretstore production-kubernetes-backend -n production >/dev/null 2>&1 && clean=0
-  pkubectl get externalsecret "$staging_target" -n staging >/dev/null 2>&1 && clean=0
-  pkubectl get externalsecret "$production_target" -n production >/dev/null 2>&1 && clean=0
+  ss_staging="$(pkubectl get secretstore staging-kubernetes-backend -n staging -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$ss_staging" = "True" ] || clean=0
+  ss_production="$(pkubectl get secretstore production-kubernetes-backend -n production -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$ss_production" = "True" ] || clean=0
+  es_staging="$(pkubectl get externalsecret "$staging_target" -n staging -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$es_staging" = "True" ] || clean=0
+  es_production="$(pkubectl get externalsecret "$production_target" -n production -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$es_production" = "True" ] || clean=0
+  pkubectl get secret "$staging_target" -n staging >/dev/null 2>&1 || clean=0
+  pkubectl get secret "$production_target" -n production >/dev/null 2>&1 || clean=0
   for app in $GITOPS_GENERATED_APPS; do
     status="$(pkubectl get application "$app" -n argocd -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null)"
     [ "$status" = "Synced/Healthy" ] || clean=0
@@ -583,9 +588,9 @@ while [ "$elapsed" -lt 420 ] && [ "$stable_checks" -lt 3 ]; do
   elapsed=$((elapsed + 15))
 done
 if [ "$stable_checks" -ge 3 ]; then
-  echo "OK: no SecretStore/ExternalSecret remains after restoring to main, stable across 3 consecutive checks (not yet merged, so main correctly does not render them; explicitly cleaned up since a kind dropped from the AppProject whitelist is no longer prunable by Argo CD itself)"
+  echo "OK: SecretStore/ExternalSecret/target Secret present and Ready after restoring to main (main has Phase 2.6.2 merged and renders them), stable across 3 consecutive checks"
 else
-  echo "FAIL: cluster state did not stabilize (no SecretStore/ExternalSecret, both Applications Synced/Healthy) within 420s after restoring to main" >&2
+  echo "FAIL: cluster state did not stabilize (SecretStore/ExternalSecret Ready, target Secrets present, both Applications Synced/Healthy) within 420s after restoring to main" >&2
   fail=1
 fi
 pkubectl rollout status deployment/platform-smoke-staging-standard-workload -n staging --timeout=120s >/dev/null
@@ -595,13 +600,12 @@ echo "OK: staging and production workload Deployments are Available again on mai
 # --- final health check (Phase 2.6.1 ESO bootstrap baseline) ---
 sh tests/eso/test-runtime-health.sh || fail=1
 
-# --- 21: global kubeconfig/context/cluster-list isolation re-check ---
-if [ -f "$global_kubeconfig" ]; then
-  global_sha_after="$(shasum -a 256 "$global_kubeconfig" | awk '{print $1}')"
-else
-  global_sha_after="<absent>"
-fi
-global_ctx_after="$(command -v kubectl >/dev/null 2>&1 && kubectl config current-context 2>/dev/null || echo "<no-global-kubectl>")"
+# --- 21: global kubeconfig/context/cluster-list isolation re-check
+# (same explicit-path helper as the baseline capture - never the
+# ambient KUBECONFIG). ---
+read -r global_sha_after global_ctx_after <<EOF
+$(global_kubeconfig_fingerprint)
+EOF
 kind_clusters_after="$(.tools/bin/kind get clusters 2>/dev/null)"
 if [ "$global_sha_before" = "$global_sha_after" ] && [ "$global_ctx_before" = "$global_ctx_after" ] && [ "$kind_clusters_before" = "$kind_clusters_after" ]; then
   echo "OK: global kubeconfig hash, current-context, and kind cluster list are unchanged throughout"
