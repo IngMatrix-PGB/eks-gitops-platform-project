@@ -48,6 +48,23 @@ jobs:
       - name: make validate
         run: make validate
 
+      - name: make terraform-validate-offline
+        # Phase 2.7.1: Terraform toolchain, fully offline. terraform
+        # itself was already downloaded and checksum-verified by the
+        # "make tools-install" step above (the same pinned
+        # scripts/lab/tool-versions.txt pipeline as kind/kubectl/helm -
+        # no hashicorp/setup-terraform, no new Action, no change to
+        # this repository's selected-actions allow-list). This step
+        # runs terraform fmt -check, terraform init -backend=false,
+        # terraform validate, and terraform test (mock_provider "aws" -
+        # see terraform/tests/toolchain.tftest.hcl). No AWS account,
+        # credential, profile, or region is configured anywhere in this
+        # job, and none of the four commands above ever contact AWS -
+        # init/validate/test only ever reach the public Terraform
+        # Registry to fetch the pinned provider plugin. No
+        # terraform plan/apply against real AWS occurs in this phase.
+        run: make terraform-validate-offline
+
       - name: Determine diff range
         id: diffrange
         run: |

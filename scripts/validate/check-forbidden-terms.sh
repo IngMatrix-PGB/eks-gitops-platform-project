@@ -46,6 +46,24 @@ aws_account_pattern='[0-9]{12}'      # AWS-account-ID-shaped number
 # any file other than this exact path.
 tool_versions_row_pattern='^([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([0-9A-Fa-f]{64})\|([0-9A-Fa-f]{64})\|([^|]*)$'
 
+# Narrow, single-purpose exception: terraform/.terraform.lock.hcl (Phase
+# 2.7.1) is generated exclusively by `terraform init`/`terraform
+# providers lock` - never hand-written, see docs/adr/0011-terraform-
+# foundation.md - and records real, externally-fixed provider
+# checksums in exactly two fixed line shapes: `"h1:<standard base64
+# SHA256 digest>="` and `"zh:<64-hex-char SHA256 digest>"`. Either can
+# coincidentally contain a run of 12+ consecutive digits (true of at
+# least one zh: hash in this project's own generated lock file) with no
+# way to change even one character without invalidating the checksum it
+# exists to verify - the same root cause already solved once for
+# scripts/lab/tool-versions.txt above, applied to this file's own fixed
+# format. A line matching either exact shape is skipped entirely (its
+# whole content IS the hash); any other line in the file (provider
+# name, version, constraints, the `hashes = [`/`]` bracket lines) is
+# scanned normally, never blindly excluded.
+terraform_lock_h1_line_pattern='^[[:space:]]*"h1:[A-Za-z0-9+/]{43}=",?[[:space:]]*$'
+terraform_lock_zh_line_pattern='^[[:space:]]*"zh:[0-9A-Fa-f]{64}",?[[:space:]]*$'
+
 aws_account_hit_in_file() {
   local file="$1"
   if [ "$file" = "scripts/lab/tool-versions.txt" ]; then
@@ -57,6 +75,18 @@ aws_account_hit_in_file() {
         masked="$line"
       fi
       if [[ "$masked" =~ $aws_account_pattern ]]; then
+        return 0
+      fi
+    done < "$file"
+    return 1
+  fi
+  if [ "$file" = "terraform/.terraform.lock.hcl" ]; then
+    local line
+    while IFS= read -r line || [ -n "$line" ]; do
+      if [[ "$line" =~ $terraform_lock_h1_line_pattern ]] || [[ "$line" =~ $terraform_lock_zh_line_pattern ]]; then
+        continue
+      fi
+      if [[ "$line" =~ $aws_account_pattern ]]; then
         return 0
       fi
     done < "$file"
