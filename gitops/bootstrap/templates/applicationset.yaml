@@ -23,6 +23,22 @@ metadata:
 spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=error"]
+  # Phase 2.6.3a: lets lab/gitops/retire-appproject-kind.sh safely pause
+  # automated sync (a live patch to spec.syncPolicy.automated on one
+  # generated Application) without this ApplicationSet's own reconcile
+  # loop reverting it moments later - confirmed empirically it
+  # otherwise does, roughly every 30-45s ("updated Application" in the
+  # argocd-applicationset-controller's own logs, followed by "Enabled
+  # automated sync" in the application-controller's). Never changes
+  # the rendered DEFAULT below (still selfHeal:true, prune:true for a
+  # normal apply) - only tells this ApplicationSet to stop re-asserting
+  # that one field once an operational script has intentionally
+  # changed it live. See
+  # .local/evidence/phase-2.6.3-gitops-lifecycle-hardening-plan.md,
+  # Gap 3.
+  ignoreApplicationDifferences:
+    - jsonPointers:
+        - /spec/syncPolicy/automated
   generators:
     - list:
         elements:

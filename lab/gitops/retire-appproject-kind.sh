@@ -138,6 +138,28 @@ if ! gitops_automated_sync_paused "$app"; then
 fi
 echo "OK: automated sync paused on $app"
 
+# Pausing the spec field does not retroactively cancel a reconcile the
+# controller already had in flight (confirmed empirically: the
+# SecretStore/ExternalSecret were recreated moments after being
+# deleted, even with automated already paused, because an
+# already-running self-heal operation - queued a moment before the
+# pause patch took effect - completed anyway). Clear any such
+# in-flight operation explicitly, then require 2 consecutive quiet
+# reads (no Running operation) before deleting anything, closing the
+# race rather than assuming the pause alone is instantaneous.
+gitops_clear_stale_operation "$app" >/dev/null 2>&1 || true
+retire_quiescent_predicate() {
+  rqp_op="$(pkubectl get application "$app" -n "$ARGOCD_NAMESPACE" -o jsonpath='{.status.operationState.phase}' 2>/dev/null)"
+  [ "$rqp_op" = "Running" ] && return 1
+  gitops_automated_sync_paused "$app" || return 1
+  return 0
+}
+if ! gitops_wait_stable retire_quiescent_predicate 2 5 60; then
+  echo "FAIL: $app did not settle to quiescent (paused, no Running operation) within 60s after pausing self-heal" >&2
+  exit 2
+fi
+echo "OK: $app confirmed quiescent (paused, no in-flight operation) before deleting anything"
+
 deletion_policy="$(pkubectl get externalsecret "$externalsecret_name" -n "$env_name" -o jsonpath='{.spec.target.deletionPolicy}' 2>/dev/null || true)"
 echo "OK: captured ExternalSecret '$externalsecret_name' deletionPolicy='${deletion_policy:-<absent>}' before deletion"
 
