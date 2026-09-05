@@ -36,8 +36,9 @@ the [Technical Architecture Document](docs/architecture/technical-architecture.m
 GitOps bootstrap), Phase 2.4 (standard workload contract), Phase 2.5
 (repository governance baseline), Phase 2.6.1 (External Secrets
 Operator bootstrap), Phase 2.6.2 (External Secrets workload
-contract), and Phase 2.6.3a (transactional GitOps lifecycle and safe
-revision rollback) are implemented** — a single, pinned `lab-lite`
+contract), Phase 2.6.3a (transactional GitOps lifecycle and safe
+revision rollback), and Phase 2.6.3b (source-secret idempotency and
+kubeconfig evidence hardening) are implemented** — a single, pinned `lab-lite`
 `kind` cluster running a pinned, digest-verified Argo CD control plane,
 reconciling this repository's own `gitops/` directory over a read-only
 SSH deploy key into a `staging` and a `production` namespace, each
@@ -261,11 +262,20 @@ source namespaces/Secrets, distinct auth `ServiceAccount`s, and neither
 only the two new namespaced kinds (`SecretStore`, `ExternalSecret`) —
 never `Secret`; Argo CD never manages a Secret in this design.
 
+Phase 2.6.3b makes the script's default invocation genuinely
+idempotent (`ensure`): if the source Secret already exists, it is a
+true no-op — never read, never re-applied, and the piped/prompted
+value is never even consumed — preserving the Secret's UID,
+resourceVersion, content hash, and its Role/RoleBinding untouched.
+Rotating an existing value requires the explicit `--rotate` flag.
+
 ```bash
-make eso-provision-source-secret ENV=staging     # create/rotate the staging source Secret (value from stdin/prompt, never argv)
-make eso-provision-source-secret ENV=production  # same, production
-make eso-provision-source-secret ENV=staging ACTION=--delete  # idempotent teardown of that environment's source namespace
+make eso-provision-source-secret ENV=staging                    # ensure: create if absent, true no-op if already present (value never read on the no-op path)
+make eso-provision-source-secret ENV=production                 # same, production
+make eso-provision-source-secret ENV=staging ACTION=--rotate    # rotate an EXISTING staging value only (fails if absent); preserves UID, changes resourceVersion/hash, never the other environment
+make eso-provision-source-secret ENV=staging ACTION=--delete    # idempotent teardown of that environment's source namespace
 make eso-test-secret-lifecycle    # mutating: provision -> both SecretStores/ExternalSecrets Ready -> target Secrets owned by ESO -> read-only mount hash-verified per environment -> staging/production isolation -> controlled rotation + propagation (production unaffected) -> target-Secret delete/ESO-recreate -> no-op bootstrap -> ESO uninstall with target-Secret retention -> restore
+make eso-test-provision-source-secret-idempotency  # mutating: proves ensure/--rotate/--delete semantics and the global kubeconfig fingerprint helper's isolation, restoring the pre-test value/state on exit
 ```
 
 See [ADR-0010](docs/adr/0010-external-secrets-operator-contract.md) for

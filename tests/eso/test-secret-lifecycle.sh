@@ -545,47 +545,36 @@ for app in platform-bootstrap $GITOPS_GENERATED_APPS; do
   wait_for_no_out_of_sync_resources "$app" 180 || fail=1
 done
 
-# Empirically discovered on this exact cluster: once the AppProject
-# (now back at main's definition) drops SecretStore/ExternalSecret from
-# its namespaceResourceWhitelist, Argo CD's sync/prune can no longer
-# see or manage existing live objects of those kinds at all - they are
-# outside what the Application is permitted to reconcile, so "Synced"
-# is reported without them ever being pruned. Reverting a kind out of
-# the whitelist does not retroactively clean up what it already
-# created; that cleanup has to be explicit. Deleted here (never
-# recreated by anything on main) - the target Secrets go with them,
-# since nothing on main references them and retaining orphaned Secrets
-# would not be a faithful restore of the pre-test baseline.
-#
-# Also observed empirically: deleting a resource that still carries the
-# argocd.argoproj.io/tracking-id annotation can make self-heal briefly
-# react as if a tracked resource "disappeared" and try to recreate it
-# from a stale, branch-sourced manifest snapshot - always failing
-# (correctly - the whitelist blocks it) and retrying with backoff for a
-# few minutes before Argo CD's own retry budget exhausts and it settles
-# permanently. Stripping the tracking annotation first, before
-# deleting, avoids ever entering that transient retry storm. ---
-for res in "secretstore staging-kubernetes-backend staging" "secretstore production-kubernetes-backend production" \
-  "externalsecret $staging_target staging" "externalsecret $production_target production" \
-  "secret $staging_target staging" "secret $production_target production"; do
-  set -- $res
-  pkubectl annotate "$1" "$2" -n "$3" argocd.argoproj.io/tracking-id- >/dev/null 2>&1 || true
-  pkubectl delete "$1" "$2" -n "$3" --ignore-not-found >/dev/null 2>&1 || true
-done
-
-# Stabilization gate: require the absence of those objects AND a fully
-# Synced/Healthy, zero-OutOfSync state on both generated Applications
-# to hold for 3 consecutive checks (45s), not just once - this is what
-# actually distinguishes "converged" from "transiently clean, about to
-# oscillate again," which a single read cannot tell apart.
+# Phase 2.6.3b fix: this block used to delete SecretStore/
+# ExternalSecret/the target Secret and wait for their ABSENCE, on the
+# assumption that "main" did not yet have the feature (Phase 2.6.2 was
+# still unmerged at the time this was first written). main has since
+# merged Phase 2.6.2 - its own AppProject still whitelists
+# SecretStore/ExternalSecret, and both environments' values files still
+# set externalSecret.enabled: true, so main WANTS these objects to
+# exist and be Ready. The old delete-and-wait-for-absence logic was
+# racing against self-heal recreating exactly what it had just deleted
+# (main renders them), which could never converge - reproduced live,
+# consistently, at this exact step. The correct restore-to-main
+# condition is the opposite: SecretStore/ExternalSecret present and
+# Ready, and the target Secret present - stable across 3 consecutive
+# checks (45s), not just once, to distinguish "converged" from
+# "transiently clean, about to change again," which a single read
+# cannot tell apart. ---
 stable_checks=0
 elapsed=0
 while [ "$elapsed" -lt 420 ] && [ "$stable_checks" -lt 3 ]; do
   clean=1
-  pkubectl get secretstore staging-kubernetes-backend -n staging >/dev/null 2>&1 && clean=0
-  pkubectl get secretstore production-kubernetes-backend -n production >/dev/null 2>&1 && clean=0
-  pkubectl get externalsecret "$staging_target" -n staging >/dev/null 2>&1 && clean=0
-  pkubectl get externalsecret "$production_target" -n production >/dev/null 2>&1 && clean=0
+  ss_staging="$(pkubectl get secretstore staging-kubernetes-backend -n staging -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$ss_staging" = "True" ] || clean=0
+  ss_production="$(pkubectl get secretstore production-kubernetes-backend -n production -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$ss_production" = "True" ] || clean=0
+  es_staging="$(pkubectl get externalsecret "$staging_target" -n staging -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$es_staging" = "True" ] || clean=0
+  es_production="$(pkubectl get externalsecret "$production_target" -n production -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$es_production" = "True" ] || clean=0
+  pkubectl get secret "$staging_target" -n staging >/dev/null 2>&1 || clean=0
+  pkubectl get secret "$production_target" -n production >/dev/null 2>&1 || clean=0
   for app in $GITOPS_GENERATED_APPS; do
     status="$(pkubectl get application "$app" -n argocd -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null)"
     [ "$status" = "Synced/Healthy" ] || clean=0
@@ -599,9 +588,9 @@ while [ "$elapsed" -lt 420 ] && [ "$stable_checks" -lt 3 ]; do
   elapsed=$((elapsed + 15))
 done
 if [ "$stable_checks" -ge 3 ]; then
-  echo "OK: no SecretStore/ExternalSecret remains after restoring to main, stable across 3 consecutive checks (not yet merged, so main correctly does not render them; explicitly cleaned up since a kind dropped from the AppProject whitelist is no longer prunable by Argo CD itself)"
+  echo "OK: SecretStore/ExternalSecret/target Secret present and Ready after restoring to main (main has Phase 2.6.2 merged and renders them), stable across 3 consecutive checks"
 else
-  echo "FAIL: cluster state did not stabilize (no SecretStore/ExternalSecret, both Applications Synced/Healthy) within 420s after restoring to main" >&2
+  echo "FAIL: cluster state did not stabilize (SecretStore/ExternalSecret Ready, target Secrets present, both Applications Synced/Healthy) within 420s after restoring to main" >&2
   fail=1
 fi
 pkubectl rollout status deployment/platform-smoke-staging-standard-workload -n staging --timeout=120s >/dev/null
