@@ -46,18 +46,24 @@ aws_account_pattern='[0-9]{12}'      # AWS-account-ID-shaped number
 # any file other than this exact path.
 tool_versions_row_pattern='^([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([0-9A-Fa-f]{64})\|([0-9A-Fa-f]{64})\|([^|]*)$'
 
-# Narrow, single-purpose exception: terraform/.terraform.lock.hcl (Phase
-# 2.7.1) is generated exclusively by `terraform init`/`terraform
-# providers lock` - never hand-written, see docs/adr/0011-terraform-
-# foundation.md - and records real, externally-fixed provider
+# Narrow, single-purpose exception: any terraform/.../.terraform.lock.hcl
+# (originally Phase 2.7.1's single root lock file; generalized in
+# Phase 3.1 to every discovered Terraform root module's own lock file -
+# terraform/bootstrap/.terraform.lock.hcl,
+# terraform/envs/network/.terraform.lock.hcl, etc. - see
+# scripts/lab/terraform-root-modules.sh) is generated exclusively by
+# `terraform init`/`terraform providers lock` - never hand-written, see
+# docs/adr/0011-terraform-foundation.md and docs/adr/0012-network-eks-
+# iac-foundation.md - and records real, externally-fixed provider
 # checksums in exactly two fixed line shapes: `"h1:<standard base64
 # SHA256 digest>="` and `"zh:<64-hex-char SHA256 digest>"`. Either can
 # coincidentally contain a run of 12+ consecutive digits (true of at
-# least one zh: hash in this project's own generated lock file) with no
-# way to change even one character without invalidating the checksum it
-# exists to verify - the same root cause already solved once for
-# scripts/lab/tool-versions.txt above, applied to this file's own fixed
-# format.
+# least one zh: hash already observed in more than one of this
+# project's own generated lock files, since every root module currently
+# pins the identical provider version) with no way to change even one
+# character without invalidating the checksum it exists to verify - the
+# same root cause already solved once for scripts/lab/tool-versions.txt
+# above, applied to this fixed file format at any depth under terraform/.
 #
 # This is NOT a blanket per-line shape match: a line is masked only
 # when it is BOTH exactly one of these two shapes AND structurally
@@ -68,7 +74,10 @@ tool_versions_row_pattern='^([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)
 # any hashes array, or in a file whose provider/hashes blocks never
 # properly open) is never masked and is scanned normally - the file
 # must genuinely be a well-formed lock file for this exception to apply
-# at all, never merely "any line that looks like a hash".
+# at all, never merely "any line that looks like a hash". The path
+# itself must still end in exactly ".terraform.lock.hcl" under
+# terraform/ - a file with any other name is never eligible, matched
+# below via a `case` pattern, never a loose substring test.
 terraform_lock_h1_line_pattern='^[[:space:]]*"h1:[A-Za-z0-9+/]{43}=",?[[:space:]]*$'
 terraform_lock_zh_line_pattern='^[[:space:]]*"zh:[0-9A-Fa-f]{64}",?[[:space:]]*$'
 terraform_lock_provider_open_pattern='^[[:space:]]*provider[[:space:]]+"[^"]+"[[:space:]]*\{[[:space:]]*$'
@@ -78,6 +87,7 @@ terraform_lock_block_close_pattern='^[[:space:]]*\}[[:space:]]*$'
 
 aws_account_hit_in_file() {
   local file="$1"
+  local is_terraform_lock_file
   if [ "$file" = "scripts/lab/tool-versions.txt" ]; then
     local line masked
     while IFS= read -r line || [ -n "$line" ]; do
@@ -92,7 +102,11 @@ aws_account_hit_in_file() {
     done < "$file"
     return 1
   fi
-  if [ "$file" = "terraform/.terraform.lock.hcl" ]; then
+  case "$file" in
+    terraform/.terraform.lock.hcl|terraform/*/.terraform.lock.hcl) is_terraform_lock_file=1 ;;
+    *) is_terraform_lock_file=0 ;;
+  esac
+  if [ "$is_terraform_lock_file" -eq 1 ]; then
     local line in_provider=0 in_hashes=0
     while IFS= read -r line || [ -n "$line" ]; do
       # Track structural nesting first, on every line, regardless of
