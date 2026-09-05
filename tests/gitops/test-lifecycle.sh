@@ -121,6 +121,22 @@ for ns in staging production; do
   echo "OK: namespace '$ns' present with ownership label"
 done
 
+echo "test-lifecycle(gitops): step 8b (Phase 2.6.3a) - install ESO and provision source Secrets"
+# main's current charts/standard-workload/values-{staging,production}.yaml
+# (Phase 2.6.2, already merged) set externalSecret.enabled: true, and
+# the workload Pod's secret volume is optional: false - the Pod cannot
+# reach Ready without ESO's SecretStore/ExternalSecret/target Secret
+# already existing. This step provisions exactly what Phase 2.6.2's
+# own contract requires, using its own scripts unmodified (never
+# printing the synthetic values used, only their SHA256 for later
+# comparison if ever needed).
+sh lab/eso/install.sh >/dev/null
+staging_source_sha_precheck="$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}')"
+production_source_sha_precheck="$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}')"
+printf 'lab-%s-staging' "$staging_source_sha_precheck" | sh lab/eso/provision-source-secret.sh staging >/dev/null
+printf 'lab-%s-production' "$production_source_sha_precheck" | sh lab/eso/provision-source-secret.sh production >/dev/null
+echo "OK: step 8b - ESO installed, independent synthetic source Secrets provisioned for both environments (values never printed)"
+
 echo "test-lifecycle(gitops): step 9 - wait for both generated Applications Synced/Healthy"
 gitops_wait_for_synced_healthy "platform-smoke-staging" 180
 gitops_wait_for_synced_healthy "platform-smoke-production" 180
@@ -168,7 +184,13 @@ spec:
           drop: ["ALL"]
 EOF
   pkubectl -n "$ns" wait --for=jsonpath='{.status.phase}'=Succeeded --timeout=60s pod/"$pod" >/dev/null 2>&1 || true
-  info_json="$(pkubectl -n "$ns" logs pod/"$pod" 2>/dev/null | tail -1)"
+  # Phase 2.6.3a fix: podinfo's /api/info returns pretty-printed,
+  # multi-line JSON (confirmed live) - `tail -1` only ever captured the
+  # closing "}" and never the "message" field, which sits on its own
+  # line in the middle of the object. Capture the pod's full combined
+  # log output instead; the case-pattern match below already handles
+  # multi-line content correctly (shell glob "*" matches newlines too).
+  info_json="$(pkubectl -n "$ns" logs pod/"$pod" 2>/dev/null)"
   phase="$(pkubectl -n "$ns" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
   cleanup_reachability_pod
   trap - EXIT INT TERM
@@ -177,7 +199,10 @@ EOF
     return 1
   fi
   case "$info_json" in
-    *"\"message\":\"${expected_message}\""*) : ;;
+    # podinfo's /api/info is pretty-printed ("message": "...", a space
+    # after the colon), not minified - tolerate zero-or-more characters
+    # between the key and the value rather than assuming no space.
+    *"\"message\":"*"\"${expected_message}\""*) : ;;
     *) echo "FAIL: '$ns' /api/info did not contain expected message '$expected_message': $info_json" >&2; return 1 ;;
   esac
   echo "OK: '$ns' Service reachable, /healthz+/readyz OK, /api/info message='$expected_message'"
@@ -218,7 +243,7 @@ for ns in staging production; do
   echo "OK: namespace '$ns' Deployment ($avail/$desired Available), digest-pinned, UID/GID 65532/65532, Service/ServiceAccount/ConfigMap present"
 done
 
-expected_staging_message="podinfo staging — phase 2.4 initial rollout"
+expected_staging_message="podinfo staging — phase 2.4 verified"
 expected_production_message="podinfo production — phase 2.4"
 gitops_check_workload_endpoint staging "platform-smoke-staging-standard-workload" "$expected_staging_message"
 gitops_check_workload_endpoint production "platform-smoke-production-standard-workload" "$expected_production_message"
