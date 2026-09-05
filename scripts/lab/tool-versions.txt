@@ -1,10 +1,10 @@
 # Declarative, tracked source of truth for the project-local lab toolchain.
 # Format: name|version|platform|filename|archive_type|archive_member|download_sha256|installed_sha256|url
 #
-#   archive_type    "raw" (the download IS the binary) or "tar.gz"
-#                    (the download must be extracted first).
-#   archive_member   For tar.gz only: the exact path of the binary inside
-#                    the extracted archive. Empty for raw.
+#   archive_type    "raw" (the download IS the binary), "tar.gz", or
+#                    "zip" (the download must be extracted first).
+#   archive_member   For tar.gz/zip only: the exact path of the binary
+#                    inside the extracted archive. Empty for raw.
 #   download_sha256  SHA256 of the file as downloaded (verified BEFORE
 #                    any extraction is attempted).
 #   installed_sha256 SHA256 of the file actually placed at .tools/bin/
@@ -24,10 +24,13 @@
 # download_sha256/installed_sha256 below was verified against the
 # corresponding official checksum published by the tool's own upstream
 # release (kind's *.sha256sum file, dl.k8s.io's kubectl.sha256 file,
-# get.helm.sh's *.tar.gz.sha256 file) before being recorded here.
+# get.helm.sh's *.tar.gz.sha256 file, releases.hashicorp.com's
+# terraform_<version>_SHA256SUMS file) before being recorded here.
 kind|v0.33.0|darwin-arm64|kind|raw||0c8c7dbe5e23594a198b786c4bc13dacc101fa6196b0cb0b23a1ca44e61f4b4f|0c8c7dbe5e23594a198b786c4bc13dacc101fa6196b0cb0b23a1ca44e61f4b4f|https://kind.sigs.k8s.io/dl/v0.33.0/kind-darwin-arm64
 kubectl|v1.36.4|darwin-arm64|kubectl|raw||c9e4f713d6fee0043a3d835cca13077cda2bc0973840eb9779360df0b5bdfc69|c9e4f713d6fee0043a3d835cca13077cda2bc0973840eb9779360df0b5bdfc69|https://dl.k8s.io/release/v1.36.4/bin/darwin/arm64/kubectl
 helm|v4.2.4|darwin-arm64|helm|tar.gz|darwin-arm64/helm|d747eb4e28bd2727173d15b759fa0a17822291ec09db7ced3d55af290a3661a2|66f6b8881392bfa15c6c1dceef980426a28709c8122d5dc8a7a29697cad7334c|https://get.helm.sh/helm-v4.2.4-darwin-arm64.tar.gz
+terraform|v1.16.1|darwin-arm64|terraform|zip|terraform|e22cba761ddbd4d218939b28715ab3af37aaf8a42efa41f7d75b2c3d73636060|39d08f802c61d133c04b9b22ffcdf2434f1aeec0c4cd5b144698e63441ea57c0|https://releases.hashicorp.com/terraform/1.16.1/terraform_1.16.1_darwin_arm64.zip
 kind|v0.33.0|linux-amd64|kind|raw||aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d|aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d|https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-amd64
 kubectl|v1.36.4|linux-amd64|kubectl|raw||8b8f088da2dab964f853b38464033b1be15ede2839eca751482357c45abdd05a|8b8f088da2dab964f853b38464033b1be15ede2839eca751482357c45abdd05a|https://dl.k8s.io/release/v1.36.4/bin/linux/amd64/kubectl
 helm|v4.2.4|linux-amd64|helm|tar.gz|linux-amd64/helm|c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3|92e191314f44aac173711bb0247c38c727f3ddf65ad16a01c0861d509a63a9e1|https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz
+terraform|v1.16.1|linux-amd64|terraform|zip|terraform|745d33b4b02b7980c62a38ec1beea24ee084ea8caf3f503c200554bd9a0cbe49|0b5a4e400548d9538af88a4c5a2726b97b38751b8f577aa6687ad051ba2070f2|https://releases.hashicorp.com/terraform/1.16.1/terraform_1.16.1_linux_amd64.zip
