@@ -278,6 +278,205 @@ run_case "identical accept-worthy row content outside scripts/lab/tool-versions.
   "kind|v0.33.0|linux-amd64|kind|raw||${CHK_WITH_DIGITS}|${CHK_VALID}|https://example.invalid/kind
 "
 
+# --- terraform/.terraform.lock.hcl's narrow, block-structural
+# exception (Phase 2.7.1 pre-merge hardening): masks a zh:/h1: line
+# ONLY when it is both exactly one of the two fixed shapes AND
+# structurally inside a `hashes = [ ... ]` array nested inside a
+# `provider "..." { ... }` block - never a blanket per-line shape
+# match, never any other file. A well-formed h1 token is 43
+# base64-alphabet characters followed by exactly one "=" (the standard
+# encoding of a 32-byte SHA256 digest) - digits are valid base64
+# characters, so digitstr(43) below is both a syntactically valid h1
+# payload and (being all-digit) trivially contains a 12+ digit run. ---
+
+H1_WITH_DIGITS="$(digitstr 43)="
+H1_VALID="$(hexstr 43)="
+
+real_lockfile="$here/terraform/.terraform.lock.hcl"
+if [ ! -f "$real_lockfile" ]; then
+  echo "FAIL: real lock file not found at $real_lockfile - cannot run the real-lockfile acceptance case" >&2
+  fail=$((fail + 1))
+else
+  d="$(new_case_dir)"
+  mkdir -p "$d/terraform"
+  cp "$real_lockfile" "$d/terraform/.terraform.lock.hcl"
+  set +e
+  out="$(cd "$d" && bash "$validator" 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    echo "PASS: the real, currently-generated terraform/.terraform.lock.hcl is accepted as-is"
+    pass=$((pass + 1))
+  else
+    echo "FAIL: the real terraform/.terraform.lock.hcl was rejected"
+    printf '%s\n' "$out"
+    fail=$((fail + 1))
+  fi
+fi
+
+run_case "valid zh: token with a 12+ digit run inside its SHA256, structurally inside hashes[], is accepted" accept \
+  "terraform/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:${CHK_WITH_DIGITS}\",
+  ]
+}
+"
+
+run_case "valid h1: token with a 12+ digit run, structurally inside hashes[], is accepted" accept \
+  "terraform/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"h1:${H1_WITH_DIGITS}\",
+  ]
+}
+"
+
+run_case "the same 12+ digit run outside any lock file (bare text) is rejected" reject \
+  "notes.md" "account-shaped number ${AWS12} in prose
+"
+
+run_case "a valid-shaped zh: line with a digit run in a DIFFERENT .terraform.lock.hcl path is rejected" reject \
+  "modules/example/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:${CHK_WITH_DIGITS}\",
+  ]
+}
+"
+
+run_case "a digit run inside a lock-file comment (not a hashes[] entry) is rejected" reject \
+  "terraform/.terraform.lock.hcl" \
+  "# account ${AWS12}
+provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:${CHK_VALID}\",
+  ]
+}
+"
+
+run_case "a digit run inside the version field (not a hashes[] entry) is rejected" reject \
+  "terraform/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"${AWS12}\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:${CHK_VALID}\",
+  ]
+}
+"
+
+run_case "a digit run inside the constraints field (not a hashes[] entry) is rejected" reject \
+  "terraform/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"${AWS12}\"
+  hashes = [
+    \"zh:${CHK_VALID}\",
+  ]
+}
+"
+
+run_case "a digit run inside the provider address line (not a hashes[] entry) is rejected" reject \
+  "terraform/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws-${AWS12}\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:${CHK_VALID}\",
+  ]
+}
+"
+
+run_case "a zh: token one character short of 64 hex, with a digit run, is rejected (not masked)" reject \
+  "terraform/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:$(printf '%s' "$CHK_WITH_DIGITS" | cut -c1-63)\",
+  ]
+}
+"
+
+run_case "a zh: token one character too long, with a digit run, is rejected (not masked)" reject \
+  "terraform/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:${CHK_WITH_DIGITS}0\",
+  ]
+}
+"
+
+run_case "a zh: token containing a non-hex character, with a digit run, is rejected (not masked)" reject \
+  "terraform/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:$(printf '%s' "$CHK_WITH_DIGITS" | cut -c1-63)g\",
+  ]
+}
+"
+
+run_case "an otherwise-valid zh: line followed by a trailing comment containing a digit run is rejected" reject \
+  "terraform/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:${CHK_VALID}\", # account ${AWS12}
+  ]
+}
+"
+
+run_case "a digit run on the same line as an otherwise-valid zh: token, appended after the comma, is rejected" reject \
+  "terraform/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:${CHK_VALID}\", ${AWS12}
+  ]
+}
+"
+
+run_case "a well-shaped zh: line with a digit run OUTSIDE any hashes[] array (block never opened) is rejected" reject \
+  "terraform/.terraform.lock.hcl" \
+  "    \"zh:${CHK_WITH_DIGITS}\",
+"
+
+run_case "a well-shaped zh: line with a digit run inside a provider block whose hashes[] never opens is rejected" reject \
+  "terraform/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+    \"zh:${CHK_WITH_DIGITS}\",
+}
+"
+
+run_case "a well-shaped zh: line with a digit run appearing after hashes[] has already closed is rejected" reject \
+  "terraform/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:${CHK_VALID}\",
+  ]
+    \"zh:${CHK_WITH_DIGITS}\",
+}
+"
+
 echo ""
 echo "test-forbidden-terms: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then
