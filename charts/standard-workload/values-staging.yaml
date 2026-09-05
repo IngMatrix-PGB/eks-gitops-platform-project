@@ -15,3 +15,11 @@ resources:
 
 configMap:
   uiMessage: "podinfo staging — phase 2.4 verified"
+
+# Phase 2.6.2: enables the read-only Secret mount for staging only.
+externalSecret:
+  enabled: true
+  secretStoreName: "staging-kubernetes-backend"
+  sourceNamespace: "eso-source-staging"
+  sourceSecretName: "local-backend-staging"
+  authServiceAccountName: "staging-secretstore-reader"

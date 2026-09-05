@@ -93,6 +93,11 @@ spec:
             - name: tmp
               mountPath: /tmp
             {{- end }}
+            {{- if .Values.externalSecret.enabled }}
+            - name: secret
+              mountPath: {{ .Values.externalSecret.mountPath }}
+              readOnly: true
+            {{- end }}
       volumes:
         {{- if .Values.volumes.dataEmptyDir }}
         - name: data
@@ -101,4 +106,14 @@ spec:
         {{- if .Values.volumes.tmpEmptyDir }}
         - name: tmp
           emptyDir: {}
+        {{- end }}
+        {{- if .Values.externalSecret.enabled }}
+        - name: secret
+          secret:
+            secretName: {{ include "standard-workload.fullname" . }}-secret
+            defaultMode: {{ .Values.externalSecret.defaultMode }}
+            items:
+              - key: {{ .Values.externalSecret.key }}
+                path: {{ .Values.externalSecret.fileName }}
+            optional: false
         {{- end }}

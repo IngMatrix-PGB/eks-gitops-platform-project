@@ -69,5 +69,37 @@ volumes:
 configMap:
   uiMessage: "podinfo — override per environment"
 
+# Phase 2.6.2: an externally-managed Secret this chart never creates,
+# read-only-mounted for the workload to consume. Disabled by default -
+# every environment that does not set externalSecret.enabled: true
+# renders byte-identical output to before this block existed (see
+# scripts/validate/check-standard-workload-chart.sh's golden-hash
+# check). See docs/adr/0010-external-secrets-operator-contract.md and
+# .local/evidence/phase-2.6-external-secrets-plan.md §10-11.
+externalSecret:
+  enabled: false
+  # Name of the namespaced SecretStore this chart also renders
+  # (templates/secretstore.yaml) when enabled.
+  secretStoreName: ""
+  # Namespace holding the plain, imperatively-provisioned source Secret
+  # the SecretStore's "kubernetes" provider reads from
+  # (lab/eso/provision-source-secret.sh) - never the same namespace as
+  # this release's own namespace.
+  sourceNamespace: ""
+  # Name of that source Secret.
+  sourceSecretName: ""
+  # Key inside the source Secret's data to read.
+  sourceProperty: "message"
+  # Dedicated ServiceAccount (also rendered by templates/secretstore.yaml)
+  # the SecretStore authenticates as - deliberately not this workload's
+  # own ServiceAccount or the ESO controller's.
+  authServiceAccountName: ""
+  refreshInterval: "1m"
+  # Key inside the generated target Secret to project as a file.
+  key: "message"
+  mountPath: "/etc/secret"
+  fileName: "message"
+  defaultMode: 0440
+
 podAnnotations: {}
 podLabels: {}

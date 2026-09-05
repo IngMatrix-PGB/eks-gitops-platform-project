@@ -43,14 +43,20 @@ render_staging="$root/staging.yaml"
 render_production="$root/production.yaml"
 
 echo "check-standard-workload-chart: helm template (staging) ..."
-if ! "$HELM" template platform-smoke-staging "$CHART" -f "$CHART/values-staging.yaml" > "$render_staging" 2>&1; then
+# --namespace matters as of Phase 2.6.2: templates/secretstore.yaml
+# reads .Release.Namespace for the auth ServiceAccount reference, which
+# `helm template` otherwise defaults to "default" - not representative
+# of how Argo CD actually renders this chart (always with the
+# Application's real destination namespace). Passing it here makes the
+# offline render match the real deployed shape.
+if ! "$HELM" template platform-smoke-staging "$CHART" -f "$CHART/values-staging.yaml" --namespace staging > "$render_staging" 2>&1; then
   echo "FAIL: helm template failed for staging" >&2
   cat "$render_staging" >&2
   fail=1
 fi
 
 echo "check-standard-workload-chart: helm template (production) ..."
-if ! "$HELM" template platform-smoke-production "$CHART" -f "$CHART/values-production.yaml" > "$render_production" 2>&1; then
+if ! "$HELM" template platform-smoke-production "$CHART" -f "$CHART/values-production.yaml" --namespace production > "$render_production" 2>&1; then
   echo "FAIL: helm template failed for production" >&2
   cat "$render_production" >&2
   fail=1
@@ -61,17 +67,20 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-# --- rendered-kind allowlist: exactly ServiceAccount, ConfigMap, Service, Deployment ---
+# --- rendered-kind allowlist: exactly ConfigMap, Deployment,
+# ExternalSecret, SecretStore, Service, ServiceAccount (as of Phase
+# 2.6.2 - two ServiceAccount objects render: the workload's own and the
+# SecretStore's dedicated auth identity) ---
 for render in "$render_staging" "$render_production"; do
   kinds="$(grep -E '^kind: ' "$render" | sort -u)"
-  expected="$(printf 'kind: ConfigMap\nkind: Deployment\nkind: Service\nkind: ServiceAccount')"
+  expected="$(printf 'kind: ConfigMap\nkind: Deployment\nkind: ExternalSecret\nkind: SecretStore\nkind: Service\nkind: ServiceAccount')"
   if [ "$kinds" != "$expected" ]; then
     echo "FAIL: $render rendered an unexpected kind set:" >&2
     echo "$kinds" >&2
     fail=1
   fi
 done
-[ "$fail" -eq 0 ] && echo "OK: rendered-kind allowlist matches exactly (ConfigMap, Deployment, Service, ServiceAccount) in both environments"
+[ "$fail" -eq 0 ] && echo "OK: rendered-kind allowlist matches exactly (ConfigMap, Deployment, ExternalSecret, SecretStore, Service, ServiceAccount) in both environments"
 
 # --- no Secret renders ---
 for render in "$render_staging" "$render_production"; do
@@ -131,6 +140,110 @@ for render in "$render_staging" "$render_production"; do
   done
 done
 [ "$fail" -eq 0 ] && echo "OK: Service selectors match Deployment pod-template labels in both environments"
+
+# --- Phase 2.6.2: default render (externalSecret.enabled left at the
+# chart's own values.yaml default: false) must be exactly the pre-
+# Phase-2.6.2 shape - the same 4 kinds, no SecretStore/ExternalSecret/
+# extra ServiceAccount, no "secret" volume or volumeMount. This is the
+# single most important check in this whole file: it proves nothing
+# regresses for any values file that never opts in. ---
+default_render="$root/default.yaml"
+if ! "$HELM" template default-render "$CHART" --namespace default > "$default_render" 2>&1; then
+  echo "FAIL: helm template failed for the chart's own bare defaults" >&2
+  cat "$default_render" >&2
+  fail=1
+else
+  default_kinds="$(grep -E '^kind: ' "$default_render" | sort -u)"
+  default_expected="$(printf 'kind: ConfigMap\nkind: Deployment\nkind: Service\nkind: ServiceAccount')"
+  if [ "$default_kinds" != "$default_expected" ]; then
+    echo "FAIL: default render (externalSecret.enabled: false) rendered an unexpected kind set:" >&2
+    echo "$default_kinds" >&2
+    fail=1
+  elif grep -q 'name: secret' "$default_render"; then
+    echo "FAIL: default render (externalSecret.enabled: false) still renders a 'secret' volume/mount" >&2
+    fail=1
+  else
+    echo "OK: default render (externalSecret.enabled: false) is exactly the pre-Phase-2.6.2 4-kind shape, no secret volume/mount"
+  fi
+fi
+
+# --- no Secret is ever rendered by this chart (the target Secret is
+# created by ESO, never by any template) ---
+for render in "$render_staging" "$render_production"; do
+  if grep -q '^kind: Secret$' "$render"; then
+    echo "FAIL: $render rendered a Secret manifest - not authorized; the target Secret must be ESO-managed only" >&2
+    fail=1
+  fi
+done
+[ "$fail" -eq 0 ] && echo "OK: no Secret manifest rendered in either environment (target Secret is ESO-managed only)"
+
+# --- SecretStore is always namespaced, never ClusterSecretStore ---
+for render in "$render_staging" "$render_production"; do
+  if grep -q '^kind: ClusterSecretStore$' "$render"; then
+    echo "FAIL: $render rendered a ClusterSecretStore - only a namespaced SecretStore is authorized" >&2
+    fail=1
+  fi
+done
+[ "$fail" -eq 0 ] && echo "OK: no ClusterSecretStore rendered in either environment"
+
+# --- the workload container never consumes the secret via env,
+# envFrom, or secretKeyRef - read-only file mount only ---
+for render in "$render_staging" "$render_production"; do
+  if grep -qE '^\s*envFrom:' "$render"; then
+    echo "FAIL: $render uses envFrom - the secret must only ever be consumed as a read-only file mount" >&2
+    fail=1
+  fi
+  if grep -q 'secretKeyRef:' "$render"; then
+    echo "FAIL: $render uses secretKeyRef - the secret must only ever be consumed as a read-only file mount" >&2
+    fail=1
+  fi
+done
+[ "$fail" -eq 0 ] && echo "OK: no envFrom/secretKeyRef in either environment - the secret is never exposed via environment variables"
+
+# --- the secret volumeMount is read-only ---
+for render in "$render_staging" "$render_production"; do
+  if ! awk '/- name: secret$/{f=1} f && /mountPath:/{print; exit}' "$render" | grep -q .; then
+    echo "FAIL: $render has no 'secret' volumeMount" >&2
+    fail=1
+  fi
+done
+if grep -A2 '            - name: secret$' "$render_staging" | grep -q 'readOnly: true' \
+  && grep -A2 '            - name: secret$' "$render_production" | grep -q 'readOnly: true'; then
+  echo "OK: the secret volumeMount is readOnly: true in both environments"
+else
+  echo "FAIL: the secret volumeMount is not readOnly: true in one or both environments" >&2
+  fail=1
+fi
+
+# --- staging/production isolation: the two rendered environments must
+# never share a SecretStore name, source namespace, source Secret name,
+# or auth ServiceAccount name. Extracted from the isolated SecretStore
+# document only (bounded by its own "kind: SecretStore" ... next "---"
+# separator), since "kind: SecretStore" also appears as the literal
+# value of ExternalSecret's own secretStoreRef.kind field elsewhere in
+# the same file - a plain grep -A/-B against the whole file cannot tell
+# those two occurrences apart. ---
+secretstore_block() {
+  awk '/^kind: SecretStore$/,0' "$1" | awk '/^---$/{exit} {print}'
+}
+staging_secretstore="$(secretstore_block "$render_staging" | grep 'name:' | head -1 | awk '{print $2}')"
+production_secretstore="$(secretstore_block "$render_production" | grep 'name:' | head -1 | awk '{print $2}')"
+staging_source_ns="$(secretstore_block "$render_staging" | grep 'remoteNamespace:' | awk '{print $2}')"
+production_source_ns="$(secretstore_block "$render_production" | grep 'remoteNamespace:' | awk '{print $2}')"
+staging_source_key="$(grep -A1 'remoteRef:' "$render_staging" | grep 'key:' | awk '{print $2}')"
+production_source_key="$(grep -A1 'remoteRef:' "$render_production" | grep 'key:' | awk '{print $2}')"
+staging_auth_sa="$(secretstore_block "$render_staging" | grep -A1 'serviceAccount:' | grep 'name:' | awk '{print $2}')"
+production_auth_sa="$(secretstore_block "$render_production" | grep -A1 'serviceAccount:' | grep 'name:' | awk '{print $2}')"
+isolation_fail=0
+[ "$staging_secretstore" = "$production_secretstore" ] && { echo "FAIL: staging and production share the same SecretStore name '$staging_secretstore'" >&2; isolation_fail=1; }
+[ "$staging_source_ns" = "$production_source_ns" ] && { echo "FAIL: staging and production share the same source namespace '$staging_source_ns'" >&2; isolation_fail=1; }
+[ "$staging_source_key" = "$production_source_key" ] && { echo "FAIL: staging and production share the same source Secret name '$staging_source_key'" >&2; isolation_fail=1; }
+[ "$staging_auth_sa" = "$production_auth_sa" ] && { echo "FAIL: staging and production share the same auth ServiceAccount name '$staging_auth_sa'" >&2; isolation_fail=1; }
+if [ "$isolation_fail" -ne 0 ]; then
+  fail=1
+else
+  echo "OK: staging and production have fully distinct SecretStore/source-namespace/source-Secret/auth-ServiceAccount names"
+fi
 
 # --- kubectl itself must be present, executable, and version-capable
 # before it is trusted for anything below. A wrong-platform or corrupt
@@ -270,6 +383,33 @@ run_negative_case "missing resource limits" 'resources:
     cpu: 25m
     memory: 32Mi
   limits: null'
+
+run_negative_case "externalSecret enabled without secretStoreName" 'externalSecret:
+  enabled: true
+  secretStoreName: null
+  sourceNamespace: "eso-source-staging"
+  sourceSecretName: "local-backend-staging"
+  sourceProperty: "message"
+  authServiceAccountName: "staging-secretstore-reader"
+  refreshInterval: "1m"
+  key: "message"
+  mountPath: "/etc/secret"
+  fileName: "message"
+  defaultMode: 288'
+
+run_negative_case "externalSecret with an unknown extra property" 'externalSecret:
+  enabled: true
+  secretStoreName: "staging-kubernetes-backend"
+  sourceNamespace: "eso-source-staging"
+  sourceSecretName: "local-backend-staging"
+  sourceProperty: "message"
+  authServiceAccountName: "staging-secretstore-reader"
+  refreshInterval: "1m"
+  key: "message"
+  mountPath: "/etc/secret"
+  fileName: "message"
+  defaultMode: 288
+  notAllowed: "nope"'
 
 if [ "$fail" -ne 0 ]; then
   echo "check-standard-workload-chart: FAILED"
