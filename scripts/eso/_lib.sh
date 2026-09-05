@@ -262,6 +262,57 @@ eso_release_exists() {
   phelm list -n "$ns" -o json 2>/dev/null | grep -q "\"name\":\"${release}\""
 }
 
+# Verifies, via metadata only (never a name-prefix guess), that a
+# namespaced object ($1 in "<resourcetype-with-group>/<name>" form, $2
+# its namespace) is owned by one of the two KNOWN, currently-deployed
+# ESO scoped releases (from eso_environments()) - i.e. it is
+# legitimately Helm/ESO-owned content, not an unrelated foreign object
+# that merely happens to look similar. Checks, in order:
+#   - app.kubernetes.io/managed-by == Helm
+#   - meta.helm.sh/release-name and meta.helm.sh/release-namespace
+#     match exactly one row of eso_environments()
+#   - that release actually exists right now (eso_release_exists)
+# Backs Phase 2.6.3a's gitops-uninstall classifier
+# (scripts/gitops/_lib.sh). Returns 1 (not owned) on any missing/
+# mismatched metadata - never guesses.
+eso_release_owns_object() {
+  restype_name="$1"; ns="$2"
+  managed_by="$(pkubectl -n "$ns" get "$restype_name" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)"
+  [ "$managed_by" = "Helm" ] || return 1
+  release_name="$(pkubectl -n "$ns" get "$restype_name" -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)"
+  release_ns="$(pkubectl -n "$ns" get "$restype_name" -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-namespace}' 2>/dev/null || true)"
+  [ -n "$release_name" ] && [ -n "$release_ns" ] || return 1
+  while IFS='|' read -r env_name eso_ns eso_release wc cc; do
+    [ -z "$env_name" ] && continue
+    if [ "$release_name" = "$eso_release" ] && [ "$release_ns" = "$eso_ns" ]; then
+      if eso_release_exists "$eso_ns" "$eso_release"; then
+        return 0
+      fi
+    fi
+  done <<EOF
+$(eso_environments)
+EOF
+  return 1
+}
+
+# Returns 0 if a currently-deployed ESO scoped release's scopedNamespace
+# equals $1 - i.e. an ESO controller is ACTIVELY watching that workload
+# namespace right now. Backs the Phase 2.6.3a uninstall guard: never
+# delete a namespace an active ESO release still depends on for its
+# scoped RBAC.
+eso_scoped_namespace_active() {
+  target_ns="$1"
+  while IFS='|' read -r env_name eso_ns eso_release wc cc; do
+    [ -z "$env_name" ] && continue
+    if [ "$env_name" = "$target_ns" ] && eso_release_exists "$eso_ns" "$eso_release"; then
+      return 0
+    fi
+  done <<EOF
+$(eso_environments)
+EOF
+  return 1
+}
+
 # Structural (field-aware) scan for a literal "*" value inside any RBAC
 # rule field - apiGroups, resources, verbs, resourceNames,
 # nonResourceURLs - across a rendered multi-document manifest. Prints

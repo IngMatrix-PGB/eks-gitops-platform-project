@@ -210,11 +210,15 @@ check_no_unexpected_argoproj_crds() {
   return 0
 }
 
-# Exhaustive namespaced-resource inventory - every listable namespaced
-# API type (including CRD-defined ones), not just `kubectl get all`.
-# Returns 0 if only the Kubernetes-auto-created allowlist remains.
-inventory_namespace_contents() {
-  ns="$1"
+# Exhaustive namespaced-resource discovery, shared by
+# inventory_namespace_contents() below and by
+# scripts/gitops/_lib.sh's classifier (Phase 2.6.3a). Appends one
+# "<resourcetype-with-group>/<name>" line per discovered object to
+# $2 (created if absent). Every listable namespaced API type (including
+# CRD-defined ones) is queried - never just `kubectl get all`. Returns
+# 0 on success, 2 on any discovery/query error (fail closed).
+list_namespace_resource_names() {
+  ns="$1"; out_file="$2"
   apires_tmp="$(mktemp)" || return 2
   if ! pkubectl api-resources --verbs=list --namespaced -o name >"$apires_tmp" 2>&1; then
     echo "FAIL: could not discover namespaced API resource types" >&2
@@ -223,19 +227,31 @@ inventory_namespace_contents() {
     return 2
   fi
 
-  nsinv_tmp="$(mktemp)" || { rm -f "$apires_tmp"; return 2; }
-  : > "$nsinv_tmp"
+  : > "$out_file"
   while IFS= read -r restype; do
     [ -z "$restype" ] && continue
-    if ! pkubectl -n "$ns" get "$restype" -o name >>"$nsinv_tmp" 2>/tmp/.nsinv-err.$$; then
+    if ! pkubectl -n "$ns" get "$restype" -o name >>"$out_file" 2>/tmp/.nsinv-err.$$; then
       echo "FAIL: query failed for resource type '$restype' in namespace '$ns'" >&2
       cat /tmp/.nsinv-err.$$ >&2
-      rm -f "$apires_tmp" "$nsinv_tmp" /tmp/.nsinv-err.$$
+      rm -f "$apires_tmp" /tmp/.nsinv-err.$$
       return 2
     fi
     rm -f /tmp/.nsinv-err.$$
   done < "$apires_tmp"
   rm -f "$apires_tmp"
+  return 0
+}
+
+# Exhaustive namespaced-resource inventory - every listable namespaced
+# API type (including CRD-defined ones), not just `kubectl get all`.
+# Returns 0 if only the Kubernetes-auto-created allowlist remains.
+inventory_namespace_contents() {
+  ns="$1"
+  nsinv_tmp="$(mktemp)" || return 2
+  if ! list_namespace_resource_names "$ns" "$nsinv_tmp"; then
+    rm -f "$nsinv_tmp"
+    return 2
+  fi
 
   # Allowlist: the two objects Kubernetes itself auto-creates in every
   # namespace, plus Event objects - Kubernetes generates these
