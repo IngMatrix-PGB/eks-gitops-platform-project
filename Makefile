@@ -211,26 +211,38 @@ eso-test-provision-source-secret-idempotency: ## Phase 2.6.3b: mutating proof of
 # installed exclusively via `make tools-install` (the same pinned,
 # checksum-verified .tools/bin/ pipeline as kind/kubectl/helm) - never
 # globally, never via a GitHub Action.
-terraform-fmt: ## Phase 2.7.1: terraform fmt -check against terraform/ (fully offline, zero AWS contact)
+terraform-fmt: ## Phase 3.1: terraform fmt -check against every terraform/*.tf file, recursively (fully offline, zero AWS contact) - a single recursive check from terraform/ already covers every root module and child module, since formatting is independent of root-module/state boundaries
 	@.tools/bin/terraform -chdir=terraform fmt -check -diff -recursive
 
-terraform-init: ## Phase 2.7.1: terraform init -backend=false against terraform/ (only network contact is the public Terraform Registry fetching the pinned provider binary; zero AWS contact, no backend, no state)
-	@.tools/bin/terraform -chdir=terraform init -backend=false
+terraform-init: ## Phase 3.1: terraform init -backend=false in EVERY discovered Terraform root module (terraform/, terraform/bootstrap/, each terraform/envs/*/ - see scripts/lab/terraform-root-modules.sh, the single source of truth for this list); only network contact is the public Terraform Registry fetching pinned providers/modules; zero AWS contact, no backend, no state
+	@for m in $$(sh scripts/lab/terraform-root-modules.sh); do \
+		echo "terraform-init: $$m"; \
+		.tools/bin/terraform -chdir="$$m" init -backend=false || exit 1; \
+	done
 
-terraform-validate: ## Phase 2.7.1: terraform validate against terraform/ (syntax/internal-consistency only; run terraform-init first; never contacts AWS or any provider API)
-	@.tools/bin/terraform -chdir=terraform validate
+terraform-validate: ## Phase 3.1: terraform validate in EVERY discovered Terraform root module (syntax/internal-consistency only; run terraform-init first; never contacts AWS or any provider API)
+	@for m in $$(sh scripts/lab/terraform-root-modules.sh); do \
+		echo "terraform-validate: $$m"; \
+		.tools/bin/terraform -chdir="$$m" validate || exit 1; \
+	done
 
-terraform-test: ## Phase 2.7.1: terraform test against terraform/tests/ using mock_provider "aws" (zero AWS credentials, zero AWS network contact, zero real resources created; run terraform-init first)
-	@.tools/bin/terraform -chdir=terraform test
+terraform-test: ## Phase 3.1: terraform test in EVERY discovered Terraform root module using mock_provider "aws" where applicable (zero AWS credentials, zero AWS network contact, zero real resources created; run terraform-init first)
+	@for m in $$(sh scripts/lab/terraform-root-modules.sh); do \
+		echo "terraform-test: $$m"; \
+		.tools/bin/terraform -chdir="$$m" test || exit 1; \
+	done
 
-terraform-validate-offline: ## Phase 2.7.1: full offline Terraform toolchain validation in one pass (fmt -check, init -backend=false, validate, test/mock_provider); never plan/apply against AWS, zero AWS contact
+terraform-validate-offline: ## Phase 3.1: full offline Terraform toolchain validation in one pass, across every discovered root module (fmt -check, init -backend=false, validate, test/mock_provider); never plan/apply against AWS, zero AWS contact
 	@.tools/bin/terraform -chdir=terraform fmt -check -diff -recursive
-	@.tools/bin/terraform -chdir=terraform init -backend=false
-	@.tools/bin/terraform -chdir=terraform validate
-	@.tools/bin/terraform -chdir=terraform test
-	@echo "OK: terraform-validate-offline passed - fmt/init(-backend=false)/validate/test all offline, zero AWS contact"
+	@for m in $$(sh scripts/lab/terraform-root-modules.sh); do \
+		echo "terraform-validate-offline: $$m"; \
+		.tools/bin/terraform -chdir="$$m" init -backend=false || exit 1; \
+		.tools/bin/terraform -chdir="$$m" validate || exit 1; \
+		.tools/bin/terraform -chdir="$$m" test || exit 1; \
+	done
+	@echo "OK: terraform-validate-offline passed for every discovered root module - fmt/init(-backend=false)/validate/test all offline, zero AWS contact"
 
-check-terraform-offline: ## Phase 2.7.1 pre-merge hardening: deterministic enforcement of the offline contract (exact pins, lockfile names the expected provider, no active backend, no real AWS resource/data source outside the narrow toolchain-smoke allowlist, no operative provider "aws" block, every AWS-referencing Terraform test declares mock_provider, no real terraform plan/apply in scripts/Makefile/workflows, no id-token/aws-actions/AWS-credential surface, no real account id/ARN, offline targets use -backend=false, nothing tracked that should not be)
+check-terraform-offline: ## Phase 3.1: deterministic enforcement of the Terraform offline contract across every root module (exact pins per root, lockfile per root names the expected provider, no configured backend anywhere, no real AWS resource outside bootstrap/envs/*, no real AWS data source outside the narrow allowlist, no operative provider "aws" block, every AWS-referencing Terraform test declares mock_provider, no real terraform plan/apply in scripts/Makefile/workflows, no id-token/aws-actions/AWS-credential surface, no real account id/ARN, offline targets use -backend=false, nothing tracked that should not be)
 	@bash scripts/validate/check-terraform-offline.sh
 
 check-terraform-offline-regression: ## Regression-test check-terraform-offline.sh's accept/reject matrix against throwaway fixture repositories

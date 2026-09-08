@@ -65,6 +65,37 @@ digitstr() {
 ZH_VALID="$(hexstr 64)"
 H1_VALID="$(hexstr 43)="
 
+# Writes a correctly-pinned versions.tf + well-formed lock file at
+# $1/$2 (e.g. $1="terraform/bootstrap"), mirroring the good baseline's
+# own root exactly. Used by both the resource-ban-scoping cases and the
+# multi-root-discovery cases below.
+write_valid_child_root() {
+  base_dir="$1"; rel="$2"
+  mkdir -p "$base_dir/$rel"
+  cat > "$base_dir/$rel/versions.tf" <<EOF
+terraform {
+  required_version = "= 1.16.1"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "= 6.63.0"
+    }
+  }
+}
+EOF
+  cat > "$base_dir/$rel/.terraform.lock.hcl" <<EOF
+provider "registry.terraform.io/hashicorp/aws" {
+  version     = "6.63.0"
+  constraints = "6.63.0"
+  hashes = [
+    "h1:${H1_VALID}",
+    "zh:${ZH_VALID}",
+  ]
+}
+EOF
+}
+
 new_case_dir() {
   d="$(mktemp -d "$root/case-XXXXXX")"
   git init -q "$d"
@@ -229,7 +260,12 @@ run_case_real_tree() {
   d="$(new_case_dir)"
   mkdir -p "$d/terraform" "$d/.github/workflows"
   cp -R "$here/terraform/." "$d/terraform/"
-  rm -rf "$d/terraform/.terraform"
+  # Every root module now has its own gitignored .terraform/ provider/
+  # module cache (terraform/, terraform/bootstrap/, terraform/envs/*/,
+  # Phase 3.1) - remove all of them, not just the top-level one, since
+  # none is ever tracked in Git and this fixture must mirror exactly
+  # what list_versionable_files() would see in the real repository.
+  find "$d/terraform" -name '.terraform' -type d -prune -exec rm -rf {} +
   cp "$here/.github/workflows/validate.yml" "$d/.github/workflows/validate.yml"
   cp "$here/Makefile" "$d/Makefile"
 
@@ -317,7 +353,72 @@ terraform {
 }
 EOF
 }
-run_case "an active backend \"s3\" block is rejected" reject setup_active_backend
+run_case "a configured backend \"s3\" block (real bucket/key/region) is rejected" reject setup_active_backend
+
+# Phase 3.1: an empty/partial backend declaration is explicitly
+# allowed - the real bucket/key/region are supplied later via
+# -backend-config at a real, future, separately-authorized `terraform
+# init`, never hardcoded now.
+setup_empty_backend_one_line() {
+  d="$1"
+  cat > "$d/terraform/versions.tf" <<'EOF'
+terraform {
+  required_version = "= 1.16.1"
+
+  backend "s3" {}
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "= 6.63.0"
+    }
+  }
+}
+EOF
+}
+run_case "an empty backend \"s3\" {} block (single line) is accepted" accept setup_empty_backend_one_line
+
+setup_empty_backend_multiline() {
+  d="$1"
+  cat > "$d/terraform/versions.tf" <<'EOF'
+terraform {
+  required_version = "= 1.16.1"
+
+  backend "s3" {
+    # bucket/key/region supplied later via -backend-config
+  }
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "= 6.63.0"
+    }
+  }
+}
+EOF
+}
+run_case "an empty backend \"s3\" block (multi-line, comment/blank only) is accepted" accept setup_empty_backend_multiline
+
+setup_backend_with_one_real_attribute() {
+  d="$1"
+  cat > "$d/terraform/versions.tf" <<'EOF'
+terraform {
+  required_version = "= 1.16.1"
+
+  backend "s3" {
+    region = "us-east-1"
+  }
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "= 6.63.0"
+    }
+  }
+}
+EOF
+}
+run_case "a backend block with even one real attribute (region only) is rejected" reject setup_backend_with_one_real_attribute
 
 setup_aws_provider_not_pinned_exactly() {
   d="$1"
@@ -342,7 +443,39 @@ resource "aws_secretsmanager_secret" "example" {
 }
 EOF
 }
-run_case "a real AWS resource block (aws_secretsmanager_secret) is rejected" reject setup_real_aws_resource
+run_case "a real AWS resource block (aws_secretsmanager_secret) in the root terraform/ module is rejected" reject setup_real_aws_resource
+
+# Phase 3.1: the resource ban is scoped to the root terraform/ module
+# only - bootstrap/ and envs/*/ are the authorized locations for real
+# (never-applied) AWS resource blocks.
+setup_real_aws_resource_in_bootstrap() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/bootstrap"
+  cat > "$d/terraform/bootstrap/main.tf" <<'EOF'
+resource "aws_s3_bucket" "terraform_state" {
+  bucket        = "example-state-bucket"
+  force_destroy = false
+}
+EOF
+}
+run_case "a real AWS resource block (aws_s3_bucket) in terraform/bootstrap/ is accepted" \
+  accept setup_real_aws_resource_in_bootstrap
+
+setup_real_aws_resource_in_envs_network() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/envs/network"
+  cat > "$d/terraform/envs/network/main.tf" <<'EOF'
+resource "aws_vpc" "main" {
+  cidr_block = var.vpc_cidr
+}
+
+variable "vpc_cidr" {
+  type = string
+}
+EOF
+}
+run_case "a real AWS resource block (aws_vpc) in terraform/envs/network/ is accepted" \
+  accept setup_real_aws_resource_in_envs_network
 
 setup_real_aws_data_source() {
   d="$1"
@@ -482,6 +615,69 @@ setup_terraform_init_without_backend_false() {
   } >> "$d/Makefile"
 }
 run_case "a 'terraform ... init' invocation without -backend=false is rejected" reject setup_terraform_init_without_backend_false
+
+# --- Phase 3.1: multi-root-module discovery. discover_terraform_root_
+# modules() finds terraform/ itself, terraform/bootstrap/, and every
+# direct child of terraform/envs/ - by directory structure, never a
+# manually-maintained list. These cases prove: (a) multiple correctly-
+# pinned roots are all accepted together, (b) a failure in exactly one
+# root is reported without being masked by the others passing, and (c)
+# critically, a root module the checker has never been told about by
+# name - a brand-new terraform/envs/<anything>/ - is still discovered
+# and enforced, proving a newly added root cannot silently bypass
+# validation. -----------------------------------------------------------
+
+setup_multiple_valid_roots() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/bootstrap"
+  write_valid_child_root "$d" "terraform/envs/network"
+  write_valid_child_root "$d" "terraform/envs/eks"
+}
+run_case "terraform/bootstrap, terraform/envs/network, and terraform/envs/eks, all correctly pinned, are accepted together" \
+  accept setup_multiple_valid_roots
+
+setup_one_root_missing_lockfile_among_several() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/bootstrap"
+  write_valid_child_root "$d" "terraform/envs/network"
+  write_valid_child_root "$d" "terraform/envs/eks"
+  rm -f "$d/terraform/envs/eks/.terraform.lock.hcl"
+}
+run_case "a missing lock file in exactly one of several discovered roots (envs/eks) is rejected, not masked by the other roots being valid" \
+  reject setup_one_root_missing_lockfile_among_several
+
+setup_one_root_bad_pin_among_several() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/bootstrap"
+  write_valid_child_root "$d" "terraform/envs/network"
+  write_valid_child_root "$d" "terraform/envs/eks"
+  sed -i.bak 's/version = "= 6.63.0"/version = "~> 6.63.0"/' "$d/terraform/envs/network/versions.tf"
+  rm -f "$d/terraform/envs/network/versions.tf.bak"
+}
+run_case "a non-exact AWS provider pin in exactly one of several discovered roots (envs/network) is rejected, not masked by the other roots being valid" \
+  reject setup_one_root_bad_pin_among_several
+
+# The decisive case: a root module this checker's source code never
+# names anywhere (terraform/envs/some-future-root, not network/eks/
+# bootstrap) is still discovered purely by directory structure and
+# still fails on its own bad pin - proving discovery is structural, not
+# a hardcoded list that a genuinely new root could slip past silently.
+setup_previously_unknown_root_with_bad_pin() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/envs/some-future-root-never-named-in-the-checker"
+  sed -i.bak 's/required_version = "= 1.16.1"/required_version = ">= 1.16.1"/' \
+    "$d/terraform/envs/some-future-root-never-named-in-the-checker/versions.tf"
+  rm -f "$d/terraform/envs/some-future-root-never-named-in-the-checker/versions.tf.bak"
+}
+run_case "a brand-new, previously unknown terraform/envs/<name>/ root with a bad pin is still discovered and rejected (adding a root cannot silently bypass validation)" \
+  reject setup_previously_unknown_root_with_bad_pin
+
+setup_previously_unknown_root_valid() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/envs/some-future-root-never-named-in-the-checker"
+}
+run_case "a brand-new, previously unknown terraform/envs/<name>/ root that is correctly pinned is accepted" \
+  accept setup_previously_unknown_root_valid
 
 echo ""
 echo "test-offline-contract: $pass passed, $fail failed"

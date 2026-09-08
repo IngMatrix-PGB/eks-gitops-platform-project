@@ -351,6 +351,47 @@ run_case "a valid-shaped zh: line with a digit run in a DIFFERENT .terraform.loc
 }
 "
 
+# --- Phase 3.1: the lock-file exception generalizes from the single
+# original terraform/.terraform.lock.hcl to any Terraform root module's
+# own lock file (terraform/bootstrap/, terraform/envs/*/, etc.) - each
+# discovered independently by scripts/lab/terraform-root-modules.sh.
+# The path must still genuinely start with "terraform/" and end in
+# ".terraform.lock.hcl" - a lookalike path outside that prefix is not
+# eligible, even though it contains the same substring. -----------------
+
+run_case "a valid zh: token with a digit run, structurally inside hashes[], is accepted in terraform/bootstrap/.terraform.lock.hcl (one level deep)" accept \
+  "terraform/bootstrap/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:${CHK_WITH_DIGITS}\",
+  ]
+}
+"
+
+run_case "a valid zh: token with a digit run, structurally inside hashes[], is accepted in terraform/envs/network/.terraform.lock.hcl (two levels deep)" accept \
+  "terraform/envs/network/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:${CHK_WITH_DIGITS}\",
+  ]
+}
+"
+
+run_case "a lookalike path that merely contains \"terraform/\" as a substring, not a genuine prefix, is rejected" reject \
+  "not-terraform/bootstrap/.terraform.lock.hcl" \
+  "provider \"registry.terraform.io/hashicorp/aws\" {
+  version     = \"6.63.0\"
+  constraints = \"6.63.0\"
+  hashes = [
+    \"zh:${CHK_WITH_DIGITS}\",
+  ]
+}
+"
+
 run_case "a digit run inside a lock-file comment (not a hashes[] entry) is rejected" reject \
   "terraform/.terraform.lock.hcl" \
   "# account ${AWS12}
