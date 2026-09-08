@@ -679,6 +679,190 @@ setup_previously_unknown_root_valid() {
 run_case "a brand-new, previously unknown terraform/envs/<name>/ root that is correctly pinned is accepted" \
   accept setup_previously_unknown_root_valid
 
+# --- Phase 3.2: aws_iam_policy_document is now allowed (a zero-AWS-
+# contact, purely local data source), while aws_availability_zones
+# remains explicitly rejected (a real AWS API call, deliberately never
+# added to the allowlist per instruction). ------------------------------
+
+setup_iam_policy_document_data_source() {
+  d="$1"
+  cat >> "$d/terraform/main.tf" <<'EOF'
+
+data "aws_iam_policy_document" "example" {
+  statement {
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = ["arn:aws:secretsmanager:us-east-1:aws:secret:example"]
+  }
+}
+EOF
+}
+run_case "an aws_iam_policy_document data source is accepted (zero AWS contact, purely local JSON rendering)" \
+  accept setup_iam_policy_document_data_source
+
+setup_availability_zones_data_source_still_rejected() {
+  d="$1"
+  cat >> "$d/terraform/main.tf" <<'EOF'
+
+data "aws_availability_zones" "example" {}
+EOF
+}
+run_case "an aws_availability_zones data source remains rejected (a real AWS API call, deliberately never allowlisted)" \
+  reject setup_availability_zones_data_source_still_rejected
+
+# --- Phase 3.2: no aws_secretsmanager_secret_version anywhere, no
+# secret_string/secret_binary argument anywhere, no matter which root -
+# a stricter, no-exception ban than the root-scoped resource ban above.
+
+setup_secret_version_in_bootstrap() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/bootstrap"
+  cat > "$d/terraform/bootstrap/main.tf" <<'EOF'
+resource "aws_secretsmanager_secret" "example" {
+  name = "example"
+}
+
+resource "aws_secretsmanager_secret_version" "example" {
+  secret_id     = aws_secretsmanager_secret.example.id
+  secret_string = "not-a-real-value"
+}
+EOF
+}
+run_case "an aws_secretsmanager_secret_version resource is rejected even inside an otherwise-authorized root (bootstrap/)" \
+  reject setup_secret_version_in_bootstrap
+
+setup_secret_binary_argument() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/envs/network"
+  cat > "$d/terraform/envs/network/main.tf" <<'EOF'
+resource "aws_secretsmanager_secret" "example" {
+  name = "example"
+}
+
+resource "aws_ssm_parameter" "example" {
+  name        = "example"
+  type        = "SecureString"
+  secret_binary = "not-a-real-value"
+}
+EOF
+}
+run_case "a secret_binary argument is rejected regardless of which resource type carries it" \
+  reject setup_secret_binary_argument
+
+# --- Phase 3.2: no secretsmanager:*/kms:*/bare-wildcard IAM action
+# anywhere, no matter which root. ---------------------------------------
+
+setup_secretsmanager_wildcard_action() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/envs/identity"
+  cat > "$d/terraform/envs/identity/main.tf" <<'EOF'
+data "aws_iam_policy_document" "example" {
+  statement {
+    actions   = ["secretsmanager:*"]
+    resources = ["arn:aws:secretsmanager:us-east-1:aws:secret:example"]
+  }
+}
+EOF
+}
+run_case "a secretsmanager:* wildcard action is rejected" \
+  reject setup_secretsmanager_wildcard_action
+
+setup_kms_wildcard_action() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/envs/identity"
+  cat > "$d/terraform/envs/identity/main.tf" <<'EOF'
+data "aws_iam_policy_document" "example" {
+  statement {
+    actions   = ["kms:*"]
+    resources = ["arn:aws:kms:us-east-1:aws:key/example"]
+  }
+}
+EOF
+}
+run_case "a kms:* wildcard action is rejected" \
+  reject setup_kms_wildcard_action
+
+setup_bare_star_action() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/envs/identity"
+  cat > "$d/terraform/envs/identity/main.tf" <<'EOF'
+data "aws_iam_policy_document" "example" {
+  statement {
+    actions   = ["*"]
+    resources = ["arn:aws:secretsmanager:us-east-1:aws:secret:example"]
+  }
+}
+EOF
+}
+run_case "a bare wildcard \"*\" action is rejected" \
+  reject setup_bare_star_action
+
+setup_enumerated_actions_accepted() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/envs/identity"
+  cat > "$d/terraform/envs/identity/main.tf" <<'EOF'
+data "aws_iam_policy_document" "example" {
+  statement {
+    actions = [
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:DescribeSecret",
+    ]
+    resources = ["arn:aws:secretsmanager:us-east-1:aws:secret:example"]
+  }
+}
+EOF
+}
+run_case "enumerated, specific IAM actions (never a wildcard) are accepted" \
+  accept setup_enumerated_actions_accepted
+
+# --- Phase 3.2: no Pod Identity Association literally targets the
+# webhook/cert-controller singleton ServiceAccount, no matter which
+# root. -------------------------------------------------------------
+
+setup_association_targets_webhook() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/envs/identity"
+  cat > "$d/terraform/envs/identity/main.tf" <<'EOF'
+resource "aws_eks_pod_identity_association" "example" {
+  cluster_name    = "example"
+  namespace       = "eso-staging"
+  service_account = "external-secrets-webhook"
+  role_arn        = "arn:aws:iam::aws:role/example"
+}
+EOF
+}
+run_case "a Pod Identity Association literally targeting the webhook ServiceAccount is rejected" \
+  reject setup_association_targets_webhook
+
+setup_association_targets_cert_controller() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/envs/identity"
+  cat > "$d/terraform/envs/identity/main.tf" <<'EOF'
+resource "aws_eks_pod_identity_association" "example" {
+  cluster_name    = "example"
+  namespace       = "eso-staging"
+  service_account = "external-secrets-cert-controller"
+  role_arn        = "arn:aws:iam::aws:role/example"
+}
+EOF
+}
+run_case "a Pod Identity Association literally targeting the cert-controller ServiceAccount is rejected" \
+  reject setup_association_targets_cert_controller
+
+setup_association_targets_real_controller_accepted() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/envs/identity"
+  cat > "$d/terraform/envs/identity/main.tf" <<'EOF'
+resource "aws_eks_pod_identity_association" "example" {
+  cluster_name    = "example"
+  namespace       = "eso-staging"
+  service_account = "eso-staging-external-secrets"
+  role_arn        = "arn:aws:iam::aws:role/example"
+}
+EOF
+}
+run_case "a Pod Identity Association targeting the real ESO controller ServiceAccount is accepted" \
+  accept setup_association_targets_real_controller_accepted
+
 echo ""
 echo "test-offline-contract: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then
