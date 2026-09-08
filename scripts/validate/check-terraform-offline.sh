@@ -231,12 +231,23 @@ else
   ok "no AWS resource block exists in the root terraform/ module (terraform/*.tf)"
 fi
 
-# --- 6b. data "aws_*" blocks are allowed ONLY for the narrow,
-# documented toolchain-smoke fixture (account/region identity
-# introspection, read-only, no infrastructure implication) - fail
-# closed on any other AWS data source type, by exact allowlist, never
-# a blocklist of "known-bad" service names. -----------------------------
-allowed_aws_data_sources="aws_caller_identity aws_region"
+# --- 6b. data "aws_*" blocks are allowed ONLY for a narrow, explicit
+# allowlist - fail closed on any other AWS data source type, never a
+# blocklist of "known-bad" service names. aws_caller_identity/
+# aws_region are the original Phase 2.7.1 toolchain-smoke identity/
+# region introspection sources. aws_iam_policy_document is added in
+# Phase 3.2 for a different, evidence-based reason: it is the standard,
+# AWS-recommended mechanism for authoring IAM policy JSON in Terraform
+# (registry.terraform.io/providers/hashicorp/aws/latest/docs/data-
+# sources/iam_policy_document, re-verified 2026-09-08) and, critically,
+# it never contacts AWS at all, even under a real, unmocked provider -
+# its .json output is computed entirely client-side from the given
+# statement blocks. This is a DIFFERENT allowance than
+# aws_availability_zones (explicitly NOT added, per instruction - that
+# data source really would call AWS in a real, future apply); this
+# expansion covers only a data source with zero AWS contact in any
+# circumstance. ---------------------------------------------------
+allowed_aws_data_sources="aws_caller_identity aws_region aws_iam_policy_document"
 data_source_lines="$(grep_over_tf_files '^[[:space:]]*data[[:space:]]*"aws_[A-Za-z0-9_]+"')"
 data_ok=1
 if [ -n "$data_source_lines" ]; then
@@ -439,6 +450,60 @@ if [ -n "$binary_tracked" ]; then
   printf '%s\n' "$binary_tracked" >&2
 else
   ok "no binary file is tracked under terraform/ or .tools/ (by content)"
+fi
+
+# --- 13. Phase 3.2: no aws_secretsmanager_secret_version resource
+# anywhere, in any root, no exception, ever - unlike the resource-ban
+# in check 6a (scoped to the root module only), a secret payload must
+# never have a code path into Terraform state ANYWHERE in this
+# repository. ------------------------------------------------------
+secret_version_hits="$(grep_over_tf_files '^[[:space:]]*resource[[:space:]]*"aws_secretsmanager_secret_version"')"
+if [ -n "$secret_version_hits" ]; then
+  bad "an aws_secretsmanager_secret_version resource was found - a secret payload must never have a code path into Terraform state, anywhere, with no exception:"
+  printf '%s\n' "$secret_version_hits" >&2
+else
+  ok "no aws_secretsmanager_secret_version resource exists anywhere"
+fi
+
+# --- 14. No secret_string/secret_binary argument name anywhere -
+# defense in depth beyond check 13, in case a future resource type
+# gains an argument with the same name. -----------------------------
+payload_arg_hits="$(grep_over_tf_files '^[[:space:]]*secret_(string|binary)[[:space:]]*=')"
+if [ -n "$payload_arg_hits" ]; then
+  bad "a secret_string/secret_binary argument was found - no Terraform resource in this repository may ever accept a secret payload:"
+  printf '%s\n' "$payload_arg_hits" >&2
+else
+  ok "no secret_string/secret_binary argument exists anywhere"
+fi
+
+# --- 15. No literal secretsmanager:*/kms:* action string, and no bare
+# wildcard "*" as a sole IAM action, anywhere in a tracked .tf file. -
+wildcard_action_hits="$(grep_over_tf_files '"(secretsmanager|kms):\*"')"
+bare_star_action_hits="$(grep_over_tf_files '^[[:space:]]*actions?[[:space:]]*=[[:space:]]*(\[)?[[:space:]]*"\*"')"
+if [ -n "$wildcard_action_hits" ] || [ -n "$bare_star_action_hits" ]; then
+  bad "a wildcard IAM action (secretsmanager:*, kms:*, or a bare \"*\" action) was found:"
+  printf '%s\n%s\n' "$wildcard_action_hits" "$bare_star_action_hits" >&2
+else
+  ok "no secretsmanager:*/kms:*/bare-wildcard IAM action exists anywhere"
+fi
+
+# --- 16. No aws_eks_pod_identity_association targets the webhook or
+# cert-controller singleton ServiceAccount, by exact literal string,
+# anywhere - these two components must never receive AWS credentials
+# (.local/evidence/phase-3.2-pod-identity-secrets-manager-iac-plan.md
+# S5/S6). This is a literal-string static check: a value supplied
+# entirely through a variable/expression rather than a literal string
+# in the .tf source is not visible to this check - the child module's
+# own variable validation (terraform/modules/eso-identity/variables.tf)
+# is the mechanism that actually enforces this at the Terraform-
+# language level for any variable-driven value; this rule is a
+# repo-wide textual backstop against a literal hardcoded regression. -
+singleton_association_hits="$(grep_over_tf_files 'service_account[[:space:]]*=[[:space:]]*"external-secrets-(webhook|cert-controller)"')"
+if [ -n "$singleton_association_hits" ]; then
+  bad "a Pod Identity Association (or association-shaped configuration) literally targets the webhook or cert-controller singleton ServiceAccount - neither may ever receive AWS credentials:"
+  printf '%s\n' "$singleton_association_hits" >&2
+else
+  ok "no literal Pod Identity Association targets the webhook/cert-controller singleton ServiceAccount"
 fi
 
 if [ "$fail" -ne 0 ]; then

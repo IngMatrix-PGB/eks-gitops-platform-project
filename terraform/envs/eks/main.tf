@@ -33,6 +33,35 @@ module "eks" {
     resources = ["secrets"]
   }
 
+  # EKS Pod Identity Agent - the cluster-wide DaemonSet every Pod
+  # Identity Association (terraform/envs/identity/) depends on to
+  # actually deliver credentials. Owned here, in the same state as the
+  # cluster itself - an add-on cannot exist independent of its cluster,
+  # and this module's own addons input is its designed
+  # mechanism for managing exactly this (see
+  # .local/evidence/phase-3.2-pod-identity-secrets-manager-iac-plan.md
+  # S11 for the full ownership reasoning - no separate root, no
+  # duplicated ownership). Version is an explicit, required, validated
+  # input - never most_recent, never a hardcoded guess: no static
+  # version table exists for this add-on (re-verified 2026-09-08); the
+  # real, current-for-this-cluster-version value must be queried live
+  # via `aws eks describe-addon-versions --addon-name
+  # eks-pod-identity-agent --kubernetes-version <version>` at real,
+  # future, separately authorized deploy time. Created via this
+  # Terraform module only - never Helm, never GitOps, never
+  # IRSA/OIDC.
+  addons = {
+    eks-pod-identity-agent = {
+      addon_version = var.pod_identity_agent_addon_version
+      # Explicit, never most_recent - most_recent defaults to true on
+      # this module's own addons variable, which this design
+      # deliberately overrides to false since the version is always
+      # the caller-supplied, explicitly pinned value above, never
+      # resolved implicitly by the module/API.
+      most_recent = false
+    }
+  }
+
   access_entries = {
     admin = {
       principal_arn = var.admin_principal_arn

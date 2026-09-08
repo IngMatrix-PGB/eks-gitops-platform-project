@@ -67,6 +67,16 @@ variable "capacity_type" {
   }
 }
 
+variable "pod_identity_agent_addon_version" {
+  type        = string
+  description = "Exact EKS Pod Identity Agent add-on version (e.g. \"v1.3.4-eksbuild.1\"). No static version table exists for this add-on - query `aws eks describe-addon-versions --addon-name eks-pod-identity-agent --kubernetes-version <cluster_version>` at real, future, separately authorized deploy time. No default - never most_recent, never a hardcoded guess."
+
+  validation {
+    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+-eksbuild\\.[0-9]+$", var.pod_identity_agent_addon_version))
+    error_message = "pod_identity_agent_addon_version must match the EKS add-on version shape (e.g. v1.3.4-eksbuild.1) - a static format check only, never a real AWS lookup."
+  }
+}
+
 variable "owner" {
   type        = string
   description = "GitHub handle of the resource owner, passed through to modules/tags. No default - must be explicitly supplied."
