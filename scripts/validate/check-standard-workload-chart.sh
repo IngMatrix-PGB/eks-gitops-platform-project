@@ -129,9 +129,54 @@ done
 [ "$fail" -eq 0 ] && echo "OK: Restricted-PSS fields present in both rendered environments"
 
 # --- Service selector matches Deployment pod-template labels (duplicate/mismatch guard) ---
+#
+# Phase 3.2.1: structural (indentation-bounded) extraction, replacing
+# the previous "selector:"-to-"ports:" / "template:"-to-"annotations:"
+# sed ranges, which silently broke if either literal next-sibling key
+# ever changed or moved. yaml_indented_block locates a key line, records
+# ITS OWN indentation, and returns exactly the lines nested strictly
+# more than that - the real YAML rule for "this mapping has ended" -
+# never assuming what key (if any) comes next. Verified byte-for-byte
+# equivalent output against this chart's real staging/production
+# renders before this change was made.
+#
+# yaml_indented_block <key-line, trimmed> - reads a YAML document on
+# stdin, prints the body of the first mapping/sequence whose own key
+# line (after trimming leading whitespace) equals <key-line>.
+yaml_indented_block() {
+  key="$1"
+  awk -v key="$key" '
+  {
+    line = $0
+    t = line
+    sub(/^[ \t]*/, "", t)
+    if (t == "") next
+    match(line, /^[ \t]*/)
+    ind = RLENGTH
+    if (anchor_indent == "") {
+      if (t == key) { anchor_indent = ind }
+      next
+    }
+    if (ind <= anchor_indent) exit
+    print
+  }'
+}
+
 for render in "$render_staging" "$render_production"; do
-  svc_sel="$(awk '/^kind: Service$/,/^---$/' "$render" | sed -n '/selector:/,/ports:/p' | grep 'app.kubernetes.io' | sort)"
-  dep_labels="$(awk '/^kind: Deployment$/,0' "$render" | sed -n '/template:/,/annotations:/p' | grep 'app.kubernetes.io' | sort)"
+  # "kind: X" and the "---" document separator are real YAML/Kubernetes
+  # structural markers (not a heuristic), so isolating each resource's
+  # own document this way is already correct - only the two sed ranges
+  # inside each document were fragile, and are what changed above.
+  svc_doc="$(awk '/^kind: Service$/,/^---$/' "$render")"
+  svc_sel="$(printf '%s\n' "$svc_doc" | yaml_indented_block 'selector:' | grep 'app.kubernetes.io' | sort)"
+  dep_doc="$(awk '/^kind: Deployment$/,0' "$render")"
+  # Narrow to spec.template first: the Deployment's OWN metadata.labels
+  # (a sibling, higher up the document) also contains a "labels:" key -
+  # narrowing to the template: block first is what makes the second
+  # yaml_indented_block call find spec.template.metadata.labels and not
+  # metadata.labels.
+  dep_template="$(printf '%s\n' "$dep_doc" | yaml_indented_block 'template:')"
+  dep_labels="$(printf '%s\n' "$dep_template" | yaml_indented_block 'labels:' | grep 'app.kubernetes.io' | sort)"
   for line in $(printf '%s\n' "$svc_sel" | tr -d ' '); do
     if ! printf '%s\n' "$dep_labels" | tr -d ' ' | grep -qF "$line"; then
       echo "FAIL: $render Service selector entry '$line' not found among Deployment pod-template labels" >&2
