@@ -158,9 +158,10 @@
     "externalSecret": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled"],
+      "required": ["enabled", "provider"],
       "properties": {
         "enabled": { "type": "boolean" },
+        "provider": { "type": "string", "enum": ["kubernetes", "aws"] },
         "secretStoreName": { "type": "string" },
         "sourceNamespace": { "type": "string" },
         "sourceSecretName": { "type": "string" },
@@ -170,36 +171,87 @@
         "key": { "type": "string" },
         "mountPath": { "type": "string" },
         "fileName": { "type": "string" },
-        "defaultMode": { "type": "integer", "minimum": 256, "maximum": 511 }
-      },
-      "if": {
-        "properties": { "enabled": { "const": true } }
-      },
-      "then": {
-        "required": [
-          "secretStoreName",
-          "sourceNamespace",
-          "sourceSecretName",
-          "sourceProperty",
-          "authServiceAccountName",
-          "refreshInterval",
-          "key",
-          "mountPath",
-          "fileName",
-          "defaultMode"
-        ],
-        "properties": {
-          "secretStoreName": { "type": "string", "minLength": 1 },
-          "sourceNamespace": { "type": "string", "minLength": 1 },
-          "sourceSecretName": { "type": "string", "minLength": 1 },
-          "sourceProperty": { "type": "string", "minLength": 1 },
-          "authServiceAccountName": { "type": "string", "minLength": 1 },
-          "refreshInterval": { "type": "string", "minLength": 1 },
-          "key": { "type": "string", "minLength": 1 },
-          "mountPath": { "type": "string", "minLength": 1 },
-          "fileName": { "type": "string", "minLength": 1 }
+        "defaultMode": { "type": "integer", "minimum": 256, "maximum": 511 },
+        "aws": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "region": { "type": "string" },
+            "secretName": { "type": "string" }
+          }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "enabled": { "const": true }, "provider": { "const": "kubernetes" } },
+            "required": ["enabled", "provider"]
+          },
+          "then": {
+            "required": [
+              "secretStoreName",
+              "sourceNamespace",
+              "sourceSecretName",
+              "sourceProperty",
+              "authServiceAccountName",
+              "refreshInterval",
+              "key",
+              "mountPath",
+              "fileName",
+              "defaultMode"
+            ],
+            "properties": {
+              "secretStoreName": { "type": "string", "minLength": 1 },
+              "sourceNamespace": { "type": "string", "minLength": 1 },
+              "sourceSecretName": { "type": "string", "minLength": 1 },
+              "sourceProperty": { "type": "string", "minLength": 1 },
+              "authServiceAccountName": { "type": "string", "minLength": 1 },
+              "refreshInterval": { "type": "string", "minLength": 1 },
+              "key": { "type": "string", "minLength": 1 },
+              "mountPath": { "type": "string", "minLength": 1 },
+              "fileName": { "type": "string", "minLength": 1 },
+              "aws": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "enabled": { "const": true }, "provider": { "const": "aws" } },
+            "required": ["enabled", "provider"]
+          },
+          "then": {
+            "required": [
+              "secretStoreName",
+              "refreshInterval",
+              "key",
+              "mountPath",
+              "fileName",
+              "defaultMode",
+              "aws"
+            ],
+            "properties": {
+              "secretStoreName": { "type": "string", "minLength": 1 },
+              "refreshInterval": { "type": "string", "minLength": 1 },
+              "key": { "type": "string", "minLength": 1 },
+              "mountPath": { "type": "string", "minLength": 1 },
+              "fileName": { "type": "string", "minLength": 1 },
+              "aws": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["region", "secretName"],
+                "properties": {
+                  "region": { "type": "string", "minLength": 1 },
+                  "secretName": { "type": "string", "minLength": 1 }
+                }
+              },
+              "sourceNamespace": { "const": "" },
+              "sourceSecretName": { "const": "" },
+              "sourceProperty": { "const": "message" },
+              "authServiceAccountName": { "const": "" }
+            }
+          }
+        }
+      ]
     },
     "podAnnotations": { "type": "object" },
     "podLabels": { "type": "object" }
