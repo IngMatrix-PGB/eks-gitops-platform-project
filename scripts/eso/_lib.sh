@@ -91,23 +91,11 @@ require_eso_chart() {
   fi
 }
 
-require_helm() {
-  if [ ! -x "$HELM_BIN" ]; then
-    echo "FAIL: $HELM_BIN not found or not executable - run 'make tools-install' first" >&2
-    exit 1
-  fi
-}
-
-# Explicit helm wrapper: project-local binary, isolated config/cache/data
-# under .local/helm/, project-local kubeconfig - never global state.
-phelm() {
-  HELM_CONFIG_HOME=".local/helm/config" \
-  HELM_CACHE_HOME=".local/helm/cache" \
-  HELM_DATA_HOME=".local/helm/data" \
-  HELM_REGISTRY_CONFIG=".local/helm/config/registry/config.json" \
-  KUBECONFIG="$PROJECT_KUBECONFIG" \
-    "$HELM_BIN" --kubeconfig "$PROJECT_KUBECONFIG" "$@"
-}
+# require_helm/phelm: shared with scripts/argocd/_lib.sh (Phase 3.2.1
+# consolidation - the two were byte-identical). HELM_BIN above must stay
+# set before this source line.
+# shellcheck source=../lib/helm.sh
+. scripts/lib/helm.sh
 
 # The 25 CRDs this chart's default values render - the single source of
 # truth this project checks CRD presence/count against everywhere.

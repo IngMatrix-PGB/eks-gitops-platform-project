@@ -29,23 +29,11 @@ require_argocd_chart() {
   fi
 }
 
-require_helm() {
-  if [ ! -x "$HELM_BIN" ]; then
-    echo "FAIL: $HELM_BIN not found or not executable - run 'make tools-install' first" >&2
-    exit 1
-  fi
-}
-
-# Explicit helm wrapper: project-local binary, isolated config/cache/data
-# under .local/helm/, project-local kubeconfig - never global state.
-phelm() {
-  HELM_CONFIG_HOME=".local/helm/config" \
-  HELM_CACHE_HOME=".local/helm/cache" \
-  HELM_DATA_HOME=".local/helm/data" \
-  HELM_REGISTRY_CONFIG=".local/helm/config/registry/config.json" \
-  KUBECONFIG="$PROJECT_KUBECONFIG" \
-    "$HELM_BIN" --kubeconfig "$PROJECT_KUBECONFIG" "$@"
-}
+# require_helm/phelm: shared with scripts/eso/_lib.sh (Phase 3.2.1
+# consolidation - the two were byte-identical). HELM_BIN above must stay
+# set before this source line.
+# shellcheck source=../lib/helm.sh
+. scripts/lib/helm.sh
 
 argocd_release_exists() {
   phelm list -n "$ARGOCD_NAMESPACE" -o json 2>/dev/null | grep -q "\"name\":\"${ARGOCD_RELEASE_NAME}\""

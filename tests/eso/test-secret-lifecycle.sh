@@ -155,17 +155,19 @@ for app in $GITOPS_GENERATED_APPS; do
   gitops_wait_for_synced_healthy "$app" 240
 done
 
+# Phase 3.2.1: the poll-until-timeout loop itself now lives in
+# wait_until (scripts/lab/_lib.sh) - this function only defines the
+# predicate and the timeout/interval, preserving its exact prior
+# behavior (same jsonpath, same default 90s timeout, same 3s interval,
+# silent on both outcomes, same 0/1 return).
+_wait_for_condition_predicate() {
+  _wfc_status="$(pkubectl get "$_wfc_resource" -n "$_wfc_ns" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$_wfc_status" = "True" ]
+}
 wait_for_condition() {
   # $1=resource $2=namespace $3=timeout-seconds
-  resource="$1"; ns="$2"; timeout="${3:-90}"
-  elapsed=0
-  while [ "$elapsed" -lt "$timeout" ]; do
-    status="$(pkubectl get "$resource" -n "$ns" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
-    [ "$status" = "True" ] && return 0
-    sleep 3
-    elapsed=$((elapsed + 3))
-  done
-  return 1
+  _wfc_resource="$1"; _wfc_ns="$2"; timeout="${3:-90}"
+  wait_until _wait_for_condition_predicate "$timeout" 3
 }
 
 # --- 7. both SecretStores Ready ---
@@ -238,16 +240,19 @@ echo "OK: staging and production workload Deployments are Available"
 # the first, the target Secret can still hold the PREVIOUS run's value
 # for up to one refreshInterval tick after step 5 provisions a new one.
 # A one-shot read here would be a false failure, not a real defect. ---
+# Phase 3.2.1: predicate extracted for wait_until (scripts/lab/_lib.sh);
+# same hardcoded 90s/3s, same echoed value on both outcomes.
+_wait_for_target_hash_predicate() {
+  _wfth_current="$(pkubectl get secret "$_wfth_target_secret" -n "$_wfth_ns" -o jsonpath='{.data.message}' 2>/dev/null | base64 -d 2>/dev/null | shasum -a 256 | awk '{print $1}')"
+  [ "$_wfth_current" = "$_wfth_expected_sha" ]
+}
 wait_for_target_hash() {
-  ns="$1"; target_secret="$2"; expected_sha="$3"
-  elapsed=0
-  while [ "$elapsed" -lt 90 ]; do
-    current="$(pkubectl get secret "$target_secret" -n "$ns" -o jsonpath='{.data.message}' 2>/dev/null | base64 -d 2>/dev/null | shasum -a 256 | awk '{print $1}')"
-    [ "$current" = "$expected_sha" ] && { echo "$current"; return 0; }
-    sleep 3
-    elapsed=$((elapsed + 3))
-  done
-  echo "${current:-<unavailable>}"
+  _wfth_ns="$1"; _wfth_target_secret="$2"; _wfth_expected_sha="$3"
+  if wait_until _wait_for_target_hash_predicate 90 3; then
+    echo "$_wfth_current"
+    return 0
+  fi
+  echo "${_wfth_current:-<unavailable>}"
   return 1
 }
 
@@ -259,22 +264,27 @@ wait_for_target_hash() {
 # transiently land on a Pod that is already terminating, and the
 # kubelet's own projected-volume sync loop needs its own bounded time
 # on top of that. Never prints the decoded content, only its hash. ---
+# Phase 3.2.1: predicate extracted for wait_until (scripts/lab/_lib.sh);
+# same hardcoded 90s/3s, same stale-value-persists quirk on a later
+# iteration with no Running pod (current/pod_name only reassigned
+# inside the `-n "$pod_name"` branch, exactly as before), same echoed
+# value+pod-name on both outcomes.
+_wait_for_mounted_hash_predicate() {
+  _wfmh_pod_name="$(pkubectl get pod -n "$_wfmh_pod_label_ns" -l "app.kubernetes.io/instance=platform-smoke-${_wfmh_ns}" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  if [ -n "$_wfmh_pod_name" ]; then
+    _wfmh_current="$(pkubectl exec -n "$_wfmh_pod_label_ns" "$_wfmh_pod_name" -- sha256sum /etc/secret/message 2>/dev/null | awk '{print $1}')"
+    [ "$_wfmh_current" = "$_wfmh_expected_sha" ]
+  else
+    return 1
+  fi
+}
 wait_for_mounted_hash() {
-  ns="$1"; pod_label_ns="$2"; expected_sha="$3"
-  elapsed=0
-  while [ "$elapsed" -lt 90 ]; do
-    pod_name="$(pkubectl get pod -n "$pod_label_ns" -l "app.kubernetes.io/instance=platform-smoke-${ns}" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-    if [ -n "$pod_name" ]; then
-      current="$(pkubectl exec -n "$pod_label_ns" "$pod_name" -- sha256sum /etc/secret/message 2>/dev/null | awk '{print $1}')"
-      if [ "$current" = "$expected_sha" ]; then
-        echo "${current} ${pod_name}"
-        return 0
-      fi
-    fi
-    sleep 3
-    elapsed=$((elapsed + 3))
-  done
-  echo "${current:-<unavailable>} ${pod_name:-<none>}"
+  _wfmh_ns="$1"; _wfmh_pod_label_ns="$2"; _wfmh_expected_sha="$3"
+  if wait_until _wait_for_mounted_hash_predicate 90 3; then
+    echo "${_wfmh_current} ${_wfmh_pod_name}"
+    return 0
+  fi
+  echo "${_wfmh_current:-<unavailable>} ${_wfmh_pod_name:-<none>}"
   return 1
 }
 
@@ -526,19 +536,21 @@ done
 # reverted spec are still mid-reconciliation) - self-heal completes
 # this on its own within a few minutes, but a stable, resource-level
 # check is required here rather than trusting the first "Synced" read.
+# Phase 3.2.1: predicate extracted for wait_until (scripts/lab/_lib.sh);
+# same default 180s timeout, same 5s interval (distinct from the other
+# three predicates' 3s - preserved via the explicit argument), same
+# OK/FAIL messages on stdout/stderr.
+_wait_for_no_out_of_sync_resources_predicate() {
+  _wfoosr_remaining="$(pkubectl get application "$_wfoosr_app" -n argocd -o jsonpath='{.status.resources[?(@.status=="OutOfSync")].kind}' 2>/dev/null)"
+  [ -z "$_wfoosr_remaining" ]
+}
 wait_for_no_out_of_sync_resources() {
-  app="$1"; timeout="${2:-180}"
-  elapsed=0
-  while [ "$elapsed" -lt "$timeout" ]; do
-    remaining="$(pkubectl get application "$app" -n argocd -o jsonpath='{.status.resources[?(@.status=="OutOfSync")].kind}' 2>/dev/null)"
-    if [ -z "$remaining" ]; then
-      echo "OK: Application/$app has zero OutOfSync resources"
-      return 0
-    fi
-    sleep 5
-    elapsed=$((elapsed + 5))
-  done
-  echo "FAIL: Application/$app still has OutOfSync resource(s) after ${timeout}s: $remaining" >&2
+  _wfoosr_app="$1"; timeout="${2:-180}"
+  if wait_until _wait_for_no_out_of_sync_resources_predicate "$timeout" 5; then
+    echo "OK: Application/$_wfoosr_app has zero OutOfSync resources"
+    return 0
+  fi
+  echo "FAIL: Application/$_wfoosr_app still has OutOfSync resource(s) after ${timeout}s: $_wfoosr_remaining" >&2
   return 1
 }
 for app in platform-bootstrap $GITOPS_GENERATED_APPS; do
