@@ -172,3 +172,25 @@ check_cluster_identity() {
   IDENTITY_DETAIL="cluster '$PROJECT_CLUSTER_NAME' matches the pinned baseline and is healthy"
   return 0
 }
+
+# wait_until <predicate-fn> <timeout-seconds> <interval-seconds>
+# Phase 3.2.1 consolidation: calls the shell function named by
+# <predicate-fn> (no arguments) every <interval-seconds> until it
+# exits 0 or <timeout-seconds> has elapsed. Returns 0 as soon as the
+# predicate succeeds, 1 on timeout. Prints nothing and sets no
+# variable itself - the predicate function communicates any result
+# (e.g. a captured value for the caller to echo) via its own
+# caller-visible variables, exactly as each poll-loop this replaces
+# already did before this helper existed. A function name (not an
+# eval'd string) is used deliberately, to avoid the quoting hazards of
+# building a shell command as text.
+wait_until() {
+  predicate_fn="$1"; timeout="$2"; interval="$3"
+  elapsed=0
+  while [ "$elapsed" -lt "$timeout" ]; do
+    "$predicate_fn" && return 0
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+  done
+  return 1
+}
