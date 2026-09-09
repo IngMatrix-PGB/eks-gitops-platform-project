@@ -456,6 +456,340 @@ run_negative_case "externalSecret with an unknown extra property" 'externalSecre
   defaultMode: 288
   notAllowed: "nope"'
 
+# =============================================================================
+# Phase 3.3.1: externalSecret.provider dual-provider contract
+# (kubernetes|aws). Schema/template contract only - no AWS account
+# exists, no cluster is used as an oracle for the "aws" provider (unlike
+# the kubernetes-provider dry-run above, which legitimately targets the
+# project's own kind cluster). All AWS-side data below is synthetic and
+# public (a fake region-shaped string, a logical secret name) - never a
+# real account ID, ARN, or credential.
+# =============================================================================
+
+# --- positive: a full standalone AWS-provider render, staging and
+# production, each with its own distinct secretStoreName/region/
+# secretName (mirrors the same never-shared-identity convention as the
+# real kubernetes-provider values-staging.yaml/values-production.yaml).
+# Built as a complete values file (not layered on values-staging.yaml,
+# which carries real kubernetes-only fields as non-default values that
+# would - correctly - trip the schema's provider-exclusivity rules; see
+# the negative case below that deliberately does layer on it). ---
+aws_fixture() {
+  env_name="$1"; store="$2"; region="$3"; secret_name="$4"
+  cat <<EOF
+image:
+  repository: ghcr.io/stefanprodan/podinfo
+  digest: "sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da"
+replicaCount: 1
+resources:
+  requests: { cpu: 25m, memory: 32Mi }
+  limits: { cpu: 100m, memory: 64Mi }
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile: { type: RuntimeDefault }
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: { drop: ["ALL"] }
+serviceAccount:
+  automountServiceAccountToken: false
+service:
+  port: 9898
+configMap:
+  uiMessage: "aws provider fixture (${env_name})"
+externalSecret:
+  enabled: true
+  provider: "aws"
+  secretStoreName: "${store}"
+  refreshInterval: "1m"
+  key: "message"
+  mountPath: "/etc/secret"
+  fileName: "message"
+  defaultMode: 288
+  aws:
+    region: "${region}"
+    secretName: "${secret_name}"
+EOF
+}
+
+aws_staging_fixture="$root/aws-staging-fixture.yaml"
+aws_production_fixture="$root/aws-production-fixture.yaml"
+aws_fixture "staging" "staging-aws-backend" "us-east-1" "eks-gitops-platform-project/staging/backend" > "$aws_staging_fixture"
+aws_fixture "production" "production-aws-backend" "us-east-1" "eks-gitops-platform-project/production/backend" > "$aws_production_fixture"
+
+aws_render_staging="$root/aws-staging.yaml"
+aws_render_production="$root/aws-production.yaml"
+echo "check-standard-workload-chart: helm lint (aws provider, staging fixture) ..."
+if ! "$HELM" lint "$CHART" -f "$aws_staging_fixture"; then
+  echo "FAIL: helm lint failed for the aws-provider staging fixture" >&2
+  fail=1
+fi
+echo "check-standard-workload-chart: helm lint (aws provider, production fixture) ..."
+if ! "$HELM" lint "$CHART" -f "$aws_production_fixture"; then
+  echo "FAIL: helm lint failed for the aws-provider production fixture" >&2
+  fail=1
+fi
+echo "check-standard-workload-chart: helm template (aws provider, staging fixture) ..."
+if ! "$HELM" template platform-smoke-staging-aws "$CHART" -f "$aws_staging_fixture" --namespace staging > "$aws_render_staging" 2>&1; then
+  echo "FAIL: helm template failed for the aws-provider staging fixture" >&2
+  cat "$aws_render_staging" >&2
+  fail=1
+fi
+echo "check-standard-workload-chart: helm template (aws provider, production fixture) ..."
+if ! "$HELM" template platform-smoke-production-aws "$CHART" -f "$aws_production_fixture" --namespace production > "$aws_render_production" 2>&1; then
+  echo "FAIL: helm template failed for the aws-provider production fixture" >&2
+  cat "$aws_render_production" >&2
+  fail=1
+fi
+if [ "$fail" -ne 0 ]; then
+  echo "check-standard-workload-chart: FAILED before the aws-provider content checks" >&2
+  exit 1
+fi
+echo "OK: aws-provider staging and production fixtures both lint and render successfully"
+
+# --- positive: aws-provider rendered-kind allowlist. Exactly one
+# ServiceAccount (the workload's own) - unlike the kubernetes provider,
+# no dedicated auth ServiceAccount is rendered, since Pod Identity
+# authenticates the ESO controller's own pod, never a per-SecretStore
+# identity. ---
+for render in "$aws_render_staging" "$aws_render_production"; do
+  kinds="$(grep -E '^kind: ' "$render" | sort)"
+  expected="$(printf 'kind: ConfigMap\nkind: Deployment\nkind: ExternalSecret\nkind: SecretStore\nkind: Service\nkind: ServiceAccount')"
+  if [ "$kinds" != "$expected" ]; then
+    echo "FAIL: $render (aws provider) rendered an unexpected kind set:" >&2
+    echo "$kinds" >&2
+    fail=1
+  fi
+done
+[ "$fail" -eq 0 ] && echo "OK: aws-provider rendered-kind allowlist matches exactly (one ServiceAccount, no extra auth identity) in both environments"
+
+# --- positive: no Secret ever rendered by the aws provider either ---
+for render in "$aws_render_staging" "$aws_render_production"; do
+  if grep -q '^kind: Secret$' "$render"; then
+    echo "FAIL: $render (aws provider) rendered a Secret manifest - not authorized" >&2
+    fail=1
+  fi
+done
+[ "$fail" -eq 0 ] && echo "OK: no Secret manifest rendered by the aws provider in either environment"
+
+# --- positive: SecretStore AWS shape - service/region present, auth
+# completely absent, and no serviceAccountRef/role/externalID/static
+# credential field anywhere in the render (contract-wide, not just
+# inside the SecretStore document - a stray field in any other document
+# would be just as much a violation). ---
+for render in "$aws_render_staging" "$aws_render_production"; do
+  store_doc="$(awk '/^kind: SecretStore$/,/^---$/' "$render")"
+  if ! printf '%s\n' "$store_doc" | grep -qE '^[[:space:]]*service: SecretsManager$'; then
+    echo "FAIL: $render (aws provider) SecretStore missing spec.provider.aws.service: SecretsManager" >&2
+    fail=1
+  fi
+  if ! printf '%s\n' "$store_doc" | grep -qE '^[[:space:]]*region: [^[:space:]]+$'; then
+    echo "FAIL: $render (aws provider) SecretStore missing an explicit spec.provider.aws.region" >&2
+    fail=1
+  fi
+  if grep -qE '^[[:space:]]*auth:[[:space:]]*$|serviceAccountRef|^[[:space:]]*role:|externalID|accessKeyID|secretAccessKey|sessionToken' "$render"; then
+    echo "FAIL: $render (aws provider) contains a forbidden auth/serviceAccountRef/role/externalID/static-credential field" >&2
+    fail=1
+  fi
+done
+[ "$fail" -eq 0 ] && echo "OK: aws-provider SecretStore has service/region set and zero auth/serviceAccountRef/role/externalID/static-credential fields in either environment"
+
+# --- positive: region and remote key are exactly the configured
+# synthetic values (proves the schema's aws.region/aws.secretName
+# actually flow through to the render, not merely "present in the
+# values file and never consumed" - the "no dead configuration" bar the
+# kubernetes-provider fields are already held to) ---
+staging_region="$(awk '/^kind: SecretStore$/,/^---$/' "$aws_render_staging" | sed -n 's/^[[:space:]]*region: //p')"
+production_region="$(awk '/^kind: SecretStore$/,/^---$/' "$aws_render_production" | sed -n 's/^[[:space:]]*region: //p')"
+staging_remote_key="$(awk '/^kind: ExternalSecret$/,/^---$/' "$aws_render_staging" | sed -n 's/^[[:space:]]*key: //p')"
+production_remote_key="$(awk '/^kind: ExternalSecret$/,/^---$/' "$aws_render_production" | sed -n 's/^[[:space:]]*key: //p')"
+if [ "$staging_region" = "us-east-1" ] && [ "$production_region" = "us-east-1" ]; then
+  echo "OK: aws-provider SecretStore region matches the configured value in both environments"
+else
+  echo "FAIL: aws-provider SecretStore region mismatch (staging='$staging_region' production='$production_region')" >&2
+  fail=1
+fi
+if [ "$staging_remote_key" = "eks-gitops-platform-project/staging/backend" ] && [ "$production_remote_key" = "eks-gitops-platform-project/production/backend" ]; then
+  echo "OK: aws-provider ExternalSecret remoteRef.key is the configured logical secret name (never an ARN) in both environments"
+else
+  echo "FAIL: aws-provider remoteRef.key mismatch (staging='$staging_remote_key' production='$production_remote_key')" >&2
+  fail=1
+fi
+
+# --- positive: staging and production aws-provider identities remain
+# distinct (same never-shared-identity bar as the kubernetes provider) ---
+if [ "$staging_remote_key" = "$production_remote_key" ]; then
+  echo "FAIL: aws-provider staging and production share the same remote secret name '$staging_remote_key'" >&2
+  fail=1
+else
+  echo "OK: aws-provider staging and production have distinct remote secret names"
+fi
+
+# --- positive: ExternalSecret points at the correct SecretStore (same
+# name this environment's own aws_fixture configured) ---
+for pair in "$aws_render_staging:staging-aws-backend" "$aws_render_production:production-aws-backend"; do
+  render="${pair%%:*}"; expected_store="${pair##*:}"
+  # secretStoreRef.name, not metadata.name (which appears earlier in
+  # the same document with the same "name:" key) - narrow to the
+  # secretStoreRef: block first, same disambiguation technique as the
+  # Deployment metadata.labels vs. spec.template.metadata.labels fix
+  # above.
+  actual_store="$(awk '/^kind: ExternalSecret$/,/^---$/' "$render" | awk '/secretStoreRef:/{f=1} f && /name:/{print; exit}' | sed -n 's/^[[:space:]]*name: //p')"
+  if [ "$actual_store" != "$expected_store" ]; then
+    echo "FAIL: $render (aws provider) ExternalSecret.spec.secretStoreRef.name='$actual_store', expected '$expected_store'" >&2
+    fail=1
+  fi
+done
+[ "$fail" -eq 0 ] && echo "OK: aws-provider ExternalSecret.spec.secretStoreRef.name matches its own environment's SecretStore in both environments"
+
+# --- positive: Deployment consumes the SAME target Secret name via the
+# SAME read-only volume/mount shape as the kubernetes provider - proves
+# templates/deployment.yaml needed zero changes for this contract ---
+for render in "$aws_render_staging" "$aws_render_production"; do
+  if ! grep -qE '^[[:space:]]*secretName: .+-secret$' "$render"; then
+    echo "FAIL: $render (aws provider) Deployment volume does not reference the chart's own target Secret name" >&2
+    fail=1
+  fi
+  if ! awk '/- name: secret$/{f=1} f && /mountPath:/{print; exit}' "$render" | grep -q .; then
+    echo "FAIL: $render (aws provider) has no 'secret' volumeMount" >&2
+    fail=1
+  fi
+done
+if grep -A2 '            - name: secret$' "$aws_render_staging" | grep -q 'readOnly: true' \
+  && grep -A2 '            - name: secret$' "$aws_render_production" | grep -q 'readOnly: true'; then
+  echo "OK: aws-provider secret volumeMount is readOnly: true in both environments, same as the kubernetes provider"
+else
+  echo "FAIL: aws-provider secret volumeMount is not readOnly: true in one or both environments" >&2
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "check-standard-workload-chart: FAILED (aws-provider content checks)" >&2
+  exit 1
+fi
+
+# --- negative: provider contract ---
+run_negative_case "unknown provider value" 'externalSecret:
+  enabled: true
+  provider: "azure"
+  secretStoreName: "x"
+  refreshInterval: "1m"
+  key: "message"
+  mountPath: "/etc/secret"
+  fileName: "message"
+  defaultMode: 288
+  aws:
+    region: "us-east-1"
+    secretName: "x"'
+
+run_negative_case "aws provider missing region" 'externalSecret:
+  enabled: true
+  provider: "aws"
+  secretStoreName: "x"
+  refreshInterval: "1m"
+  key: "message"
+  mountPath: "/etc/secret"
+  fileName: "message"
+  defaultMode: 288
+  aws:
+    secretName: "x"'
+
+run_negative_case "aws provider missing remote key (secretName)" 'externalSecret:
+  enabled: true
+  provider: "aws"
+  secretStoreName: "x"
+  refreshInterval: "1m"
+  key: "message"
+  mountPath: "/etc/secret"
+  fileName: "message"
+  defaultMode: 288
+  aws:
+    region: "us-east-1"'
+
+run_negative_case "aws provider enabled with no aws block at all (incomplete configuration)" 'externalSecret:
+  enabled: true
+  provider: "aws"'
+
+run_negative_case "kubernetes provider missing a kubernetes-required field (sourceNamespace)" 'externalSecret:
+  enabled: true
+  provider: "kubernetes"
+  secretStoreName: "x"
+  sourceNamespace: null
+  sourceSecretName: "local-backend-staging"
+  sourceProperty: "message"
+  authServiceAccountName: "staging-secretstore-reader"
+  refreshInterval: "1m"
+  key: "message"
+  mountPath: "/etc/secret"
+  fileName: "message"
+  defaultMode: 288'
+
+# Layered on values-staging.yaml (via run_negative_case's own -f
+# values-staging.yaml -f <fixture> harness): values-staging.yaml's own
+# sourceNamespace/sourceSecretName/authServiceAccountName are real,
+# non-default values - switching only "provider" to "aws" here proves
+# those real kubernetes-only values are correctly rejected as misplaced
+# configuration under the aws profile (not merely "absent", which the
+# harmless base-values.yaml defaults already prove is accepted, see the
+# positive aws_fixture renders above, which never touch values-
+# staging.yaml at all).
+run_negative_case "kubernetes-only fields (from values-staging.yaml) present under provider: aws" 'externalSecret:
+  provider: "aws"
+  aws:
+    region: "us-east-1"
+    secretName: "x"'
+
+run_negative_case "aws block present under provider: kubernetes" 'externalSecret:
+  enabled: true
+  provider: "kubernetes"
+  secretStoreName: "x"
+  sourceNamespace: "eso-source-staging"
+  sourceSecretName: "local-backend-staging"
+  sourceProperty: "message"
+  authServiceAccountName: "staging-secretstore-reader"
+  refreshInterval: "1m"
+  key: "message"
+  mountPath: "/etc/secret"
+  fileName: "message"
+  defaultMode: 288
+  aws:
+    region: "us-east-1"
+    secretName: "x"'
+
+# --- negative: none of these ever become part of the contract, for
+# either provider - each must be rejected as an unknown property (never
+# defined as a schema property at all, matching the EKS Pod Identity
+# contract's own explicit exclusions) ---
+for field_case in \
+  'auth block:auth: {}' \
+  'serviceAccountRef:serviceAccountRef: { name: "x" }' \
+  'role:role: "arn:aws:iam::aws:role/x"' \
+  'externalID:externalID: "x"' \
+  'AWS access key ID:accessKeyID: "not-a-real-access-key-id"' \
+  'AWS secret access key:secretAccessKey: "fake-not-a-real-secret"' \
+  'AWS session token:sessionToken: "fake-not-a-real-token"' \
+  ; do
+  desc="${field_case%%:*}"
+  kv="${field_case#*:}"
+  run_negative_case "$desc under externalSecret (aws profile)" "externalSecret:
+  enabled: true
+  provider: \"aws\"
+  secretStoreName: \"x\"
+  refreshInterval: \"1m\"
+  key: \"message\"
+  mountPath: \"/etc/secret\"
+  fileName: \"message\"
+  defaultMode: 288
+  aws:
+    region: \"us-east-1\"
+    secretName: \"x\"
+  $kv"
+done
+
 if [ "$fail" -ne 0 ]; then
   echo "check-standard-workload-chart: FAILED"
   exit 1

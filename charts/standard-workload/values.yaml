@@ -78,9 +78,30 @@ configMap:
 # .local/evidence/phase-2.6-external-secrets-plan.md §10-11.
 externalSecret:
   enabled: false
+  # Phase 3.3.1: which SecretStore backend templates/secretstore.yaml
+  # renders. Defaults to "kubernetes" - every existing environment
+  # values file (values-staging.yaml/values-production.yaml) omits this
+  # key and inherits this default via Helm's normal values merge, so
+  # their render is unaffected by this key's introduction. "aws" is the
+  # future EKS Pod Identity / Secrets Manager backend (not deployed by
+  # this phase - schema/template contract only, see
+  # .local/evidence/phase-3.3-eks-gitops-eso-aws-integration-plan.md).
+  provider: "kubernetes"
   # Name of the namespaced SecretStore this chart also renders
   # (templates/secretstore.yaml) when enabled.
   secretStoreName: ""
+  # --- provider: kubernetes only. Left at these harmless defaults
+  # (never touched by any "aws" profile values file) rather than
+  # removed from this base file: values-staging.yaml/values-
+  # production.yaml already rely on inheriting sourceProperty's default
+  # via Helm's normal deep-merge (they never set it themselves), so
+  # this file's defaults cannot be deleted without changing their
+  # render. values.schema.json's "aws" branch pins these same four
+  # fields to exactly these defaults ("" / "message") - not forbidden
+  # outright - so an "aws" profile values file harmlessly inherits them
+  # unused, while any values file that actually SETS one of them to
+  # something else under provider: aws is rejected as misplaced
+  # kubernetes-provider configuration. ---
   # Namespace holding the plain, imperatively-provisioned source Secret
   # the SecretStore's "kubernetes" provider reads from
   # (lab/eso/provision-source-secret.sh) - never the same namespace as
