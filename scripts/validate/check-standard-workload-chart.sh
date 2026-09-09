@@ -359,6 +359,79 @@ run_negative_case() {
   echo "OK: negative case '$desc' correctly rejected by values.schema.json"
 }
 
+# Phase 3.3.3: run_negative_case always layers its fixture on top of
+# values-staging.yaml, which sets sourceNamespace/sourceSecretName/
+# authServiceAccountName to real, non-default values - correct for a
+# "kubernetes" provider case (or one deliberately proving those values
+# leak through as a violation under "aws" - see the case that does
+# exactly that below), but wrong for an aws-provider case meant to
+# demonstrate one single, exact defect: layering on values-staging.yaml
+# would ALSO trip the aws-branch's kubernetes-field exclusion rules,
+# masking the one defect under test behind an unrelated one and
+# violating "cada fixture debe demostrar la causa exacta del rechazo".
+# This variant instead builds a complete, standalone aws-profile
+# fixture (values.yaml's own base + this fixture only, never values-
+# staging.yaml) so the only possible violation is the one deliberately
+# introduced, and asserts none of the three kubernetes-only field names
+# appear in the error output as extra corroboration.
+run_negative_case_aws() {
+  desc="$1"; external_secret_block="$2"
+  fixture="$root/aws-negative-$$.yaml"
+  cat > "$fixture" <<FIXEOF
+image:
+  repository: ghcr.io/stefanprodan/podinfo
+  digest: "sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da"
+replicaCount: 1
+resources:
+  requests: { cpu: 25m, memory: 32Mi }
+  limits: { cpu: 100m, memory: 64Mi }
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile: { type: RuntimeDefault }
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: { drop: ["ALL"] }
+serviceAccount:
+  automountServiceAccountToken: false
+service:
+  port: 9898
+configMap:
+  uiMessage: "negative case fixture"
+${external_secret_block}
+FIXEOF
+  set +e
+  lint_out="$("$HELM" lint "$CHART" -f "$fixture" 2>&1)"
+  lint_rc=$?
+  tmpl_out="$("$HELM" template x "$CHART" -f "$fixture" 2>&1)"
+  tmpl_rc=$?
+  set -e
+  rm -f "$fixture"
+  if [ "$lint_rc" -eq 0 ] || [ "$tmpl_rc" -eq 0 ]; then
+    echo "FAIL: negative case '$desc' did not fail (lint_rc=$lint_rc tmpl_rc=$tmpl_rc) - schema did not reject it" >&2
+    fail=1
+    return
+  fi
+  combined="$lint_out$tmpl_out"
+  if ! printf '%s' "$combined" | grep -qi "does not meet the specifications of the schema\|don't meet the specifications of the schema"; then
+    echo "FAIL: negative case '$desc' failed for a reason other than schema validation" >&2
+    printf '%s\n%s\n' "$lint_out" "$tmpl_out" >&2
+    fail=1
+    return
+  fi
+  if printf '%s' "$combined" | grep -qE "sourceNamespace|sourceSecretName|authServiceAccountName"; then
+    echo "FAIL: negative case '$desc' also reported an unrelated kubernetes-field violation - fixture is not isolated, cannot confirm the exact cause" >&2
+    printf '%s\n' "$combined" >&2
+    fail=1
+    return
+  fi
+  echo "OK: negative case '$desc' correctly rejected by values.schema.json (isolated aws-profile fixture, no unrelated violation)"
+}
+
 run_negative_case "malformed digest" 'image:
   repository: ghcr.io/stefanprodan/podinfo
   digest: "sha256:zzzz"'
@@ -686,7 +759,7 @@ run_negative_case "unknown provider value" 'externalSecret:
     region: "us-east-1"
     secretName: "x"'
 
-run_negative_case "aws provider missing region" 'externalSecret:
+run_negative_case_aws "aws provider missing region" 'externalSecret:
   enabled: true
   provider: "aws"
   secretStoreName: "x"
@@ -698,7 +771,7 @@ run_negative_case "aws provider missing region" 'externalSecret:
   aws:
     secretName: "x"'
 
-run_negative_case "aws provider missing remote key (secretName)" 'externalSecret:
+run_negative_case_aws "aws provider missing remote key (secretName)" 'externalSecret:
   enabled: true
   provider: "aws"
   secretStoreName: "x"
@@ -710,7 +783,7 @@ run_negative_case "aws provider missing remote key (secretName)" 'externalSecret
   aws:
     region: "us-east-1"'
 
-run_negative_case "aws provider enabled with no aws block at all (incomplete configuration)" 'externalSecret:
+run_negative_case_aws "aws provider enabled with no aws block at all (incomplete configuration)" 'externalSecret:
   enabled: true
   provider: "aws"'
 
@@ -775,7 +848,7 @@ for field_case in \
   ; do
   desc="${field_case%%:*}"
   kv="${field_case#*:}"
-  run_negative_case "$desc under externalSecret (aws profile)" "externalSecret:
+  run_negative_case_aws "$desc under externalSecret (aws profile)" "externalSecret:
   enabled: true
   provider: \"aws\"
   secretStoreName: \"x\"
@@ -789,6 +862,241 @@ for field_case in \
     secretName: \"x\"
   $kv"
 done
+
+# =============================================================================
+# Phase 3.3.2-3.3.3: statically validated aws-eks profile overlays
+# (values-staging-aws.yaml/values-production-aws.yaml) and Terraform<->
+# GitOps cross-validation. No Terraform state, no AWS account, no
+# cluster - every fact compared below comes from either this chart's
+# own render or a literal grepped directly out of terraform/envs/
+# identity/variables.tf (never re-typed as a duplicated policy, so a
+# future change to that file cannot silently drift out of sync with
+# this check without also failing it).
+# =============================================================================
+
+TF_IDENTITY_VARS="terraform/envs/identity/variables.tf"
+
+# tf_default <variable-name> - the exact literal `default = "..."`
+# value for that variable block in $TF_IDENTITY_VARS.
+tf_default() {
+  var="$1"
+  awk -v v="variable \"$var\"" '$0 ~ v {f=1} f {print} f && /^}/{exit}' "$TF_IDENTITY_VARS" \
+    | sed -n 's/^[[:space:]]*default[[:space:]]*=[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p'
+}
+
+# tf_region_regex - the exact regex string Terraform's own aws_region
+# variable validates against (terraform/envs/identity/variables.tf) -
+# reused directly, never hand-copied, so a future change to that regex
+# automatically flows into this check.
+tf_region_regex() {
+  awk '/^variable "aws_region"/,/^}/' "$TF_IDENTITY_VARS" | sed -n 's/.*regex("\([^"]*\)".*/\1/p'
+}
+
+tf_staging_secret_name="$(tf_default staging_secret_name)"
+tf_production_secret_name="$(tf_default production_secret_name)"
+tf_staging_namespace="$(tf_default staging_namespace)"
+tf_staging_service_account="$(tf_default staging_service_account)"
+tf_production_namespace="$(tf_default production_namespace)"
+tf_production_service_account="$(tf_default production_service_account)"
+tf_aws_region_regex="$(tf_region_regex)"
+
+for name in tf_staging_secret_name tf_production_secret_name tf_staging_namespace \
+  tf_staging_service_account tf_production_namespace tf_production_service_account tf_aws_region_regex; do
+  eval "val=\$$name"
+  if [ -z "$val" ]; then
+    echo "FAIL: could not extract $name from $TF_IDENTITY_VARS - Terraform<->GitOps cross-validation cannot proceed" >&2
+    fail=1
+  fi
+done
+if [ "$fail" -ne 0 ]; then
+  echo "check-standard-workload-chart: FAILED (Terraform variable extraction)" >&2
+  exit 1
+fi
+echo "OK: extracted staging/production secret_name, namespace, service_account defaults and the aws_region validation regex directly from $TF_IDENTITY_VARS"
+
+# --- positive: the tracked aws-eks overlay fixtures render, and their
+# aws.secretName/aws.region match Terraform's own values exactly ---
+aws_overlay_render_staging="$root/overlay-staging-aws.yaml"
+aws_overlay_render_production="$root/overlay-production-aws.yaml"
+if ! "$HELM" template platform-smoke-staging-aws "$CHART" -f "$CHART/values-staging-aws.yaml" --namespace staging > "$aws_overlay_render_staging" 2>&1; then
+  echo "FAIL: helm template failed for values-staging-aws.yaml" >&2
+  cat "$aws_overlay_render_staging" >&2
+  fail=1
+fi
+if ! "$HELM" template platform-smoke-production-aws "$CHART" -f "$CHART/values-production-aws.yaml" --namespace production > "$aws_overlay_render_production" 2>&1; then
+  echo "FAIL: helm template failed for values-production-aws.yaml" >&2
+  cat "$aws_overlay_render_production" >&2
+  fail=1
+fi
+if [ "$fail" -ne 0 ]; then
+  echo "check-standard-workload-chart: FAILED (aws-eks overlay renders)" >&2
+  exit 1
+fi
+echo "OK: values-staging-aws.yaml and values-production-aws.yaml both render successfully"
+
+overlay_remote_key() {
+  awk '/^kind: ExternalSecret$/,/^---$/' "$1" | sed -n 's/^[[:space:]]*key: //p'
+}
+overlay_region() {
+  awk '/^kind: SecretStore$/,/^---$/' "$1" | sed -n 's/^[[:space:]]*region: //p'
+}
+
+staging_overlay_key="$(overlay_remote_key "$aws_overlay_render_staging")"
+production_overlay_key="$(overlay_remote_key "$aws_overlay_render_production")"
+staging_overlay_region="$(overlay_region "$aws_overlay_render_staging")"
+production_overlay_region="$(overlay_region "$aws_overlay_render_production")"
+
+if [ "$staging_overlay_key" = "$tf_staging_secret_name" ]; then
+  echo "OK: values-staging-aws.yaml's remoteRef.key matches terraform/envs/identity's staging_secret_name default exactly ('$tf_staging_secret_name')"
+else
+  echo "FAIL: values-staging-aws.yaml remoteRef.key ('$staging_overlay_key') does not match Terraform's staging_secret_name default ('$tf_staging_secret_name')" >&2
+  fail=1
+fi
+if [ "$production_overlay_key" = "$tf_production_secret_name" ]; then
+  echo "OK: values-production-aws.yaml's remoteRef.key matches terraform/envs/identity's production_secret_name default exactly ('$tf_production_secret_name')"
+else
+  echo "FAIL: values-production-aws.yaml remoteRef.key ('$production_overlay_key') does not match Terraform's production_secret_name default ('$tf_production_secret_name')" >&2
+  fail=1
+fi
+# values.schema.json's own aws.region pattern is a hardcoded copy of
+# Terraform's regex (JSON Schema cannot read a .tf file at Helm-lint
+# time) - confirm the two literal strings still agree, so a future
+# change to either side is caught here instead of silently diverging.
+schema_region_pattern="$(sed -n 's/.*"pattern": "\(\^\[a-z\].*\)",$/\1/p' "$CHART/values.schema.json" | head -1)"
+if [ "$schema_region_pattern" = "$tf_aws_region_regex" ]; then
+  echo "OK: values.schema.json's aws.region pattern is byte-identical to Terraform's own aws_region validation regex"
+else
+  echo "FAIL: values.schema.json's aws.region pattern ('$schema_region_pattern') has drifted from Terraform's aws_region regex ('$tf_aws_region_regex')" >&2
+  fail=1
+fi
+if printf '%s' "$staging_overlay_region" | grep -qE "$tf_aws_region_regex" && printf '%s' "$production_overlay_region" | grep -qE "$tf_aws_region_regex"; then
+  echo "OK: both aws-eks overlays' region values match Terraform's own aws_region validation shape"
+else
+  echo "FAIL: an aws-eks overlay region does not match Terraform's aws_region validation shape (staging='$staging_overlay_region' production='$production_overlay_region')" >&2
+  fail=1
+fi
+
+# --- positive: controller namespace/ServiceAccount Terraform defaults
+# still match the real, live-verified identity (Phase 3.2/3.3
+# evidence) - protects against Terraform's own defaults silently
+# drifting away from the ESO release's actual namespace/ServiceAccount,
+# which this chart's values never re-derive on their own. ---
+if [ "$tf_staging_namespace" = "eso-staging" ] && [ "$tf_staging_service_account" = "eso-staging-external-secrets" ]; then
+  echo "OK: Terraform's staging controller namespace/ServiceAccount defaults match the live-verified identity (eso-staging/eso-staging-external-secrets)"
+else
+  echo "FAIL: Terraform's staging controller namespace/ServiceAccount defaults changed (namespace='$tf_staging_namespace' service_account='$tf_staging_service_account') - re-verify against the live cluster before proceeding" >&2
+  fail=1
+fi
+if [ "$tf_production_namespace" = "eso-production" ] && [ "$tf_production_service_account" = "eso-production-external-secrets" ]; then
+  echo "OK: Terraform's production controller namespace/ServiceAccount defaults match the live-verified identity (eso-production/eso-production-external-secrets)"
+else
+  echo "FAIL: Terraform's production controller namespace/ServiceAccount defaults changed (namespace='$tf_production_namespace' service_account='$tf_production_service_account') - re-verify against the live cluster before proceeding" >&2
+  fail=1
+fi
+
+# --- positive: staging and production remain fully distinct across
+# every cross-validated field (same never-shared-identity bar as the
+# kubernetes provider and as Terraform's own iam-policy-isolation
+# tests) ---
+isolation_fail=0
+[ "$tf_staging_secret_name" = "$tf_production_secret_name" ] && { echo "FAIL: Terraform's staging_secret_name and production_secret_name defaults are identical" >&2; isolation_fail=1; }
+[ "$tf_staging_namespace" = "$tf_production_namespace" ] && { echo "FAIL: Terraform's staging_namespace and production_namespace defaults are identical" >&2; isolation_fail=1; }
+[ "$tf_staging_service_account" = "$tf_production_service_account" ] && { echo "FAIL: Terraform's staging_service_account and production_service_account defaults are identical" >&2; isolation_fail=1; }
+[ "$staging_overlay_key" = "$production_overlay_key" ] && { echo "FAIL: values-staging-aws.yaml and values-production-aws.yaml resolve to the same remoteRef.key" >&2; isolation_fail=1; }
+if [ "$isolation_fail" -ne 0 ]; then
+  fail=1
+else
+  echo "OK: staging and production remain fully distinct across secret_name/namespace/service_account/remoteRef.key"
+fi
+
+# --- positive: the chart's own default (no aws-eks values file passed
+# at all) never accidentally activates the aws provider - this is what
+# guarantees the aws-eks profile can never activate in the current kind
+# lab, where no target ever passes an *-aws.yaml file ---
+default_provider_render="$root/default-provider-check.yaml"
+"$HELM" template default-provider-check "$CHART" --namespace default --show-only templates/secretstore.yaml > "$default_provider_render" 2>/dev/null || true
+if [ -s "$default_provider_render" ]; then
+  echo "FAIL: the chart's bare defaults (no environment values file) render a SecretStore at all - externalSecret.enabled must default to false" >&2
+  fail=1
+else
+  echo "OK: the chart's bare defaults render no SecretStore at all (externalSecret.enabled: false) - the aws-eks profile cannot activate by accident"
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "check-standard-workload-chart: FAILED (Terraform<->GitOps cross-validation)" >&2
+  exit 1
+fi
+
+# --- negative (self-test of the comparison logic, not the schema):
+# staging using production's secret name, and vice versa. There is no
+# schema rule that could reject this - "which literal string belongs to
+# which environment" is exactly what the positive cross-validation
+# above checks by comparing the TRACKED fixture files against
+# Terraform's own defaults. What's verified here instead is that the
+# comparison itself actually catches a real mismatch when one exists -
+# built as a standalone render (not layered on values-staging.yaml,
+# whose real kubernetes-only fields would trip the aws mutual-exclusion
+# rules for an unrelated reason and mask what this case means to test),
+# using Terraform's OWN production_secret_name default rather than a
+# hand-typed duplicate, so this can never silently stop testing the
+# real swap. ---
+swapped_fixture="$root/swapped-secret-name.yaml"
+aws_fixture "staging-claiming-production-secret" "staging-aws-backend" "us-east-1" "$tf_production_secret_name" > "$swapped_fixture"
+swapped_render="$root/swapped-secret-name-render.yaml"
+if ! "$HELM" template swap-check "$CHART" -f "$swapped_fixture" --namespace staging > "$swapped_render" 2>&1; then
+  echo "FAIL: the swapped-secret-name self-test fixture failed to render at all (expected: renders, but with the wrong content)" >&2
+  fail=1
+else
+  swapped_key="$(overlay_remote_key "$swapped_render")"
+  if [ "$swapped_key" = "$tf_staging_secret_name" ]; then
+    echo "FAIL: the swapped-secret-name self-test did not actually swap anything - the comparison logic above cannot be trusted" >&2
+    fail=1
+  elif [ "$swapped_key" = "$tf_production_secret_name" ]; then
+    echo "OK: confirmed the staging/production secret-name comparison logic correctly distinguishes a genuine swap (a staging overlay carrying production's secret name resolves to production's name, not staging's, exactly as the positive check above would catch if it happened in the tracked file)"
+  else
+    echo "FAIL: swapped-secret-name self-test produced an unexpected key '$swapped_key'" >&2
+    fail=1
+  fi
+fi
+
+run_negative_case_aws "aws provider with an empty region" 'externalSecret:
+  enabled: true
+  provider: "aws"
+  secretStoreName: "x"
+  refreshInterval: "1m"
+  key: "message"
+  mountPath: "/etc/secret"
+  fileName: "message"
+  defaultMode: 288
+  aws:
+    region: ""
+    secretName: "x"'
+
+run_negative_case_aws "aws provider with an invalid (non-region-shaped) region" 'externalSecret:
+  enabled: true
+  provider: "aws"
+  secretStoreName: "x"
+  refreshInterval: "1m"
+  key: "message"
+  mountPath: "/etc/secret"
+  fileName: "message"
+  defaultMode: 288
+  aws:
+    region: "not-a-region"
+    secretName: "x"'
+
+run_negative_case_aws "aws provider remote key is an ARN, not a logical name" 'externalSecret:
+  enabled: true
+  provider: "aws"
+  secretStoreName: "x"
+  refreshInterval: "1m"
+  key: "message"
+  mountPath: "/etc/secret"
+  fileName: "message"
+  defaultMode: 288
+  aws:
+    region: "us-east-1"
+    secretName: "arn:aws:secretsmanager:us-east-1:aws:secret:eks-gitops-platform-project/staging/backend"'
 
 if [ "$fail" -ne 0 ]; then
   echo "check-standard-workload-chart: FAILED"
