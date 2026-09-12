@@ -149,9 +149,25 @@ HOME="$global_home" \
   run_case "kubeconfig identical to the global kubeconfig" "kubeconfig_is_global" \
     "$GOOD_PROFILE" "$global_home/.kube/config" "$GOOD_CONTEXT" "$GOOD_CLUSTER" "$GOOD_REGION" "$GOOD_ENDPOINT" "$GOOD_REVISION" "$GOOD_REPO_URL"
 
-# kubeconfig identical to the project's own kind kubeconfig
+# kubeconfig identical to the project's own kind kubeconfig - the
+# file-existence check inside check_eks_cluster_identity() runs before
+# the same-path comparison this case actually exercises, so
+# $PROJECT_KUBECONFIG must exist as a plain file here. A clean checkout
+# (CI, or any machine that never ran `make lab-create`) has no such
+# file yet - create a placeholder only if missing, and remove it again
+# immediately after, never touching (or leaving behind) a real kind
+# kubeconfig a developer might already have.
+kind_kubeconfig_created=0
+if [ ! -f "$PROJECT_KUBECONFIG" ]; then
+  mkdir -p "$(dirname "$PROJECT_KUBECONFIG")"
+  echo "# fake kubeconfig fixture placeholder for offline test - no certs/tokens/keys" > "$PROJECT_KUBECONFIG"
+  kind_kubeconfig_created=1
+fi
 run_case "kubeconfig identical to the project's kind kubeconfig" "kubeconfig_is_kind" \
   "$GOOD_PROFILE" "$PROJECT_KUBECONFIG" "$GOOD_CONTEXT" "$GOOD_CLUSTER" "$GOOD_REGION" "$GOOD_ENDPOINT" "$GOOD_REVISION" "$GOOD_REPO_URL"
+if [ "$kind_kubeconfig_created" -eq 1 ]; then
+  rm -f "$PROJECT_KUBECONFIG"
+fi
 
 run_case "missing expected context" "missing_parameter" \
   "$GOOD_PROFILE" "$good_kubeconfig" "" "$GOOD_CLUSTER" "$GOOD_REGION" "$GOOD_ENDPOINT" "$GOOD_REVISION" "$GOOD_REPO_URL"
