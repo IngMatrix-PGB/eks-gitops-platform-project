@@ -52,7 +52,13 @@ provider local backend) that reconciles an imperative, out-of-Git
 source Secret into a target Secret ESO owns exclusively, mounted into
 the workload as a read-only volume — never an environment variable, and
 never a `Secret` manifest in Git. No Keycloak
-yet — postponed, not rejected (ADR-0008). No Terraform. `main` currently
+yet — postponed, not rejected (ADR-0008).
+
+**Phase 3.1–3.3.5 (Terraform EKS/network foundation, Pod Identity/Secrets
+Manager IaC, dual-provider secret contract, GitOps profile mechanism, and
+the EKS identity boundary) exist as code, offline-validated only.** See
+"AWS EKS profile" below — none of it is deployed, and no AWS account
+exists to deploy it against. `main` currently
 relies on process (PR + a passing `validate` check), not GitHub-enforced
 branch protection — this repository is private on GitHub Free, which
 does not offer branch protection or rulesets for a private repository
@@ -320,6 +326,48 @@ implemented one (0001–0003, 0006, 0007, 0008, 0009, and 0010 have code behind 
 make help      # list all available targets
 make validate  # run every documentation validation check
 ```
+
+## AWS EKS profile (`DESIGNED` / `STATICALLY VALIDATED` / `NOT DEPLOYED` / `NOT VALIDATED AGAINST AWS` — `ACTUAL COST: USD 0`)
+
+**Runs today, against the `kind` lab:** everything in "Current status"
+above — `make lab-create`, `make argocd-install`, `make gitops-bootstrap`
+(default `PROFILE=local-kind`), `make eso-install`, and every `*-test*`
+target. None of these touch AWS or require an AWS account.
+
+**Designed only, not deployed, no AWS account exists to deploy it against:**
+`terraform/envs/{network,eks,identity}` (VPC, EKS, Pod Identity Agent,
+per-environment IAM/KMS/Secrets Manager metadata, Pod Identity
+Associations); `charts/standard-workload`'s `aws` provider branch and its
+`values-staging-aws.yaml`/`values-production-aws.yaml` overlays;
+`gitops/bootstrap`'s `profile: aws-eks` (explicit-only, never the
+default); `scripts/lab/_lib.sh`'s `check_eks_cluster_identity()`. See
+ADR-0013, ADR-0014, and `docs/runbooks/eks-bootstrap-order.md` (a
+documented, not executed, future sequence).
+
+**Statically validated today, entirely offline:** `terraform fmt/init
+-backend=false/validate/test` (with `mock_provider "aws"`) for every
+Terraform root; `helm lint`/`helm template` for both chart providers and
+both GitOps profiles; `tests/lab/test-eks-identity-offline.sh` (a fake
+`kubectl` and a fake `aws` that fails immediately if invoked - proving
+the EKS identity check never shells out to the real AWS CLI). Run any of
+these with:
+
+```sh
+make validate
+make terraform-validate-offline
+make gitops-render
+make lab-test-eks-identity-offline
+```
+
+None of the above contacts AWS, mutates the `kind` cluster, or requires
+any credential.
+
+**Currently prohibited, project-wide, until an AWS account and budget
+exist:** `terraform plan`/`apply`/`destroy`/`import`/`refresh` against a
+real backend, any `aws` CLI invocation, and any mutation of
+`lab/gitops/bootstrap.sh`'s `aws-eks` branch past its own identity
+preflight (it deliberately stops before any `kubectl apply`, `helm
+install`, or equivalent - see ADR-0014).
 
 ## Safety
 
