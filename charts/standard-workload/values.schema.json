@@ -240,8 +240,18 @@
                 "additionalProperties": false,
                 "required": ["region", "secretName"],
                 "properties": {
-                  "region": { "type": "string", "minLength": 1 },
-                  "secretName": { "type": "string", "minLength": 1 }
+                  "region": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[a-z]{2}-[a-z]+-[0-9]$",
+                    "description": "Static AWS region name shape only, never checked against a real AWS endpoint - the exact same shape terraform/envs/identity's own aws_region variable validates (kept in sync by scripts/validate/check-standard-workload-chart.sh's Terraform<->GitOps cross-validation, which re-extracts that regex live from the .tf file rather than trusting this copy blindly)."
+                  },
+                  "secretName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "not": { "pattern": "^arn:" },
+                    "description": "The Secrets Manager secret's logical name, never a full ARN - mirrors terraform/modules/eso-identity/variables.tf's own secret_name validation (Phase 3.2: 'Must be a plain name, never a hardcoded ARN')."
+                  }
                 }
               },
               "sourceNamespace": { "const": "" },

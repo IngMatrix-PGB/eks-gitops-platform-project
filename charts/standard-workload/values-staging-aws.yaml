@@ -1,0 +1,40 @@
+# Phase 3.3.2: future aws-eks profile overlay for staging. Not consumed
+# by gitops/bootstrap/templates/applicationset.yaml yet - the live
+# ApplicationSet still only reads values-staging.yaml (kind/kubernetes
+# profile). This file is a statically validated, offline-only example/
+# fixture proving the chart's provider: aws contract renders correctly
+# for staging's own real identity - it does not create, and cannot
+# create, any AWS resource. See .local/evidence/phase-3.3-eks-gitops-
+# eso-aws-integration-plan.md and .local/evidence/phase-3.3.2-3.3.3-...
+# for the full design.
+#
+# Everything except externalSecret mirrors values-staging.yaml exactly -
+# only the secret backend changes, never the workload itself.
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
+
+configMap:
+  uiMessage: "podinfo staging — phase 3.3.2 aws-eks profile (not deployed)"
+
+# aws.region/aws.secretName below are cross-validated (scripts/validate/
+# check-standard-workload-chart.sh) against terraform/envs/identity/
+# variables.tf's own aws_region validation shape and staging_secret_name
+# default - never hand-invented, never an ARN, never an account ID.
+# sourceNamespace/sourceSecretName/sourceProperty/authServiceAccountName
+# are deliberately absent here (not "set to empty") - they inherit their
+# harmless kubernetes-only default from the chart's own values.yaml,
+# which is what values.schema.json's provider: aws branch requires.
+externalSecret:
+  enabled: true
+  provider: "aws"
+  secretStoreName: "staging-aws-backend"
+  aws:
+    region: "us-east-1"
+    secretName: "eks-gitops-platform-project/staging/backend"
