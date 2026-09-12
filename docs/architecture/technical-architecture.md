@@ -438,6 +438,63 @@ may start without SSO → the `management`-cluster ESO instance installed
 ADR-0005; Terraform must never store a secret's plaintext value in state.
 See ADR-0001 and ADR-0005.
 
+## AWS EKS Profile (Phase 3.3, `DESIGNED` / `STATICALLY VALIDATED` / `NOT DEPLOYED` / `NOT VALIDATED AGAINST AWS` — `ACTUAL COST: USD 0`)
+
+No EKS cluster exists. Nothing below has been applied against AWS. This
+section documents the offline-validated design connecting the pieces
+above into one chain, and the separate, parallel GitOps profile
+mechanism that would select it — neither is reachable from the current
+`kind` lab.
+
+### Infrastructure → Secret → workload chain
+
+```mermaid
+flowchart LR
+    TF["Terraform<br/>(terraform/envs/eks, envs/identity)"] --> EKS["EKS cluster + Pod Identity Agent"]
+    TF --> IAM["Per-environment IAM role"]
+    TF --> KMS["Per-environment KMS key"]
+    TF --> SM["Secrets Manager secret<br/>(metadata only)"]
+    TF --> PIA["Pod Identity Association<br/>(cluster, namespace, ServiceAccount)"]
+    EKS --> PIA
+    PIA --> ESO["ESO controller pod<br/>(eso-staging / eso-production)"]
+    IAM -.->|scoped, no wildcard| ESO
+    ESO -->|SecretsManager provider,<br/>no auth block| SM
+    KMS -.->|kms:Decrypt only| SM
+    ESO --> K8sSecret["Kubernetes Secret<br/>(namespaced, ESO-owned)"]
+    K8sSecret --> Workload["Workload volume<br/>(read-only mount)"]
+```
+
+Every box above is Terraform HCL and/or a chart template that exists
+and passes `terraform test`/`helm lint` offline (Phase 3.1–3.3.3) — none
+is a deployed resource.
+
+### Git → root Application → profile → Applications → overlays
+
+```mermaid
+flowchart LR
+    Repo["Git repository<br/>(this repo)"] --> Root["root Application<br/>platform-bootstrap"]
+    Root -->|helm chart| Boot["gitops/bootstrap chart"]
+    Boot -->|profile: local-kind<br/>(default)| ASetLocal["ApplicationSet<br/>generator: environments"]
+    Boot -->|profile: aws-eks<br/>(explicit only)| ASetAWS["ApplicationSet<br/>generator: awsEnvironments"]
+    ASetLocal --> AppS["Application: staging"]
+    ASetLocal --> AppP["Application: production"]
+    ASetAWS --> AppSAWS["Application: staging-aws"]
+    ASetAWS --> AppPAWS["Application: production-aws"]
+    AppS -->|values-staging.yaml| Chart["charts/standard-workload"]
+    AppP -->|values-production.yaml| Chart
+    AppSAWS -->|values-staging-aws.yaml| Chart
+    AppPAWS -->|values-production-aws.yaml| Chart
+```
+
+Both `ApplicationSet` branches are mutually exclusive by construction
+(Phase 3.3.4a) — a single render never produces both sets, and an
+unrecognized `profile` value fails the render closed rather than
+defaulting to either one. See ADR-0014 for the identity boundary that
+would need to be satisfied before a real `aws-eks` bootstrap could
+proceed past its own preflight step, and
+`docs/runbooks/eks-bootstrap-order.md` for the full future activation
+sequence (documented, not executed).
+
 ## Security and Trust Boundaries
 
 - `AppProject` per trust domain; Argo CD RBAC; a restricted set of
