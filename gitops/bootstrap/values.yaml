@@ -25,3 +25,30 @@ environments:
     namespace: staging
   - name: production
     namespace: production
+
+# Phase 3.3.4a: which environment list templates/applicationset.yaml's
+# generator uses. Defaults to "local-kind" - reproduces the render
+# above exactly, byte-for-byte, since every existing invocation
+# (`make gitops-render`/`make gitops-bootstrap`, no override) omits
+# this key and inherits this default via Helm's normal values merge.
+# "aws-eks" is DESIGNED / NOT DEPLOYED - selects awsEnvironments below
+# instead, never both at once (templates/applicationset.yaml branches
+# on this value; any value other than these two literal strings fails
+# the render closed - see .local/evidence/phase-3.3.4-aws-application-
+# bootstrap-addendum.md Section 9).
+profile: "local-kind"
+
+# aws-eks profile only (NOT DEPLOYED, STATICALLY VALIDATED offline):
+# exactly the 2 environments the addendum's Section 10 specifies,
+# consuming the tracked values-staging-aws.yaml/values-production-
+# aws.yaml overlays (Phase 3.3.2) via the same env-name convention
+# already used above (valueFiles: ["values-{{.env}}.yaml"]) - no
+# template change needed for that line. Distinct namespaces from the
+# local-kind environments above so both sets could never collide if
+# ever rendered together (they can't be - see the generator's
+# profile-exclusive branching).
+awsEnvironments:
+  - name: staging-aws
+    namespace: staging-aws
+  - name: production-aws
+    namespace: production-aws
