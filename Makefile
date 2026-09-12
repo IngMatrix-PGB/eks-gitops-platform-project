@@ -2,7 +2,7 @@
 
 .PHONY: help validate check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked \
 	check-standard-workload-chart check-tool-platforms-regression \
-	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle \
+	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle lab-test-eks-identity-offline \
 	argocd-chart-fetch argocd-render argocd-install argocd-status argocd-uninstall argocd-port-forward \
 	argocd-test-runtime-health argocd-test-lifecycle \
 	gitops-repo-setup gitops-repo-check gitops-repo-remove gitops-render gitops-bootstrap \
@@ -19,7 +19,7 @@ help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -71,6 +71,9 @@ lab-test: ## Read-only shape/identity checks against the existing project cluste
 
 lab-test-lifecycle: ## Mutating: proves create/destroy idempotency end-to-end (cluster must be absent first)
 	@sh tests/lab/test-idempotency.sh
+
+lab-test-eks-identity-offline: ## Phase 3.3.4b: fully offline positive/negative matrix for check_eks_cluster_identity() (fake kubectl/aws, no cluster, no AWS, no network - DESIGNED/NOT DEPLOYED)
+	@sh tests/lab/test-eks-identity-offline.sh
 
 argocd-chart-fetch: ## Download and checksum-verify the pinned Argo CD chart into .tools/charts/ (the only target allowed to fetch it)
 	@sh lab/argocd/chart-fetch.sh
