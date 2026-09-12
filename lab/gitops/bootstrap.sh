@@ -9,6 +9,18 @@
 # manifest for a non-default revision under .local/gitops/ and applies
 # that instead - the committed gitops/root-application.yaml is never
 # edited. Backs `make gitops-bootstrap`.
+#
+# Phase 3.3.4b: also accepts PROFILE=local-kind|aws-eks (default
+# local-kind - every existing invocation of this script, with no
+# PROFILE set, takes the exact same branch as before this parameter
+# existed, byte-for-byte unchanged messages/exit codes). "aws-eks" is
+# DESIGNED / NOT DEPLOYED / NOT VALIDATED AGAINST AWS - ACTUAL COST:
+# USD 0. It runs the fail-closed EKS identity preflight
+# (check_eks_cluster_identity(), scripts/lab/_lib.sh) and computes a
+# non-secret fingerprint, then stops deliberately - this script does
+# not yet apply any Application for aws-eks (no root-application-aws-
+# eks.yaml exists to apply, and none is created by this phase). Any
+# other PROFILE value fails closed immediately.
 set -eu
 
 if [ ! -f "scripts/lab/_lib.sh" ]; then
@@ -22,6 +34,12 @@ require_repo_root
 . scripts/argocd/_lib.sh
 # shellcheck source=../../scripts/gitops/_lib.sh
 . scripts/gitops/_lib.sh
+
+profile="${PROFILE:-local-kind}"
+
+case "$profile" in
+
+local-kind)
 
 revision="${REVISION:-$GITOPS_DEFAULT_REVISION}"
 
@@ -87,3 +105,38 @@ fi
 
 echo "OK: root Application '$GITOPS_ROOT_APP_NAME' applied and verified"
 echo "gitops-bootstrap: OK"
+;;
+
+aws-eks)
+
+# Every fact below is an explicit, required parameter - never a
+# default baked into Git, never a fallback to $PROJECT_KUBECONFIG or
+# any ambient kubeconfig/context. See docs/runbooks/eks-bootstrap-
+# order.md and docs/adr/0014-eks-application-identity-boundary.md.
+eks_kubeconfig="${EKS_KUBECONFIG:-}"
+eks_context="${EKS_CONTEXT:-}"
+eks_cluster_name="${EKS_CLUSTER_NAME:-}"
+eks_region="${EKS_REGION:-}"
+eks_endpoint="${EKS_ENDPOINT:-}"
+revision="${REVISION:-}"
+
+echo "gitops-bootstrap: profile=aws-eks (DESIGNED / NOT DEPLOYED / NOT VALIDATED AGAINST AWS - ACTUAL COST: USD 0). Running identity preflight only - this profile never applies anything yet."
+
+if ! check_eks_cluster_identity "$profile" "$eks_kubeconfig" "$eks_context" "$eks_cluster_name" "$eks_region" "$eks_endpoint" "$revision" "$GITOPS_REPO_URL"; then
+  echo "FAIL: aws-eks identity preflight rejected ($EKS_IDENTITY_CASE): $EKS_IDENTITY_DETAIL" >&2
+  exit 1
+fi
+echo "OK: aws-eks identity preflight passed - $EKS_IDENTITY_DETAIL"
+
+eks_fp="$(eks_identity_fingerprint "$profile" "$eks_context" "$eks_cluster_name" "$eks_region" "$eks_endpoint" "$revision" "$GITOPS_REPO_URL")"
+echo "OK: identity fingerprint (non-secret - profile/context/cluster/region/endpoint/revision/repoURL only): $eks_fp"
+
+echo "gitops-bootstrap: aws-eks preflight complete. Stopping here by design - no root-application-aws-eks.yaml exists to apply, and this phase (Phase 3.3.4b/3.3.5, EKS identity boundary only) authorizes no mutation against any EKS cluster. A future, separately authorized phase defines the actual apply step, per docs/runbooks/eks-bootstrap-order.md."
+;;
+
+*)
+echo "FAIL: unknown PROFILE '$profile' - must be exactly 'local-kind' or 'aws-eks'" >&2
+exit 1
+;;
+
+esac
