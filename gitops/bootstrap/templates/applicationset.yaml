@@ -42,9 +42,28 @@ spec:
   generators:
     - list:
         elements:
+          {{- /*
+          Phase 3.3.4a: profile-exclusive - exactly one of these two
+          ranges ever executes for a given render, never both, so this
+          ApplicationSet can never generate local-kind and aws-eks
+          Applications simultaneously. An unrecognized profile value
+          fails the render closed (Helm's `fail` aborts `helm
+          template`/`helm lint`/an Argo CD sync alike) - never a
+          silent fallback to either profile. See .local/evidence/
+          phase-3.3.4-aws-application-bootstrap-addendum.md Section 9.
+          */}}
+          {{- if eq .Values.profile "local-kind" }}
           {{- range .Values.environments }}
           - env: {{ .name }}
             namespace: {{ .namespace }}
+          {{- end }}
+          {{- else if eq .Values.profile "aws-eks" }}
+          {{- range .Values.awsEnvironments }}
+          - env: {{ .name }}
+            namespace: {{ .namespace }}
+          {{- end }}
+          {{- else }}
+          {{ fail (printf "gitops/bootstrap: unknown profile %q - must be exactly \"local-kind\" or \"aws-eks\"" .Values.profile) }}
           {{- end }}
   template:
     metadata:
