@@ -1,4 +1,8 @@
 {{- $gs := .Values.gracefulShutdown }}
+{{- $as := .Values.autoscaling }}
+{{- if and $as.enabled (lt (int $as.maxReplicas) (int $as.minReplicas)) }}
+{{- fail (printf "standard-workload: autoscaling.maxReplicas (%d) must be >= minReplicas (%d)" (int $as.maxReplicas) (int $as.minReplicas)) }}
+{{- end }}
 {{- if gt (add $gs.preStopSleepSeconds $gs.serverShutdownTimeoutSeconds 5) (int .Values.terminationGracePeriodSeconds) }}
 {{- fail (printf "standard-workload: gracefulShutdown.preStopSleepSeconds (%d) + serverShutdownTimeoutSeconds (%d) + 5 must not exceed terminationGracePeriodSeconds (%d)" (int $gs.preStopSleepSeconds) (int $gs.serverShutdownTimeoutSeconds) (int .Values.terminationGracePeriodSeconds)) }}
 {{- end }}
@@ -8,8 +12,16 @@ metadata:
   name: {{ include "standard-workload.fullname" . }}
   labels:
     {{- include "standard-workload.labels" . | nindent 4 }}
+  {{- if $as.enabled }}
+  annotations:
+    # Phase 2.8.2: tells Argo CD (gitops/bootstrap ignoreDifferences) that
+    # the HPA, not Git, owns spec.replicas of this Deployment.
+    eks-gitops-lab-lite.local/replicas-owner: hpa
+  {{- end }}
 spec:
+  {{- if not $as.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
   strategy:
     type: {{ .Values.strategy.type }}

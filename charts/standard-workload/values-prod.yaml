@@ -24,3 +24,14 @@ externalSecret:
   sourceNamespace: "eso-source-prod"
   sourceSecretName: "local-backend-prod"
   authServiceAccountName: "prod-secretstore-reader"
+
+# Phase 2.8.2: prod scales on CPU between 2 and 4 replicas (replicaCount
+# above is then not rendered - the HPA owns spec.replicas). The 60s
+# scale-down window is a lab value so the autoscaling test stays short;
+# the chart default is 300s.
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+  scaleDownStabilizationSeconds: 60

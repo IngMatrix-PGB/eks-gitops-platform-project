@@ -3,7 +3,9 @@ Phase 2.8.1: only with two or more replicas - a budget on a single
 replica protects nothing, and maxUnavailable (never minAvailable) keeps
 one voluntary eviction always possible.
 */ -}}
-{{- if ge (int .Values.replicaCount) 2 }}
+{{- /* Phase 2.8.2: with an HPA, the floor is minReplicas, not replicaCount. */ -}}
+{{- $floor := ternary .Values.autoscaling.minReplicas .Values.replicaCount .Values.autoscaling.enabled }}
+{{- if ge (int $floor) 2 }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:

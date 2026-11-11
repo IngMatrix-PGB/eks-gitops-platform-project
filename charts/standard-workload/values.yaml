@@ -162,5 +162,20 @@ networkPolicy:
   enabled: true
   ingressFromNamespaces: []
 
+# Phase 2.8.2 (ADR-0006 amendment): HorizontalPodAutoscaler on CPU
+# utilization (needs metrics-server on the cluster - installed per
+# workload cluster by lab/metrics-server/install.sh). When enabled, the
+# Deployment does NOT render spec.replicas - the HPA owns it - and the
+# PodDisruptionBudget follows minReplicas instead of replicaCount. Argo
+# CD ignores /spec/replicas on Deployments (gitops/bootstrap) so it never
+# fights the HPA. Off by default; on in values-prod.yaml only, and off in
+# the aws overlays until EKS has metrics-server (TAD R-14).
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+  scaleDownStabilizationSeconds: 300
+
 podAnnotations: {}
 podLabels: {}
