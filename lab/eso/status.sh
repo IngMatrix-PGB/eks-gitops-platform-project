@@ -21,6 +21,7 @@ fi
 require_repo_root
 # shellcheck source=../../scripts/eso/_lib.sh
 . scripts/eso/_lib.sh
+eso_require_workload_cluster
 require_helm
 
 if ! check_cluster_identity; then
