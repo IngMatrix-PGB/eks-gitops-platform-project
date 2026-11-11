@@ -5,9 +5,32 @@
 # Assumes the caller's working directory is the repository root - every
 # script in this project sources this file only after confirming that.
 
-PROJECT_CLUSTER_NAME="eks-gitops-lab-lite"
-PROJECT_KUBECONFIG=".local/kubeconfig"
+# Phase 2.7.3: LAB_CLUSTER selects which project cluster every helper
+# below targets, from a closed list. Unset or "lab-lite" reproduces the
+# single-cluster constants exactly as before (same name, same
+# kubeconfig path), so every pre-2.7.3 caller is unaffected. "hub" and
+# the spokes ("dev", "uat", "prod") are the lab-multicluster profile
+# (ADR-0015), each with its own kubeconfig - never shared, never the
+# global one. Any other value fails closed before anything runs.
+LAB_CLUSTER="${LAB_CLUSTER:-lab-lite}"
+case "$LAB_CLUSTER" in
+  lab-lite)
+    PROJECT_CLUSTER_NAME="eks-gitops-lab-lite"
+    PROJECT_KUBECONFIG=".local/kubeconfig"
+    ;;
+  hub|dev|uat|prod)
+    PROJECT_CLUSTER_NAME="eks-gitops-${LAB_CLUSTER}"
+    PROJECT_KUBECONFIG=".local/kubeconfig-${LAB_CLUSTER}"
+    ;;
+  *)
+    echo "FAIL: unknown LAB_CLUSTER '$LAB_CLUSTER' - expected exactly one of: lab-lite, hub, dev, uat, prod" >&2
+    exit 1
+    ;;
+esac
 PROJECT_KIND_CONTEXT="kind-${PROJECT_CLUSTER_NAME}"
+# The multicluster profile's spokes, in creation order. prod is opt-in
+# (ADR-0015, Phase 2.7.3 measurement) - see lab/multicluster/_lib.sh.
+LAB_MC_ALL_SPOKES="dev uat prod"
 PROJECT_NODE_IMAGE="kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed"
 PROJECT_K8S_VERSION="v1.36.4"
 KIND_BIN=".tools/bin/kind"

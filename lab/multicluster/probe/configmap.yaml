@@ -1,0 +1,14 @@
+# Phase 2.7.3 registration probe (ADR-0015, plan decision D3). The only
+# object the ephemeral `platform-probe` Applications created by
+# tests/multicluster/test-registration.sh ever sync into a spoke. It
+# proves the hub's Argo CD reconciles into that spoke with the spoke's
+# namespace-scoped credential - nothing more. Never part of the
+# platform AppProject or any long-lived Application.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: registration-probe
+  labels:
+    eks-gitops-lab-lite.local/owner: registration-probe
+data:
+  purpose: "hub-to-spoke reconciliation probe (Phase 2.7.3)"

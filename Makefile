@@ -13,7 +13,9 @@
 	eso-test-runtime-health eso-test-lifecycle \
 	eso-provision-source-secret eso-test-secret-lifecycle eso-test-provision-source-secret-idempotency \
 	terraform-fmt terraform-init terraform-validate terraform-test terraform-validate-offline \
-	check-terraform-offline check-terraform-offline-regression
+	check-terraform-offline check-terraform-offline-regression \
+	lab-mc-create lab-mc-destroy lab-mc-status mc-spoke-register mc-spoke-deregister \
+	lab-mc-test-lifecycle mc-test-registration
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
@@ -71,6 +73,31 @@ lab-test: ## Read-only shape/identity checks against the existing project cluste
 
 lab-test-lifecycle: ## Mutating: proves create/destroy idempotency end-to-end (cluster must be absent first)
 	@sh tests/lab/test-idempotency.sh
+
+# Phase 2.7.3 (ADR-0015): lab-multicluster profile - the `management` hub
+# plus one kind cluster per spoke. Every lab target above also accepts
+# LAB_CLUSTER=lab-lite|hub|dev|uat|prod (default lab-lite), e.g.
+# `make argocd-install LAB_CLUSTER=hub`.
+lab-mc-create: ## Phase 2.7.3: create the hub + spokes (SPOKES=dev,uat default; prod opt-in); refuses while lab-lite exists or Docker memory is short
+	@sh lab/multicluster/create.sh
+
+lab-mc-destroy: ## Phase 2.7.3: destroy every lab-multicluster member (spokes first, hub last); never touches lab-lite
+	@sh lab/multicluster/destroy.sh
+
+lab-mc-status: ## Phase 2.7.3: read-only identity, registration (never the token), and memory report for every member
+	@sh lab/multicluster/status.sh
+
+mc-spoke-register: ## Phase 2.7.3: register SPOKE=<dev|uat|prod> with the hub's Argo CD (namespace-scoped RBAC, 24h token; re-run rotates it)
+	@sh lab/multicluster/spoke-register.sh $(SPOKE)
+
+mc-spoke-deregister: ## Phase 2.7.3: remove SPOKE=<dev|uat|prod> from the hub and delete its access objects (keeps the workload namespace)
+	@sh lab/multicluster/spoke-deregister.sh $(SPOKE)
+
+lab-mc-test-lifecycle: ## Phase 2.7.3: mutating create/no-op/destroy/no-op proof for the multicluster profile (no member may exist first)
+	@sh tests/multicluster/test-lifecycle.sh
+
+mc-test-registration: ## Phase 2.7.3: mutating registration/rotation/RBAC/cross-token/probe/deregistration proof (requires REVISION=<pushed branch>)
+	@sh tests/multicluster/test-registration.sh
 
 lab-test-eks-identity-offline: ## Phase 3.3.4b: fully offline positive/negative matrix for check_eks_cluster_identity() (fake kubectl/aws, no cluster, no AWS, no network - DESIGNED/NOT DEPLOYED)
 	@sh tests/lab/test-eks-identity-offline.sh
