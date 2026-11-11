@@ -1,9 +1,9 @@
 #!/bin/sh
 # Mutating pre-merge test for Phase 2.6.3a's retire-appproject-kind.sh
 # (Gap 3). Proves the full 8-step drain/resume sequence against
-# staging's own live SecretStore/ExternalSecret/target Secret (the
+# uat's own live SecretStore/ExternalSecret/target Secret (the
 # plan's actual, currently-deployed contract - never a synthetic
-# stand-in). Restores staging to its pre-test Ready state at the end.
+# stand-in). Restores uat to its pre-test Ready state at the end.
 # Never prints a decoded secret value - every comparison is a SHA256
 # hash, an ownerReference kind, or a status string. Backs
 # `make gitops-test-appproject-kind-retirement` only.
@@ -31,17 +31,17 @@ if ! argocd_release_exists; then
   exit 1
 fi
 
-env_name="staging"
-app="platform-smoke-staging"
-secretstore_name="staging-kubernetes-backend"
-externalsecret_name="platform-smoke-staging-standard-workload-secret"
+env_name="uat"
+app="platform-smoke-uat"
+secretstore_name="uat-kubernetes-backend"
+externalsecret_name="platform-smoke-uat-standard-workload-secret"
 target_secret_name="$externalsecret_name"
 fail=0
 
 if ! pkubectl get secretstore "$secretstore_name" -n "$env_name" >/dev/null 2>&1 \
   || ! pkubectl get externalsecret "$externalsecret_name" -n "$env_name" >/dev/null 2>&1 \
   || ! pkubectl get secret "$target_secret_name" -n "$env_name" >/dev/null 2>&1; then
-  echo "FAIL: precondition failed - staging's SecretStore/ExternalSecret/target Secret must already exist and be Ready before this test runs" >&2
+  echo "FAIL: precondition failed - uat's SecretStore/ExternalSecret/target Secret must already exist and be Ready before this test runs" >&2
   exit 1
 fi
 

@@ -18,7 +18,7 @@ metadata:
 spec:
   description: >-
     Phase 2.6.2 platform environments. Exact-scoped: one source repo,
-    staging/production destinations only, one minimal cluster grant
+    dev/uat/prod destinations only, one minimal cluster grant
     (Namespace), exactly the 6 kinds the workload chart renders.
   sourceRepos:
     - {{ .Values.repoURL }}

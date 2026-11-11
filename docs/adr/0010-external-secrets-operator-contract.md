@@ -3,6 +3,16 @@
 **Status:** Accepted
 **Date:** 2026-09-03
 
+> **Update (2026-11-10, Phase 2.7.1 / ADR-0015):** the local lab's
+> environments were renamed `staging` → `uat` and `production` → `prod`,
+> and `dev` was added. The contract below is unchanged in shape: there
+> are now **three** scoped releases — `eso-uat` (still the sole owner of
+> the webhook/cert-controller singletons), `eso-dev`, and `eso-prod` (both
+> dependents). The uninstall guard refuses `uat` while **any** dependent
+> exists, `eso-status` checks the singleton for every dependent, and the
+> collision gate checks every pair of releases. Names in the original
+> text below are kept as written at the time of the decision.
+
 ## Context
 
 Phase 2.6 introduces External Secrets Operator (ESO) support ahead of any

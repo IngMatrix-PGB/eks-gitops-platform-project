@@ -1,6 +1,6 @@
 #!/bin/sh
-# Creates ONLY the pinned lab-lite kind cluster - never staging/
-# production/ApplicationSet/AppProject/Argo CD resources (see ADR-0001,
+# Creates ONLY the pinned lab-lite kind cluster - never uat/
+# prod/ApplicationSet/AppProject/Argo CD resources (see ADR-0001,
 # ADR-0002). Exact idempotency contract: an existing cluster that
 # matches the pinned baseline is a no-op (exit 0); an existing cluster
 # under the same name that does not match is a failure (nonzero, no

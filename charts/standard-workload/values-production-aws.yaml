@@ -1,6 +1,6 @@
 # Phase 3.3.2: future aws-eks profile overlay for production. Not
 # consumed by gitops/bootstrap/templates/applicationset.yaml yet - the
-# live ApplicationSet still only reads values-production.yaml (kind/
+# live ApplicationSet still only reads values-prod.yaml (kind/
 # kubernetes profile). This file is a statically validated, offline-only
 # example/fixture proving the chart's provider: aws contract renders
 # correctly for production's own real identity - it does not create,
@@ -8,7 +8,7 @@
 # eks-gitops-eso-aws-integration-plan.md and .local/evidence/phase-
 # 3.3.2-3.3.3-... for the full design.
 #
-# Everything except externalSecret mirrors values-production.yaml
+# Everything except externalSecret mirrors values-prod.yaml
 # exactly - only the secret backend changes, never the workload itself.
 replicaCount: 1
 

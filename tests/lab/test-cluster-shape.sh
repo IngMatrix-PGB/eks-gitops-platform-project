@@ -37,7 +37,7 @@ else
   fail=1
 fi
 
-for ns in staging production argocd; do
+for ns in uat prod argocd; do
   if pkubectl get namespace "$ns" >/dev/null 2>&1; then
     echo "FAIL: unexpected namespace '$ns' exists - Phase 2.1 must not create it" >&2
     fail=1

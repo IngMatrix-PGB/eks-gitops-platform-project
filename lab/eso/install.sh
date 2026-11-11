@@ -8,10 +8,11 @@
 #      release can never delete them (this chart's CRDs are plain
 #      templates with no retention annotation; a Helm release that
 #      owned them would delete them on `helm uninstall`).
-#   2. Two scoped ("scopedRBAC") Helm releases, `eso-staging` and
-#      `eso-production`, each watching exactly one workload namespace.
-#      Only `eso-staging` runs the webhook/cert-controller - both are
-#      cluster-wide singletons by construction (see scripts/eso/_lib.sh).
+#   2. Three scoped ("scopedRBAC") Helm releases, `eso-uat`, `eso-dev`
+#      and `eso-prod`, each watching exactly one workload namespace,
+#      installed in that order (singleton owner first). Only `eso-uat`
+#      runs the webhook/cert-controller - both are cluster-wide
+#      singletons by construction (see scripts/eso/_lib.sh).
 #
 # Requires the project kind cluster to already exist and match its
 # expected identity, the pinned Helm binary, and the pinned chart
@@ -97,7 +98,7 @@ $(eso_crd_names)
 EOF
 echo "OK: 25 CRDs applied and Established"
 
-# --- 2. two scoped controller releases ---
+# --- 2. three scoped controller releases (eso_environments order) ---
 while IFS='|' read -r env_name ns release webhook_create cert_create; do
   [ -z "$env_name" ] && continue
 

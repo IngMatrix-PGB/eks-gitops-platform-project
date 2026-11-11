@@ -16,15 +16,17 @@ project:
 # per-environment one, is therefore the correct shape now.
 workloadChartPath: charts/standard-workload
 
-# Exactly two environments. Adding a third here is intentionally not
-# supported by templates/applicationset.yaml without an explicit,
-# separately-reviewed change - Phase 2.3/2.4 authorize staging/production
-# only.
+# Exactly three environments, matching the dev/uat/prod spokes of
+# ADR-0015 (simulated as namespaces in lab-lite). Adding a fourth is
+# intentionally not supported without an explicit, separately-reviewed
+# change - lab/gitops/render.sh asserts exactly these three.
 environments:
-  - name: staging
-    namespace: staging
-  - name: production
-    namespace: production
+  - name: dev
+    namespace: dev
+  - name: uat
+    namespace: uat
+  - name: prod
+    namespace: prod
 
 # Phase 3.3.4a: which environment list templates/applicationset.yaml's
 # generator uses. Defaults to "local-kind" - reproduces the render

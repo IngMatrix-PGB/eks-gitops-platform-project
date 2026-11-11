@@ -1,5 +1,5 @@
 #!/bin/sh
-# Uninstalls the two scoped controller releases and their operator
+# Uninstalls the three scoped controller releases and their operator
 # namespaces if left clean. Deliberately NEVER touches the 25 CRDs -
 # they are owned by no Helm release (see lab/eso/install.sh) and are
 # only ever removed by a separate, explicit, destructive step that
@@ -7,25 +7,25 @@
 # only). Idempotent: absent releases/namespaces are a no-op.
 #
 # Usage:
-#   sh lab/eso/uninstall.sh              # both, in order: production then staging
-#   sh lab/eso/uninstall.sh production   # production only - always safe
-#   sh lab/eso/uninstall.sh staging      # staging only - REFUSED while
-#                                        # production still exists (see
-#                                        # the singleton-dependency guard
-#                                        # below)
+#   sh lab/eso/uninstall.sh        # all three, in order: prod, dev, uat
+#   sh lab/eso/uninstall.sh prod   # prod only - always safe
+#   sh lab/eso/uninstall.sh dev    # dev only - always safe
+#   sh lab/eso/uninstall.sh uat    # uat only - REFUSED while dev or prod
+#                                  # still exists (see the singleton-
+#                                  # dependency guard below)
 #
-# eso-staging is the fixed owner of the cluster-wide webhook/cert-
-# controller singletons (scripts/eso/_lib.sh). eso-production has no
-# webhook or cert-controller of its own and depends on eso-staging's
-# for ExternalSecret/SecretStore admission validation and CA
-# management. Removing eso-staging while eso-production still exists
-# would silently break admission control for BOTH environments -
-# production would keep running with no visible symptom until the next
+# eso-uat is the fixed owner of the cluster-wide webhook/cert-
+# controller singletons (scripts/eso/_lib.sh). eso-dev and eso-prod
+# have no webhook or cert-controller of their own and depend on
+# eso-uat's for ExternalSecret/SecretStore admission validation and CA
+# management. Removing eso-uat while a dependent still exists would
+# silently break admission control for EVERY environment - the
+# dependent would keep running with no visible symptom until the next
 # ExternalSecret/SecretStore create or update, which would then hang or
-# fail validation. This is why production must always be uninstalled
-# first when removing both, and why removing staging alone is refused
-# outright while production still exists. Backs `make eso-uninstall`
-# (optionally `ENV=staging|production`).
+# fail validation. This is why every dependent is always uninstalled
+# first when removing all three, and why removing uat alone is refused
+# outright while any dependent still exists. Backs `make eso-uninstall`
+# (optionally `ENV=dev|uat|prod`).
 set -eu
 
 if [ ! -f "scripts/lab/_lib.sh" ]; then
@@ -45,33 +45,34 @@ if ! check_cluster_identity; then
 fi
 
 target="${1:-}"
-case "$target" in
-  ""|production|staging) : ;;
-  *)
-    echo "FAIL: unrecognized target '$target' - expected no argument, 'staging', or 'production'" >&2
-    exit 1
-    ;;
-esac
+if [ -n "$target" ] && ! eso_env_ns_release "$target" >/dev/null; then
+  echo "FAIL: unrecognized target '$target' - expected no argument, 'dev', 'uat', or 'prod'" >&2
+  exit 1
+fi
 
 if [ "$target" = "$ESO_SINGLETON_OWNER_ENV" ]; then
-  if eso_release_exists "$ESO_DEPENDENT_NS" "$ESO_DEPENDENT_RELEASE"; then
-    echo "FAIL: refusing to uninstall '$ESO_SINGLETON_OWNER_RELEASE' - it owns the cluster-wide webhook/cert-controller that '$ESO_DEPENDENT_RELEASE' depends on for admission validation, and '$ESO_DEPENDENT_RELEASE' still exists. Uninstall '$ESO_DEPENDENT_RELEASE' first (sh lab/eso/uninstall.sh $ESO_DEPENDENT_ENV), or uninstall both together with no argument." >&2
-    exit 1
-  fi
+  for dep_env in $(eso_dependent_envs); do
+    dep_pair="$(eso_env_ns_release "$dep_env")"
+    dep_ns="${dep_pair%%|*}"; dep_release="${dep_pair##*|}"
+    if eso_release_exists "$dep_ns" "$dep_release"; then
+      echo "FAIL: refusing to uninstall '$ESO_SINGLETON_OWNER_RELEASE' - it owns the cluster-wide webhook/cert-controller that '$dep_release' depends on for admission validation, and '$dep_release' still exists. Uninstall every dependent first (sh lab/eso/uninstall.sh $dep_env), or uninstall all three together with no argument." >&2
+      exit 1
+    fi
+  done
 fi
 
 if [ -z "$target" ]; then
-  envs="production staging"
+  envs="$(eso_uninstall_order)"
 else
   envs="$target"
 fi
 
-# production first, staging second when uninstalling both (fixed,
-# documented order) - reverse of install, matching this project's
-# established sync-wave-style "delete in reverse of create" discipline;
-# also exactly satisfies the singleton dependency above without a
-# special case, since staging (the dependency) is never touched before
-# production (the dependent) is already gone.
+# Every dependent first, uat (the singleton owner) last when
+# uninstalling all three (eso_uninstall_order: reverse of install,
+# matching this project's established sync-wave-style "delete in
+# reverse of create" discipline); also exactly satisfies the singleton
+# dependency above without a special case, since uat is never touched
+# before every dependent is already gone.
 for env_name in $envs; do
   ns=""
   release=""

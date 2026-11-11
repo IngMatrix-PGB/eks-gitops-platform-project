@@ -1,6 +1,6 @@
 # Phase 3.3.2: future aws-eks profile overlay for staging. Not consumed
 # by gitops/bootstrap/templates/applicationset.yaml yet - the live
-# ApplicationSet still only reads values-staging.yaml (kind/kubernetes
+# ApplicationSet still only reads values-uat.yaml (kind/kubernetes
 # profile). This file is a statically validated, offline-only example/
 # fixture proving the chart's provider: aws contract renders correctly
 # for staging's own real identity - it does not create, and cannot
@@ -8,7 +8,7 @@
 # eso-aws-integration-plan.md and .local/evidence/phase-3.3.2-3.3.3-...
 # for the full design.
 #
-# Everything except externalSecret mirrors values-staging.yaml exactly -
+# Everything except externalSecret mirrors values-uat.yaml exactly -
 # only the secret backend changes, never the workload itself.
 replicaCount: 1
 

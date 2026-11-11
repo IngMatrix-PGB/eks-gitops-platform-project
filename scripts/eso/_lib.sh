@@ -15,13 +15,13 @@
 # with no `helm.sh/resource-policy: keep` annotation, so a Helm release
 # that owned them WOULD delete them on `helm uninstall`). Two scoped,
 # namespace-restricted ("scopedRBAC") controller releases then each
-# watch exactly one workload namespace (`staging`/`production`). Only
-# ONE of the two releases runs the webhook and cert-controller
+# watch exactly one workload namespace (`dev`/`uat`/`prod`). Only
+# ONE of the three releases runs the webhook and cert-controller
 # components - both are cluster-wide singletons by construction (the
 # webhook's `ValidatingWebhookConfiguration` objects have fixed,
 # non-release-qualified names; cert-controller manages that same
-# cluster-wide webhook's CA) - running them from both releases would
-# collide, not merely duplicate. `eso-staging` is the arbitrary but
+# cluster-wide webhook's CA) - running them from more than one release would
+# collide, not merely duplicate. `eso-uat` is the arbitrary but
 # fixed owner of both singletons.
 
 ESO_CHART_VERSION="2.10.0"
@@ -63,19 +63,18 @@ ESO_NS_OWNER_LABEL_VALUE="eso-bootstrap"
 # makes ordinary idempotent re-installs work without force.
 ESO_CRD_FIELD_MANAGER="eks-gitops-lab-lite-eso-bootstrap"
 
-# eso-staging is the fixed, arbitrary owner of the cluster-wide
+# eso-uat is the fixed, arbitrary owner of the cluster-wide
 # webhook/cert-controller singletons (see the file header). This makes
 # that dependency explicit and checkable in code, not just in comments:
-# eso-production's admission validation (ExternalSecret/SecretStore)
-# and CA management depend on eso-staging's webhook/cert-controller
-# Deployments - removing eso-staging while eso-production still exists
-# would silently break admission control for both environments.
-ESO_SINGLETON_OWNER_ENV="staging"
-ESO_SINGLETON_OWNER_NS="eso-staging"
-ESO_SINGLETON_OWNER_RELEASE="eso-staging"
-ESO_DEPENDENT_ENV="production"
-ESO_DEPENDENT_NS="eso-production"
-ESO_DEPENDENT_RELEASE="eso-production"
+# every other release (eso-dev, eso-prod - the "dependents", i.e. every
+# eso_environments() row with webhook create=false) depends on
+# eso-uat's webhook/cert-controller Deployments for ExternalSecret/
+# SecretStore admission validation and CA management - removing eso-uat
+# while any dependent still exists would silently break admission
+# control for every environment.
+ESO_SINGLETON_OWNER_ENV="uat"
+ESO_SINGLETON_OWNER_NS="eso-uat"
+ESO_SINGLETON_OWNER_RELEASE="eso-uat"
 
 HELM_BIN=".tools/bin/helm"
 
@@ -179,7 +178,7 @@ eso_extract_crds() {
 }
 
 # Writes the values file for one scoped controller release. $1=env name
-# (staging|production) $2=webhook create (true|false) $3=cert-controller
+# (dev|uat|prod) $2=webhook create (true|false) $3=cert-controller
 # create (true|false) $4=output path. CRDs are always disabled here -
 # they are never rendered or owned by either scoped release (see the
 # file header). scopedRBAC converts every ClusterRole/ClusterRoleBinding
@@ -234,15 +233,35 @@ VALUESEOF
 }
 
 # One row per scoped controller release: env name | operator namespace |
-# release name | webhook create | cert-controller create. eso-staging
+# release name | webhook create | cert-controller create. eso-uat
 # is the fixed, arbitrary owner of the cluster-wide webhook/cert-
-# controller singletons (see the file header) - eso-production never
-# creates either.
+# controller singletons (see the file header) - eso-dev and eso-prod
+# never create either. Row order is install order (owner first);
+# eso_uninstall_order() is its reverse.
 eso_environments() {
   cat <<'EOF'
-staging|eso-staging|eso-staging|true|true
-production|eso-production|eso-production|false|false
+uat|eso-uat|eso-uat|true|true
+dev|eso-dev|eso-dev|false|false
+prod|eso-prod|eso-prod|false|false
 EOF
+}
+
+# Space-separated env names of every release that depends on the
+# singleton owner (webhook create=false), in eso_environments() order.
+eso_dependent_envs() {
+  eso_environments | awk -F'|' '$4=="false"{printf "%s%s", sep, $1; sep=" "} END{print ""}'
+}
+
+# Space-separated env names in safe uninstall order: every dependent
+# first (reverse of install order), the singleton owner last.
+eso_uninstall_order() {
+  eso_environments | awk -F'|' '{a[NR]=$1} END{for(i=NR;i>=1;i--){printf "%s%s", sep, a[i]; sep=" "} print ""}'
+}
+
+# Prints "<ns>|<release>" for env $1; prints nothing and returns 1 if
+# $1 is not a known environment.
+eso_env_ns_release() {
+  eso_environments | awk -F'|' -v e="$1" '$1==e{print $2"|"$3; found=1} END{exit found?0:1}'
 }
 
 eso_release_exists() {
@@ -252,7 +271,7 @@ eso_release_exists() {
 
 # Verifies, via metadata only (never a name-prefix guess), that a
 # namespaced object ($1 in "<resourcetype-with-group>/<name>" form, $2
-# its namespace) is owned by one of the two KNOWN, currently-deployed
+# its namespace) is owned by one of the KNOWN, currently-deployed
 # ESO scoped releases (from eso_environments()) - i.e. it is
 # legitimately Helm/ESO-owned content, not an unrelated foreign object
 # that merely happens to look similar. Checks, in order:
