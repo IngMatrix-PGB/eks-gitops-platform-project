@@ -18,9 +18,8 @@ boundaries.
   **own** External Secrets Operator instance; application workloads run
   only in spokes. `dev` deploys automatically on merge, `uat` and `prod`
   by reviewed PR. On AWS the target is one account per environment.
-  *The local lab already uses `dev`/`uat`/`prod` (Phase 2.7.1); the
-  aws-eks profile and Terraform still use the earlier
-  `staging`/`production` names until Phase 2.7.2.*
+  *The local lab (Phase 2.7.1), the aws-eks profile, and Terraform
+  (Phase 2.7.2) all use `dev`/`uat`/`prod`.*
 - **EKS Pod Identity** is the default workload identity mechanism; IRSA
   is an explicit compatibility path.
 - **External Secrets Operator + AWS Secrets Manager**, one ESO instance
@@ -42,8 +41,9 @@ GitOps bootstrap), Phase 2.4 (standard workload contract), Phase 2.5
 Operator bootstrap), Phase 2.6.2 (External Secrets workload
 contract), Phase 2.6.3a (transactional GitOps lifecycle and safe
 revision rollback), Phase 2.6.3b (source-secret idempotency and
-kubeconfig evidence hardening), and Phase 2.7.1 (`dev`/`uat`/`prod`
-environments in the local lab) are implemented** — a single, pinned `lab-lite`
+kubeconfig evidence hardening), Phase 2.7.1 (`dev`/`uat`/`prod`
+environments in the local lab), and Phase 2.7.2 (the same environments
+in the aws-eks profile and Terraform, offline) are implemented** — a single, pinned `lab-lite`
 `kind` cluster running a pinned, digest-verified Argo CD control plane,
 reconciling this repository's own `gitops/` directory over a read-only
 SSH deploy key into `dev`, `uat`, and `prod` namespaces, each
@@ -76,7 +76,7 @@ delivery roadmap for what exists versus what is proposed.
 | Phase | Scope | Status |
 |---|---|---|
 | 2.7.1 | `dev`/`uat`/`prod` in the local lab (`staging` → `uat`, `production` → `prod`, `dev` added, three ESO releases) | Implemented |
-| 2.7.2 | Same rename in the aws-eks profile and Terraform (offline) | `PROPOSED` |
+| 2.7.2 | Same rename in the aws-eks profile and Terraform, `dev` added there too (offline) | Implemented |
 | 2.7.3–2.7.4 | `lab-multicluster`: `management` hub + `dev`/`uat` spokes (`prod` opt-in) in `kind`; remote-cluster registration with least-privilege credentials; cluster-generator `ApplicationSet`; one ESO per spoke | `PROPOSED` |
 | 2.8 | Workload resilience in the standard chart: PodDisruptionBudget, topology spread, graceful shutdown, HPA, NetworkPolicy | `PROPOSED` |
 | 3.4 | Multi-account hub-and-spoke Terraform: organization guardrails, threat detection and config recording, budgets, Karpenter, immutable container registry with lifecycle rules (plan-only) | `PROPOSED` |
@@ -366,7 +366,7 @@ target. None of these touch AWS or require an AWS account.
 `terraform/envs/{network,eks,identity}` (VPC, EKS, Pod Identity Agent,
 per-environment IAM/KMS/Secrets Manager metadata, Pod Identity
 Associations); `charts/standard-workload`'s `aws` provider branch and its
-`values-staging-aws.yaml`/`values-production-aws.yaml` overlays;
+`values-{dev,uat,prod}-aws.yaml` overlays;
 `gitops/bootstrap`'s `profile: aws-eks` (explicit-only, never the
 default); `scripts/lab/_lib.sh`'s `check_eks_cluster_identity()`. See
 ADR-0013, ADR-0014, and `docs/runbooks/eks-bootstrap-order.md` (a

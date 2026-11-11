@@ -41,16 +41,18 @@ environments:
 profile: "local-kind"
 
 # aws-eks profile only (NOT DEPLOYED, STATICALLY VALIDATED offline):
-# exactly the 2 environments the addendum's Section 10 specifies,
-# consuming the tracked values-staging-aws.yaml/values-production-
-# aws.yaml overlays (Phase 3.3.2) via the same env-name convention
+# exactly the 3 spoke environments of ADR-0015 (renamed and extended in
+# Phase 2.7.2), consuming the tracked values-{dev,uat,prod}-aws.yaml
+# overlays via the same env-name convention
 # already used above (valueFiles: ["values-{{.env}}.yaml"]) - no
 # template change needed for that line. Distinct namespaces from the
 # local-kind environments above so both sets could never collide if
 # ever rendered together (they can't be - see the generator's
 # profile-exclusive branching).
 awsEnvironments:
-  - name: staging-aws
-    namespace: staging-aws
-  - name: production-aws
-    namespace: production-aws
+  - name: dev-aws
+    namespace: dev-aws
+  - name: uat-aws
+    namespace: uat-aws
+  - name: prod-aws
+    namespace: prod-aws

@@ -1,0 +1,37 @@
+# aws-eks profile overlay for uat (Phase 3.3.2; renamed and extended
+# to dev/uat/prod in Phase 2.7.2, ADR-0015). Consumed only by the
+# aws-eks profile of gitops/bootstrap (DESIGNED / NOT DEPLOYED). This
+# file is a statically validated, offline-only fixture proving the
+# chart's provider: aws contract renders correctly for uat's own
+# identity - it does not create, and cannot create, any AWS resource.
+#
+# Everything except externalSecret mirrors values-uat.yaml exactly -
+# only the secret backend changes, never the workload itself.
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
+
+configMap:
+  uiMessage: "podinfo uat — aws-eks profile (not deployed)"
+
+# aws.region/aws.secretName below are cross-validated (scripts/validate/
+# check-standard-workload-chart.sh) against terraform/envs/identity/
+# variables.tf's own aws_region validation shape and uat_secret_name
+# default - never hand-invented, never an ARN, never an account ID.
+# sourceNamespace/sourceSecretName/sourceProperty/authServiceAccountName
+# are deliberately absent here (not "set to empty") - they inherit their
+# harmless kubernetes-only default from the chart's own values.yaml,
+# which is what values.schema.json's provider: aws branch requires.
+externalSecret:
+  enabled: true
+  provider: "aws"
+  secretStoreName: "uat-aws-backend"
+  aws:
+    region: "us-east-1"
+    secretName: "eks-gitops-platform-project/uat/backend"

@@ -5,9 +5,9 @@
 # any aws_secretsmanager_secret_version anywhere in this file), and the
 # Pod Identity Association binding it all to the real, live-verified
 # (namespace, service_account) pair. Instantiated twice by
-# terraform/envs/identity/ (staging, production) - every ARN referenced
+# terraform/envs/identity/ (dev, uat, prod) - every ARN referenced
 # below is a Terraform resource attribute, never a hand-built string,
-# so staging and production can never accidentally cross-reference each
+# so no two environments can ever accidentally cross-reference each
 # other's role/key/secret.
 
 module "tags" {

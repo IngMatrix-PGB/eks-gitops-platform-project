@@ -9,11 +9,11 @@ variable "project" {
 
 variable "environment" {
   type        = string
-  description = "Environment name - exactly \"staging\", \"production\", or \"shared\" (for account/region-wide resources like the state bucket that are not specific to either workload environment)."
+  description = "Environment name - exactly \"dev\", \"uat\", \"prod\", or \"shared\" (for account/region-wide resources like the state bucket that are not specific to any one workload environment)."
 
   validation {
-    condition     = contains(["staging", "production", "shared"], var.environment)
-    error_message = "environment must be exactly \"staging\", \"production\", or \"shared\"."
+    condition     = contains(["dev", "uat", "prod", "shared"], var.environment)
+    error_message = "environment must be exactly \"dev\", \"uat\", \"prod\", or \"shared\"."
   }
 }
 

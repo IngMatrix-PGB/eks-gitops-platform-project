@@ -29,11 +29,11 @@ mock_provider "aws" {
   }
 }
 
-run "valid_environment_staging" {
+run "valid_environment_uat" {
   command = plan
 
   variables {
-    expected_environment = "staging"
+    expected_environment = "uat"
   }
 
   assert {
@@ -47,11 +47,11 @@ run "valid_environment_staging" {
   }
 }
 
-run "valid_environment_production_apply" {
+run "valid_environment_prod_apply" {
   command = apply
 
   variables {
-    expected_environment = "production"
+    expected_environment = "prod"
   }
 
   assert {
