@@ -53,7 +53,13 @@ echo "mc-up: [2/5] Argo CD on the hub ..."
 LAB_CLUSTER=hub sh lab/argocd/install.sh
 
 echo "mc-up: [3/5] repository Secret on the hub ..."
-LAB_CLUSTER=hub sh lab/gitops/repo-setup.sh
+# Already provisioned with the local deploy key -> nothing to do, and no
+# GitHub API call (repo-setup needs the owner's gh account active).
+if LAB_CLUSTER=hub sh -c '. scripts/lab/_lib.sh; . scripts/argocd/_lib.sh; . scripts/gitops/_lib.sh; gitops_repo_secret_matches_local_key'; then
+  echo "OK: hub repository Secret already present and matches the local deploy key - repo-setup skipped"
+else
+  LAB_CLUSTER=hub sh lab/gitops/repo-setup.sh
+fi
 
 threshold="$(date -u -v+"${min_h}"H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "+${min_h} hours" +%Y-%m-%dT%H:%M:%SZ)"
 escaped_env_key="$(printf '%s' "$LAB_MC_ENV_LABEL_KEY" | sed 's/\./\\./g')"
