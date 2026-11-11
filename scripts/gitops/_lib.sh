@@ -373,6 +373,19 @@ gitops_classify_namespaced_object() {
         echo "argocd-tracked"; return 0
       fi
       ;;
+    podmetrics.metrics.k8s.io/*)
+      # Phase 2.8.2: metrics-server's aggregated API serves one virtual,
+      # read-only PodMetrics per running pod - nothing is stored, and it
+      # disappears with its pod. It inherits that pod's classification:
+      # the Pod of exactly the same name in this namespace must itself
+      # resolve (ReplicaSet -> Deployment tracking-id) to this
+      # Application. Never a name-prefix guess.
+      pm_pod="pod/${obj#podmetrics.metrics.k8s.io/}"
+      if pkubectl -n "$ns" get "$pm_pod" >/dev/null 2>&1 \
+        && [ "$(gitops_classify_namespaced_object "$pm_pod" "$ns" "$expected_app")" = "argocd-tracked" ]; then
+        echo "argocd-tracked"; return 0
+      fi
+      ;;
   esac
 
   if eso_release_owns_object "$obj" "$ns"; then
