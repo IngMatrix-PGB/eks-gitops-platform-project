@@ -10,13 +10,17 @@ boundaries.
 ## Target architecture, in brief
 
 - **Terraform** provisions AWS infrastructure; **Argo CD**, running in
-  `management`, pulls desired state from Git and reconciles it toward
-  `staging`/`prod` after bootstrap.
-- **`management` / `staging` / `prod`** environments — `management` is
-  the control plane only (Argo CD, Keycloak for the local lab); each of
-  the three clusters runs its **own** External Secrets Operator instance
-  for the secrets it needs; application workloads run only in
-  `staging`/`prod`.
+  the `management` hub, pulls desired state from Git and reconciles it
+  toward the workload spokes after bootstrap.
+- **Hub and spoke** ([ADR-0015](docs/adr/0015-hub-and-spoke-environment-model.md)) —
+  `management` is the hub and control plane only (Argo CD, Keycloak for
+  the local lab); `dev`, `uat`, and `prod` are spokes, each running its
+  **own** External Secrets Operator instance; application workloads run
+  only in spokes. `dev` deploys automatically on merge, `uat` and `prod`
+  by reviewed PR. On AWS the target is one account per environment.
+  *The implemented code still uses the earlier `staging`/`production`
+  names; the rename to `uat` lands with the multicluster profile
+  (Phase 2.7).*
 - **EKS Pod Identity** is the default workload identity mechanism; IRSA
   is an explicit compatibility path.
 - **External Secrets Operator + AWS Secrets Manager**, one ESO instance
@@ -60,11 +64,27 @@ the EKS identity boundary) exist as code, offline-validated only.** See
 "AWS EKS profile" below — none of it is deployed, and no AWS account
 exists to deploy it against. `main` currently
 relies on process (PR + a passing `validate` check), not GitHub-enforced
-branch protection — this repository is private on GitHub Free, which
-does not offer branch protection or rulesets for a private repository
+branch protection. The repository is now public, so branch protection is
+available at no cost; applying it is a separately authorized step
 (ADR-0009). An `Accepted` ADR records an approved decision, not
 necessarily a fully implemented one. See the TAD's evidence table and
 delivery roadmap for what exists versus what is proposed.
+
+### What comes next
+
+| Phase | Scope | Status |
+|---|---|---|
+| 2.7 | `lab-multicluster`: `management` hub + `dev`/`uat` spokes (`prod` opt-in) in `kind`; remote-cluster registration with least-privilege credentials; cluster-generator `ApplicationSet`; `staging` → `uat` rename | `PROPOSED` |
+| 2.8 | Workload resilience in the standard chart: PodDisruptionBudget, topology spread, graceful shutdown, HPA, NetworkPolicy | `PROPOSED` |
+| 3.4 | Multi-account hub-and-spoke Terraform: organization guardrails, threat detection and config recording, budgets, Karpenter, immutable container registry with lifecycle rules (plan-only) | `PROPOSED` |
+| 5.1 | Image CI: build, vulnerability scan, SBOM, signing, push; tag-bump promotion `dev` → `uat` → `prod` | `PROPOSED` |
+| 5.2 | Terraform CI: `plan` on every PR, static analysis, `apply` against a local AWS emulator | `PROPOSED` |
+| 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | `PROPOSED` |
+| 6.2 | Backup and restore drill | `PROPOSED` |
+| 6.3 | Multi-language reference application with a data store, replacing `podinfo` | `PROPOSED` |
+
+Full detail and ordering live in the TAD's
+[Delivery Roadmap](docs/architecture/technical-architecture.md#delivery-roadmap).
 
 ## Local lab
 
@@ -192,8 +212,8 @@ this phase came before Keycloak/SSO, not instead of it.
 
 ## Repository governance
 
-Phase 2.5 applies the repository governance controls actually available
-on a **private repository on GitHub Free**: Dependabot vulnerability
+Phase 2.5 applied the repository governance controls that were available
+while this repository was **private on GitHub Free**: Dependabot vulnerability
 alerts and automated security updates are enabled; Dependabot version
 updates are configured for the one dependency ecosystem this repository
 actually has (`.github/dependabot.yml`, `github-actions` only); GitHub
@@ -201,17 +221,15 @@ Actions are restricted to GitHub-owned actions with immutable SHA
 pinning required platform-side; and the merge button only offers a real
 merge commit (squash and rebase merging are disabled).
 
-**`main` is not GitHub-protected.** Classic branch protection and
-repository rulesets both require GitHub Pro (or a public repository) for
-a private repository — confirmed directly against this repository's own
-API responses, not assumed from documentation. The owner chose to keep
-the repository private and stay on GitHub Free rather than pay for or
-give up privacy to unlock that feature. Until that changes, `main` is
-protected only by process: every change goes through a pull request,
-and a passing `validate` run is required before merge, by maintainer
-discipline rather than server-side enforcement. The exact ruleset design
-that would close this gap is fully specified and ready to apply,
-unchanged, the moment the plan or visibility decision changes — see
+**`main` is not GitHub-protected yet.** While the repository was
+private on GitHub Free, branch protection and rulesets were unavailable.
+The repository is now public, and as of 2026-11-10 the GitHub API
+reports `main` as available but `Branch not protected`. Until the
+ruleset is applied (a repository-settings change that needs its own
+explicit authorization), `main` is protected only by process: every
+change goes through a pull request, and a passing `validate` run is
+required before merge. The exact ruleset design is specified and ready
+to apply — see
 [ADR-0009](docs/adr/0009-repository-governance-baseline.md).
 
 ## Local lab: External Secrets Operator bootstrap
@@ -304,8 +322,10 @@ Secret lives outside both Git and Helm ownership.
 
 ## Architecture Decision Records
 
-All ten are `Accepted` — an approved decision, not necessarily a fully
-implemented one (0001–0003, 0006, 0007, 0008, 0009, and 0010 have code behind them today).
+All fifteen are `Accepted` — an approved decision, not necessarily a
+fully implemented one. 0001–0003 and 0006–0010 have runtime-tested code
+behind them; 0004 and 0011–0014 have offline-validated code only; 0005
+and 0015 are design decisions not yet implemented.
 
 | ADR | Decision |
 |---|---|
@@ -319,6 +339,11 @@ implemented one (0001–0003, 0006, 0007, 0008, 0009, and 0010 have code behind 
 | [0008](docs/adr/0008-standard-workload-before-sso.md) | Standard workload contract before SSO |
 | [0009](docs/adr/0009-repository-governance-baseline.md) | Repository governance baseline |
 | [0010](docs/adr/0010-external-secrets-operator-contract.md) | External Secrets Operator contract |
+| [0011](docs/adr/0011-terraform-foundation.md) | Terraform foundation |
+| [0012](docs/adr/0012-network-eks-iac-foundation.md) | Network and EKS IaC foundation |
+| [0013](docs/adr/0013-pod-identity-secrets-manager-iac.md) | EKS Pod Identity and AWS Secrets Manager IaC |
+| [0014](docs/adr/0014-eks-application-identity-boundary.md) | EKS application generation and identity boundary |
+| [0015](docs/adr/0015-hub-and-spoke-environment-model.md) | Hub-and-spoke environment model (`management` + `dev`/`uat`/`prod`) |
 
 ## Working locally
 
@@ -392,3 +417,7 @@ human or AI agent — working in this repository.
    non-shared material by name — see `AGENTS.md` and `SECURITY.md`.
 
 See `AGENTS.md` for the complete operating rules.
+
+## License
+
+[Apache License 2.0](LICENSE).

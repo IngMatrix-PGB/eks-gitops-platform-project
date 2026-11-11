@@ -3,6 +3,12 @@
 **Status:** Accepted
 **Date:** 2026-08-31
 
+> **Amended by [ADR-0015](0015-hub-and-spoke-environment-model.md)
+> (2026-11-10):** the workload environments become `dev`/`uat`/`prod`
+> spokes of the `management` hub (`uat` replaces `staging`), and the AWS
+> target design moves to one account per environment. Everything below
+> that ADR-0015 does not change remains in force.
+
 ## Context
 
 The project must support separate `management`, `staging`, and `prod`
