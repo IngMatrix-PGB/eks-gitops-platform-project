@@ -23,6 +23,11 @@
 # cluster-wide webhook's CA) - running them from more than one release would
 # collide, not merely duplicate. `eso-uat` is the arbitrary but
 # fixed owner of both singletons.
+#
+# Phase 2.7.4 (ADR-0015): that describes lab-lite. On a lab-multicluster
+# spoke (LAB_CLUSTER=dev|uat|prod) the cluster holds one environment, so
+# a single release owns its own singletons; the hub runs no ESO. See
+# eso_environments() below.
 
 ESO_CHART_VERSION="2.10.0"
 ESO_CHART_APP_VERSION="v2.10.0"

@@ -159,3 +159,12 @@ Adopt an explicit **hub-and-spoke** model with one hub and three spokes:
   by every other spoke (HTTP 401), the hub reconciled a probe into every
   spoke, an out-of-scope destination never landed, and deregistration
   cut the hub off. Generating Applications per spoke is Phase 2.7.4.
+- **Phase 2.7.4 result (2026-11-11):** with `dev`/`uat`, and again with
+  `prod`, the cluster generator produced exactly one Application per
+  registered spoke and none for the hub, for an unlabelled cluster
+  Secret, or for one labelled `qa`; each spoke's own ESO synced its
+  Secret; rotating `dev`'s source and a self-heal in `dev` left `uat`
+  untouched; a `values-dev.yaml` change reached `dev` only (manual,
+  once). Deregistering a spoke with a live Application removed its
+  workloads without orphans; uninstalling on the hub cascaded to every
+  spoke.
