@@ -107,10 +107,42 @@ can_i() {
     fail=1
   fi
 }
+# `kubectl auth can-i` resolves the resource through API discovery first,
+# so for a kind whose CRD is not installed yet (ESO arrives in the
+# spokes in Phase 2.7.4) it answers "no" regardless of RBAC. A raw
+# SubjectAccessReview evaluates the RBAC rules directly, CRD or not.
+sar_allowed() {
+  # $1 spoke, $2 apiGroup, $3 resource, $4 verb, $5 namespace
+  cat <<EOF | ckubectl "$1" create -f - -o jsonpath='{.status.allowed}' 2>/dev/null
+apiVersion: authorization.k8s.io/v1
+kind: SubjectAccessReview
+spec:
+  user: system:serviceaccount:${LAB_MC_ACCESS_NS}:${LAB_MC_ACCESS_SA}
+  groups: ["system:serviceaccounts", "system:serviceaccounts:${LAB_MC_ACCESS_NS}", "system:authenticated"]
+  resourceAttributes:
+    group: "$2"
+    resource: "$3"
+    verb: "$4"
+    namespace: "$5"
+EOF
+}
 for s in $spokes; do
   can_i "$s" yes create configmaps -n "$s"
   can_i "$s" yes patch deployments.apps -n "$s"
-  can_i "$s" yes create externalsecrets.external-secrets.io -n "$s"
+  for res in externalsecrets secretstores; do
+    if [ "$(sar_allowed "$s" external-secrets.io "$res" create "$s")" = "true" ]; then
+      echo "OK: '$s' SubjectAccessReview create $res.external-secrets.io -n $s -> allowed (CRD not installed yet; RBAC evaluated directly)"
+    else
+      echo "FAIL: '$s' SubjectAccessReview create $res.external-secrets.io -n $s -> not allowed" >&2
+      fail=1
+    fi
+  done
+  if [ "$(sar_allowed "$s" external-secrets.io externalsecrets create default)" = "true" ]; then
+    echo "FAIL: '$s' SubjectAccessReview create externalsecrets in 'default' -> allowed, expected denied" >&2
+    fail=1
+  else
+    echo "OK: '$s' SubjectAccessReview create externalsecrets.external-secrets.io -n default -> denied"
+  fi
   can_i "$s" no get secrets -n "$s"
   can_i "$s" no list pods -n kube-system
   can_i "$s" no create configmaps -n default
