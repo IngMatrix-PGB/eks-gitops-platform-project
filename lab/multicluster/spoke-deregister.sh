@@ -5,12 +5,9 @@
 #
 # Phase 2.7.4: when the hub's ApplicationSet (profile local-multicluster)
 # has generated platform-smoke-<env> for this spoke, deleting the cluster
-# Secret first ORPHANS the spoke's workloads: proven empirically (Argo CD
-# v3.5.2) - the ApplicationSet deletes the Application within ~10s and
-# its resources-finalizer completes without deleting anything, because
-# the destination cluster no longer exists; the Deployment, Service,
-# ConfigMap and ESO objects stay running on the spoke with nothing
-# managing them. So the hub side now goes:
+# Secret first would leave that Application unable to run its
+# resources-finalizer (no credentials left to delete the spoke's
+# workloads) - stuck in deletion. So the hub side now goes:
 #   1. remove the platform.environment label from spoke-<env> - the
 #      clusters generator stops selecting it and the ApplicationSet
 #      deletes the Application, whose finalizer removes the workloads on
@@ -58,7 +55,7 @@ if lab_mc_identity "$LAB_MC_HUB"; then
     #    the spoke) to finish while the credential is still valid
     if ckubectl "$LAB_MC_HUB" -n argocd get application "$app" >/dev/null 2>&1; then
       if ! lab_mc_identity "$spoke"; then
-        echo "FAIL: Application '$app' still exists but spoke '$spoke' is not running ($LAB_MC_IDENTITY_CASE) - its finalizer cannot delete the workloads; start the spoke and re-run" >&2
+        echo "FAIL: Application '$app' still exists but spoke '$spoke' is not running ($LAB_MC_IDENTITY_CASE) - its finalizer cannot clean up; start the spoke and re-run" >&2
         exit 1
       fi
       echo "mc-spoke-deregister: waiting up to ${app_wait_s}s for Application '$app' to be removed (its finalizer deletes the workloads on '$spoke') ..."
