@@ -106,14 +106,19 @@ flowchart TB
         ESOMgmt["ESO<br/>(control-plane secrets only)"]
     end
 
-    subgraph Staging["Staging cluster (workload plane)"]
-        WLStaging["Application workloads"]
-        ESOStaging["ESO<br/>(staging secrets)"]
+    subgraph Dev["dev spoke (workload plane)"]
+        WLDev["Application workloads"]
+        ESODev["ESO<br/>(dev secrets)"]
     end
 
-    subgraph Prod["Production cluster (workload plane)"]
+    subgraph UAT["uat spoke (workload plane)"]
+        WLUAT["Application workloads"]
+        ESOUAT["ESO<br/>(uat secrets)"]
+    end
+
+    subgraph Prod["prod spoke (workload plane)"]
         WLProd["Application workloads"]
-        ESOProd["ESO<br/>(production secrets)"]
+        ESOProd["ESO<br/>(prod secrets)"]
     end
 
     SM["AWS Secrets Manager"]
@@ -121,18 +126,21 @@ flowchart TB
     Users -->|"SSO"| IDC
     Users -->|"OIDC, local lab"| Keycloak
     IDC -->|"access entries"| Mgmt
-    IDC -->|"access entries"| Staging
+    IDC -->|"access entries"| Dev
+    IDC -->|"access entries"| UAT
     IDC -->|"access entries"| Prod
     Git -->|"desired state,<br/>pulled by Argo CD"| Argo
-    Argo -->|"reconciles"| Staging
+    Argo -->|"reconciles"| Dev
+    Argo -->|"reconciles"| UAT
     Argo -->|"reconciles"| Prod
     ESOMgmt --> SM
-    ESOStaging --> SM
+    ESODev --> SM
+    ESOUAT --> SM
     ESOProd --> SM
 ```
 
 Argo CD **pulls** the desired state from Git and reconciles it toward
-`staging` and `prod` — Git is a source Argo CD reads, not something Argo
+the `dev`, `uat`, and `prod` spokes — Git is a source Argo CD reads, not something Argo
 CD reconciles. `management` is the control plane only; it is never a
 workload plane. Every cluster that creates Kubernetes `Secret`s runs its
 **own** ESO instance against AWS Secrets Manager — none is shared. See
@@ -145,8 +153,8 @@ workload plane. Every cluster that creates Kubernetes `Secret`s runs its
 > on merge; `uat` and `prod` are PR-promoted, `prod` additionally behind
 > the `AppProject`/RBAC/least-privilege controls. `uat` replaces
 > `staging` and `prod` replaces the code's earlier `production`: the
-> local lab uses `dev`/`uat`/`prod` since Phase 2.7.1; the aws-eks
-> profile and Terraform keep `staging`/`production` until Phase 2.7.2.
+> local lab uses `dev`/`uat`/`prod` since Phase 2.7.1, and the aws-eks
+> profile and Terraform since Phase 2.7.2.
 > `lab-multicluster` becomes hub + `dev` + `uat` with `prod` opt-in. On
 > AWS the target is one account per environment; the first real
 > deployment uses a single sandbox account.
@@ -175,11 +183,10 @@ including each cluster's own ESO), and **application workloads**
   environment simulation validates GitOps generation, RBAC, destination
   restrictions, and reconciliation logic — it does **not** prove real
   cluster-level isolation.
-- `lab-multicluster` — documented, not created. Three separate `kind`
-  clusters, one per environment; reserved for deliberate, manual
-  execution once `lab-lite` passes all its criteria (Phase 2.7). Real
-  `management`/`staging`/`production` cluster separation is validated
-  only there.
+- `lab-multicluster` — documented, not created. One `kind` cluster for
+  the `management` hub plus one per spoke (`dev`, `uat`, and `prod`
+  opt-in); Phase 2.7.3–2.7.4 (ADR-0015). Real hub/spoke cluster
+  separation is validated only there.
 
 **Local toolchain and isolation (Phase 2.1):** `kind v0.33.0` and
 `kubectl v1.36.4` run from project-local, checksum-pinned binaries
@@ -192,15 +199,17 @@ keeps the lab isolated from any EKS context, Docker Desktop Kubernetes,
 or other `kind` clusters on the same machine.
 
 **AWS**: Terraform prepares one VPC/EKS root per environment; **no AWS
-cluster exists by default**. Staging is the first candidate for a
-temporary environment once authorized; production stays plan-only until
-a separate authorization. No AWS cluster runs permanently for the lab.
-See ADR-0002.
+cluster exists by default**. The first real deployment, once
+authorized, is the hub plus one spoke in a single sandbox account
+(ADR-0015); `uat` and `prod` stay plan-only until a separate
+authorization. No AWS cluster runs permanently for the lab. See
+ADR-0002 and ADR-0015.
 
 ## GitOps Control Plane
 
 Argo CD, running in `management`, reads the protected `main` branch of
-this repository and reconciles it toward `staging` and `prod`.
+this repository and reconciles it toward the `dev`, `uat`, and `prod`
+spokes.
 `ApplicationSet` generates `Application` objects from an explicit, closed
 environment list/matrix (never free text) — it **generates, it does not
 authorize**. `AppProject` boundaries restrict allowed source
@@ -346,15 +355,17 @@ flowchart TB
     PR1 --> Main["Protected branch: main"]
     Main --> ASGen["ApplicationSet<br/>(generates Applications)"]
     ASGen -.->|"generates only,<br/>does not approve"| Note["Approval = PR gate<br/>+ AppProject / RBAC"]
-    ASGen --> StagingSync["Automatic staging<br/>reconciliation"]
-    StagingSync --> PromPR["Explicit production<br/>promotion PR"]
-    PromPR --> ProdSync["Production<br/>reconciliation"]
+    ASGen --> DevSync["Automatic dev<br/>reconciliation"]
+    DevSync --> UatPR["Explicit uat<br/>promotion PR"]
+    UatPR --> UatSync["uat<br/>reconciliation"]
+    UatSync --> PromPR["Explicit prod<br/>promotion PR"]
+    PromPR --> ProdSync["prod<br/>reconciliation"]
     ProdSync -.->|"if rollback needed"| Revert["Git revert"]
     Revert --> Main
 ```
 
-Staging reconciles automatically from `main`. Production is promoted
-only through a **separate, explicit PR** that bumps a pinned
+`dev` reconciles automatically from `main`. `uat` and then `prod` are
+each promoted only through a **separate, explicit PR** that bumps a pinned
 external-dependency value (chart version, image digest) — never a direct
 commit. Rollback is a Git revert of the promotion commit, reconciled the
 same way. The PR gate is necessary but not sufficient: it is paired with
@@ -432,7 +443,7 @@ shape only — it cannot prove Pod Identity itself. See ADR-0004.
 
 External Secrets Operator runs as a **separate instance in every
 cluster** that needs to create Kubernetes `Secret`s — `management`
-(control-plane secrets only), `staging`, and `prod`. **No ESO controller
+(control-plane secrets only), `dev`, `uat`, and `prod`. **No ESO controller
 instance is shared across clusters.** Each instance reconciles secrets
 from AWS Secrets Manager under a layered model: IAM least privilege,
 Kubernetes RBAC, that cluster's own ESO controller identity (via its own
@@ -474,7 +485,7 @@ flowchart LR
     TF --> SM["Secrets Manager secret<br/>(metadata only)"]
     TF --> PIA["Pod Identity Association<br/>(cluster, namespace, ServiceAccount)"]
     EKS --> PIA
-    PIA --> ESO["ESO controller pod<br/>(eso-staging / eso-production)"]
+    PIA --> ESO["ESO controller pod<br/>(eso-dev / eso-uat / eso-prod)"]
     IAM -.->|scoped, no wildcard| ESO
     ESO -->|SecretsManager provider,<br/>no auth block| SM
     KMS -.->|kms:Decrypt only| SM
@@ -497,13 +508,15 @@ flowchart LR
     ASetLocal --> AppD["Application: dev"]
     ASetLocal --> AppS["Application: uat"]
     ASetLocal --> AppP["Application: prod"]
-    ASetAWS --> AppSAWS["Application: staging-aws"]
-    ASetAWS --> AppPAWS["Application: production-aws"]
+    ASetAWS --> AppDAWS["Application: dev-aws"]
+    ASetAWS --> AppSAWS["Application: uat-aws"]
+    ASetAWS --> AppPAWS["Application: prod-aws"]
     AppD -->|values-dev.yaml| Chart["charts/standard-workload"]
     AppS -->|values-uat.yaml| Chart
     AppP -->|values-prod.yaml| Chart
-    AppSAWS -->|values-staging-aws.yaml| Chart
-    AppPAWS -->|values-production-aws.yaml| Chart
+    AppDAWS -->|values-dev-aws.yaml| Chart
+    AppSAWS -->|values-uat-aws.yaml| Chart
+    AppPAWS -->|values-prod-aws.yaml| Chart
 ```
 
 Both `ApplicationSet` branches are mutually exclusive by construction
@@ -607,7 +620,7 @@ Implementation Status" below.
 | R-09 | Secret and confidentiality-term scanning is pattern-based, not exhaustive | Medium | Documented explicitly in each script; never presented as a complete scanner | Accepted limitation |
 | R-10 | `lab-multicluster` may be too resource-intensive for routine local iteration | Low | `lab-lite` is the default; `lab-multicluster` used deliberately; `prod` spoke is opt-in (ADR-0015) | Open |
 | R-11 | The hub holds credentials for every spoke, making it the most sensitive component | High | One least-privilege identity per spoke, no credential shared across spokes, spokes never trust the hub back; tested in Phase 2.7 (ADR-0015) | Open |
-| R-12 | Naming drift: ADR-0015 says `dev`/`uat`/`prod`; the aws-eks profile and Terraform still say `staging`/`production` | Low | Local lab renamed in Phase 2.7.1; aws-eks profile and Terraform renamed in Phase 2.7.2 | Open — partially closed by 2.7.1 |
+| R-12 | Naming drift between ADR-0015 (`dev`/`uat`/`prod`) and the code | Low | Local lab renamed in Phase 2.7.1; aws-eks profile and Terraform renamed in Phase 2.7.2 | Closed |
 | R-13 | Fresh-cluster bootstrap ordering: Argo CD cannot sync `charts/standard-workload` until the ESO CRDs exist, while `make eso-install` needs the workload namespaces Argo CD creates. Only clusters that kept the CRDs from an earlier install bootstrap cleanly | Medium (a new engineer following the README on a fresh cluster gets three `OutOfSync`/`Missing` Applications) | Found during Phase 2.7.1 testing on a fresh `lab-lite`; worked around by applying the 25 CRDs first with the same pinned render and field manager as `lab/eso/install.sh` step 1. A CRD-only install entry point is the proposed fix, in its own phase | Open |
 
 ## Evidence and Implementation Status
@@ -634,6 +647,7 @@ Implementation Status" below.
 | Production PR-gated promotion | `PROPOSED` | The `platform` `AppProject` and a `validate` CI check exist; branch protection on `main` is not applied, so the PR gate is not server-enforced |
 | Terraform/EKS/Pod Identity/Secrets Manager IaC and the `aws-eks` GitOps profile (Phase 3.1–3.3.5) | `CODE-CONFIRMED`, offline only — never applied against AWS | `terraform test` suites for `network`/`eks`/`identity`, the `aws-eks` profile render matrix, and the offline EKS identity matrix all run in `make validate` |
 | Local lab renamed to `dev`/`uat`/`prod` with `dev` added (Phase 2.7.1): three environments, three ESO scoped releases (`eso-uat` singleton owner; `eso-dev`/`eso-prod` dependents) | `PARTIALLY VERIFIED` at commit time — offline proof verified pre-merge (`make validate`: chart lint/render and pairwise isolation for all three environments, `gitops-render` exactly 3 generator elements and 3 local destinations; `make check-eso-chart`: three releases, pairwise collision-free, singleton exactly once); the runtime lifecycle suites re-run against this phase's feature branch, with results recorded in that PR's description rather than asserted here in advance | `make validate`, `make check-eso-chart`, and the runtime suites listed in the PR |
+| aws-eks profile and Terraform renamed to `dev`/`uat`/`prod` with `dev` added (Phase 2.7.2) | `CODE-CONFIRMED`, offline only - never applied against AWS | `make validate` (chart aws fixtures and Terraform-default cross-check for all three, pairwise isolation), `make gitops-render` (aws-eks exactly 3 generator elements and 3 destinations, swap and fourth-environment negatives), `make terraform-validate-offline` (identity: 16 tftest runs, including every-pair identity and IAM-isolation checks) |
 | Hub-and-spoke model: remote spokes, remote-cluster registration, cluster-generator `ApplicationSet` (ADR-0015) | `PROPOSED` | Phase 2.7.3–2.7.4 lifecycle tests in `lab-multicluster` |
 | Multi-account AWS layout with organization guardrails (ADR-0015) | `PROPOSED` | Phase 3.4 offline `terraform test` plus emulator `apply` |
 | Argo CD's production AWS identity provider | `UNKNOWN` | Explicitly undecided pending Phase 3/4 (ADR-0005) |
@@ -661,7 +675,7 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
     - **2.6.3b — Source-secret idempotency and kubeconfig evidence hardening:** implemented (`lab/eso/provision-source-secret.sh`'s default invocation is now a true no-op when the source Secret already exists - never read, never re-applied, UID/resourceVersion/hash/RBAC all preserved - and rotating an existing value requires the explicit `--rotate` flag, which fails closed if the Secret does not exist yet; `global_kubeconfig_fingerprint`/`assert_kubeconfig_paths_distinct` in `scripts/lab/_lib.sh` read the true global kubeconfig state at an explicit path, immune to any inherited `KUBECONFIG`, never printing certificate/token/user/cluster content; per `.local/evidence/phase-2.6.3-gitops-lifecycle-hardening-plan.md`).
   - **2.7 — Hub-and-spoke multicluster profile (ADR-0015):**
     - **2.7.1 — `dev`/`uat`/`prod` in the local lab:** implemented (`staging` → `uat`, `production` → `prod` across namespaces, values files, ESO releases/source namespaces, scripts, and tests; `dev` added as a third environment with its own `values-dev.yaml`, `eso-dev` scoped release, and `eso-source-dev`; the ESO singleton dependency generalized from one dependent to every dependent; `RESTORE_REVISION`/`BASE_REVISION` added to the two tests that restore to `main`, because a rename cannot restore to a pre-merge `main`). The aws-eks profile and Terraform are untouched.
-    - **2.7.2 — Rename in the aws-eks profile and Terraform:** not started (offline only).
+    - **2.7.2 — Rename in the aws-eks profile and Terraform:** implemented, offline only (`awsEnvironments` = `dev-aws`/`uat-aws`/`prod-aws` with `values-{dev,uat,prod}-aws.yaml`; `terraform/envs/identity` instantiates `eso_dev`/`eso_uat`/`eso_prod` with `dev_*`/`uat_*`/`prod_*` variables and outputs; environment validations in `modules/eso-identity`, `modules/tags`, and the toolchain root accept `dev`/`uat`/`prod`; the cross-environment `check` block and the identity and IAM-isolation tftests cover every pair; no Terraform state existed, so no `moved` blocks were needed). `envs/identity` still models every environment in one cluster - the per-account split is Phase 3.4.
     - **2.7.3 — Hub and spoke clusters with registration:** not started. `lab-multicluster` as the `management` hub plus `dev`/`uat` spokes (`prod` opt-in); each spoke registered in the hub's Argo CD with its own least-privilege, expiring credential; per-cluster resource use measured before fixing the `prod` default.
     - **2.7.4 — Cluster generator and per-spoke ESO:** not started. `ApplicationSet` moved to a cluster generator keyed on spoke labels, failing closed on unknown labels; one ESO release per spoke; end-to-end lifecycle test.
   - **2.8 — Workload resilience and evidence hardening:** not started. Standard chart gains PodDisruptionBudget, topology spread constraints, graceful-shutdown defaults (`preStop`, termination grace period), optional HPA, and default-deny NetworkPolicy — the optional resources ADR-0006 left `NOT IMPLEMENTED`.

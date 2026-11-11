@@ -12,7 +12,7 @@ separately authorized destroy operation.
 ## Order (documented, not executed)
 
 1. **Pause GitOps.** Pause auto-sync on the `aws-eks`-profile root
-   Application (and its generated `staging-aws`/`production-aws`
+   Application (and its generated `dev-aws`/`uat-aws`/`prod-aws`
    Applications) so nothing re-reconciles mid-teardown.
 2. **Retire workloads / `ExternalSecret`s.** Remove the workload
    Deployments/Jobs and their `ExternalSecret` resources for each
@@ -29,7 +29,7 @@ separately authorized destroy operation.
    lab's own Argo CD/ESO installation, which has an entirely separate
    kubeconfig, release, and lifecycle.
 5. **Delete Pod Identity Associations.** Remove the
-   `staging_association_id`/`production_association_id` associations
+   `dev_association_id`/`uat_association_id`/`prod_association_id` associations
    (`terraform/envs/identity`) before deleting the roles or the cluster
    itself, so no association is left pointing at a deleted principal.
 6. **Schedule or delete Secrets Manager secrets per separate
@@ -40,7 +40,7 @@ separately authorized destroy operation.
    from the general destroy authorization, since it is potentially
    unrecoverable after the window elapses.
 7. **Delete KMS respecting pending deletion.** KMS keys
-   (`staging_kms_key_arn`/`production_kms_key_arn`) also only support
+   (`dev_kms_key_arn`/`uat_kms_key_arn`/`prod_kms_key_arn`) also only support
    scheduled deletion with a waiting period
    (`kms_deletion_window_in_days`) — never immediate deletion — and must
    be scheduled only after step 6 confirms no secret still depends on

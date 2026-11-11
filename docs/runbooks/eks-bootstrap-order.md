@@ -50,8 +50,8 @@ running it requires an AWS account and budget that do not exist today.
    Pod Identity Agent addon.
 3. **Terraform: identity.** Run `terraform apply` in
    `terraform/envs/identity`, wiring the same `cluster_name` and the
-   real `staging_namespace`/`production_namespace`/
-   `staging_service_account`/`production_service_account`. Produces
+   real `dev_namespace`/`uat_namespace`/`prod_namespace`/
+   `dev_service_account`/`uat_service_account`/`prod_service_account`. Produces
    per-environment Pod Identity Associations, KMS keys, and Secrets
    Manager secrets (empty payload — no value is written by Terraform;
    see the migration runbook below for how a payload is populated).
@@ -81,13 +81,13 @@ running it requires an AWS account and budget that do not exist today.
    Application manifest (not yet created — this phase deliberately does
    not create `root-application-aws-eks.yaml`) whose `gitops/bootstrap`
    chart values set `profile: aws-eks`, reconciling the
-   `staging-aws`/`production-aws` environment list from
+   `dev-aws`/`uat-aws`/`prod-aws` environment list from
    `gitops/bootstrap/values.yaml`.
 9. **ESO installation** against the same isolated kubeconfig, then
    confirmation that `SecretStore`/`ExternalSecret` resources reconcile
    using Pod Identity (no `auth` block — see ADR-0014).
 10. **Validation.** Confirm the generated Applications
-    (`staging-aws`, `production-aws`) are `Synced`/`Healthy`, and that
+    (`dev-aws`, `uat-aws`, `prod-aws`) are `Synced`/`Healthy`, and that
     each environment's `ExternalSecret` resolves from the Secrets
     Manager secret produced in step 3.
 11. **Abort conditions.** Any of the following aborts the entire

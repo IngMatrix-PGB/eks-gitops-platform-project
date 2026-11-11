@@ -1,7 +1,7 @@
 #!/bin/sh
 # Fully offline Helm render of gitops/bootstrap, plus proof that it
 # renders exactly the authorized shape: one AppProject, one
-# ApplicationSet with exactly two generator elements, zero Secrets, no
+# ApplicationSet with exactly three generator elements per profile, zero Secrets, no
 # wildcard permissions, and correct revision propagation. Never touches
 # the cluster. Backs `make gitops-render`. Accepts REVISION=<value>
 # (default main) to prove propagation for a non-default revision too.
@@ -105,11 +105,11 @@ fi
 # above, no --set profile=) never activates aws-eks by omission. Only
 # the ApplicationSet's own generator "- env: " lines matter here - the
 # AppProject's destination whitelist legitimately contains the
-# staging-aws/production-aws namespace strings always (a static
+# dev-aws/uat-aws/prod-aws namespace strings always (a static
 # allow-list, never profile-gated - see templates/appproject.yaml's own
 # comment), so checking for those strings anywhere in the render would
 # be a false positive, not a real "AWS activated" signal. ---
-if grep -qE '^\s*- env: (staging-aws|production-aws)$' "$render_out"; then
+if grep -qE '^\s*- env: (dev-aws|uat-aws|prod-aws)$' "$render_out"; then
   echo "FAIL: the default render (no profile set) already generates an aws-eks Application - AWS must never activate by omission" >&2
   fail=1
 else
@@ -131,16 +131,16 @@ fi
 # must not be double-counted as AppProject destinations. ---
 appproject_doc="$(awk '/^kind: AppProject$/{f=1} f && /^kind: ApplicationSet$/{exit} f{print}' "$render_out")"
 local_dest_count="$(printf '%s\n' "$appproject_doc" | grep -cE 'namespace: (dev|uat|prod)$' || true)"
-aws_dest_count="$(printf '%s\n' "$appproject_doc" | grep -cE 'namespace: (staging-aws|production-aws)$' || true)"
-if [ "$local_dest_count" = "3" ] && [ "$aws_dest_count" = "2" ]; then
-  echo "OK: AppProject destinations are exactly the 3 local namespaces (dev, uat, prod) plus exactly the 2 aws-eks namespaces (staging-aws, production-aws) - none removed, none wildcarded"
+aws_dest_count="$(printf '%s\n' "$appproject_doc" | grep -cE 'namespace: (dev-aws|uat-aws|prod-aws)$' || true)"
+if [ "$local_dest_count" = "3" ] && [ "$aws_dest_count" = "3" ]; then
+  echo "OK: AppProject destinations are exactly the 3 local namespaces (dev, uat, prod) plus exactly the 3 aws-eks namespaces (dev-aws, uat-aws, prod-aws) - none removed, none wildcarded"
 else
-  echo "FAIL: AppProject destination count unexpected (local=$local_dest_count, expected 3; aws=$aws_dest_count, expected 2)" >&2
+  echo "FAIL: AppProject destination count unexpected (local=$local_dest_count, expected 3; aws=$aws_dest_count, expected 3)" >&2
   fail=1
 fi
 
-# --- positive: profile=aws-eks renders exactly 2 Applications, named
-# and namespaced exactly as the addendum specifies - never invented ---
+# --- positive: profile=aws-eks renders exactly 3 Applications, named
+# and namespaced exactly as ADR-0015 specifies - never invented ---
 echo "gitops-render: helm lint (profile=aws-eks) ..."
 if ! "$HELM_BIN" lint gitops/bootstrap --set profile=aws-eks; then
   echo "FAIL: helm lint failed for profile=aws-eks" >&2
@@ -160,16 +160,16 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 aws_generator_elements="$(grep -cE '^\s*- env: ' "$aws_render_out" || true)"
-if [ "$aws_generator_elements" != "2" ]; then
-  echo "FAIL: profile=aws-eks expected exactly 2 generator elements, found $aws_generator_elements" >&2
+if [ "$aws_generator_elements" != "3" ]; then
+  echo "FAIL: profile=aws-eks expected exactly 3 generator elements, found $aws_generator_elements" >&2
   fail=1
 else
-  echo "OK: profile=aws-eks renders exactly 2 generator elements"
+  echo "OK: profile=aws-eks renders exactly 3 generator elements"
 fi
-if grep -qE '^\s*- env: staging-aws$' "$aws_render_out" && grep -qE '^\s*- env: production-aws$' "$aws_render_out"; then
-  echo "OK: profile=aws-eks generator elements are named exactly 'staging-aws'/'production-aws', per the addendum - not invented"
+if grep -qE '^\s*- env: dev-aws$' "$aws_render_out" && grep -qE '^\s*- env: uat-aws$' "$aws_render_out" && grep -qE '^\s*- env: prod-aws$' "$aws_render_out"; then
+  echo "OK: profile=aws-eks generator elements are named exactly 'dev-aws'/'uat-aws'/'prod-aws', per ADR-0015 - not invented"
 else
-  echo "FAIL: profile=aws-eks generator elements do not match the addendum's exact names" >&2
+  echo "FAIL: profile=aws-eks generator elements do not match ADR-0015's exact names" >&2
   fail=1
 fi
 if grep -qE '^kind: SecretStore$|^kind: Secret$|auth:|serviceAccountRef|arn:aws:|AKIA[0-9A-Z]{16}' "$aws_render_out"; then
@@ -185,7 +185,7 @@ fi
 # is the CORRECT one for that environment - never swappable, since
 # both the namespace and the valueFiles path are derived from the same
 # single "env" field on the same generator element. ---
-for env_ns in "staging-aws:staging-aws" "production-aws:production-aws"; do
+for env_ns in "dev-aws:dev-aws" "uat-aws:uat-aws" "prod-aws:prod-aws"; do
   env="${env_ns%%:*}"; expected_ns="${env_ns##*:}"
   expected_values_file="charts/standard-workload/values-${env}.yaml"
   if [ ! -f "$expected_values_file" ]; then
@@ -195,7 +195,7 @@ for env_ns in "staging-aws:staging-aws" "production-aws:production-aws"; do
   fi
   actual_ns="$(awk -v e="- env: ${env}\$" '$0 ~ e {getline; print; exit}' "$aws_render_out" | sed -n 's/^[[:space:]]*namespace: //p')"
   if [ "$actual_ns" = "$expected_ns" ]; then
-    echo "OK: aws-eks environment '$env' resolves to $expected_values_file and namespace '$expected_ns' - never swapped with the other environment"
+    echo "OK: aws-eks environment '$env' resolves to $expected_values_file and namespace '$expected_ns' - never swapped with another environment"
   else
     echo "FAIL: aws-eks environment '$env' resolved to namespace '$actual_ns', expected '$expected_ns'" >&2
     fail=1
@@ -227,12 +227,14 @@ bad_env_values="$(mktemp)"
 cat > "$bad_env_values" <<'BADENVEOF'
 profile: "aws-eks"
 awsEnvironments:
-  - name: staging-aws
-    namespace: production-aws
-  - name: production-aws
-    namespace: production-aws
-  - name: staging-uat-aws
-    namespace: staging-uat-aws
+  - name: dev-aws
+    namespace: dev-aws
+  - name: uat-aws
+    namespace: prod-aws
+  - name: prod-aws
+    namespace: prod-aws
+  - name: qa-aws
+    namespace: qa-aws
 BADENVEOF
 bad_env_out="$(mktemp)"
 trap 'rm -f "$render_out" "$aws_render_out" "$bad_env_values" "$bad_env_out"' EXIT INT TERM
@@ -242,48 +244,48 @@ if ! "$HELM_BIN" template gitops/bootstrap -f "$bad_env_values" > "$bad_env_out"
   fail=1
 else
   bad_count="$(grep -cE '^\s*- env: ' "$bad_env_out" || true)"
-  staging_aws_ns="$(awk '/^[[:space:]]*- env: staging-aws$/{getline; print; exit}' "$bad_env_out" | sed -n 's/^[[:space:]]*namespace: //p')"
+  uat_aws_ns="$(awk '/^[[:space:]]*- env: uat-aws$/{getline; print; exit}' "$bad_env_out" | sed -n 's/^[[:space:]]*namespace: //p')"
   self_test_fail=0
-  if [ "$bad_count" != "3" ]; then
-    echo "FAIL: malformed-environment self-test fixture did not actually inject a third element (found $bad_count, expected 3) - fixture is broken" >&2
+  if [ "$bad_count" != "4" ]; then
+    echo "FAIL: malformed-environment self-test fixture did not actually inject a fourth element (found $bad_count, expected 4) - fixture is broken" >&2
     self_test_fail=1
   fi
-  if [ "$staging_aws_ns" = "production-aws" ]; then
-    echo "OK: confirmed the namespace-consistency check above would catch a genuine cross-environment swap (staging-aws mapped to production-aws's namespace resolves to 'production-aws', not 'staging-aws')"
+  if [ "$uat_aws_ns" = "prod-aws" ]; then
+    echo "OK: confirmed the namespace-consistency check above would catch a genuine cross-environment swap (uat-aws mapped to prod-aws's namespace resolves to 'prod-aws', not 'uat-aws')"
   else
     self_test_fail=1
   fi
-  if [ ! -f "charts/standard-workload/values-staging-uat-aws.yaml" ]; then
-    echo "OK: confirmed a 3rd, unauthorized aws-eks environment ('staging-uat-aws') has no matching values file - the file-existence check above would reject it (more or fewer than exactly 2 aws-eks environments is detectable)"
+  if [ ! -f "charts/standard-workload/values-qa-aws.yaml" ]; then
+    echo "OK: confirmed a 4th, unauthorized aws-eks environment ('qa-aws') has no matching values file - the file-existence check above would reject it (more or fewer than exactly 3 aws-eks environments is detectable)"
   else
-    echo "FAIL: unexpected - charts/standard-workload/values-staging-uat-aws.yaml exists" >&2
+    echo "FAIL: unexpected - charts/standard-workload/values-qa-aws.yaml exists" >&2
     self_test_fail=1
   fi
   [ "$self_test_fail" -ne 0 ] && fail=1
 fi
 rm -f "$bad_env_values" "$bad_env_out"
 
-# --- negative: fewer than 2 aws-eks environments is equally detectable
-# by the same "exactly 2" counting check already applied to the real
+# --- negative: fewer than 3 aws-eks environments is equally detectable
+# by the same "exactly 3" counting check already applied to the real
 # render above - self-tested here the same way. ---
 short_env_values="$(mktemp)"
 cat > "$short_env_values" <<'SHORTENVEOF'
 profile: "aws-eks"
 awsEnvironments:
-  - name: staging-aws
-    namespace: staging-aws
+  - name: uat-aws
+    namespace: uat-aws
 SHORTENVEOF
 short_env_out="$(mktemp)"
 trap 'rm -f "$render_out" "$aws_render_out" "$short_env_values" "$short_env_out"' EXIT INT TERM
 if ! "$HELM_BIN" template gitops/bootstrap -f "$short_env_values" > "$short_env_out" 2>&1; then
-  echo "FAIL: the fewer-than-2-environments self-test fixture failed to render at all" >&2
+  echo "FAIL: the fewer-than-3-environments self-test fixture failed to render at all" >&2
   fail=1
 else
   short_count="$(grep -cE '^\s*- env: ' "$short_env_out" || true)"
   if [ "$short_count" = "1" ]; then
-    echo "OK: confirmed a fixture with only 1 aws-eks environment renders exactly 1 generator element - the 'exactly 2' check above would correctly reject it"
+    echo "OK: confirmed a fixture with only 1 aws-eks environment renders exactly 1 generator element - the 'exactly 3' check above would correctly reject it"
   else
-    echo "FAIL: fewer-than-2-environments self-test produced $short_count elements, expected 1" >&2
+    echo "FAIL: fewer-than-3-environments self-test produced $short_count elements, expected 1" >&2
     fail=1
   fi
 fi

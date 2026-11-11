@@ -32,40 +32,58 @@ variable "cluster_name" {
   }
 }
 
-variable "staging_namespace" {
+variable "dev_namespace" {
   type        = string
-  description = "Staging ESO controller pod namespace - ground truth verified live against the cluster."
-  default     = "eso-staging"
+  description = "Dev ESO controller pod namespace - matches the lab's scoped release namespace (eso-dev)."
+  default     = "eso-dev"
 }
 
-variable "staging_service_account" {
+variable "dev_service_account" {
   type        = string
-  description = "Staging ESO controller ServiceAccount - ground truth verified live against the cluster."
-  default     = "eso-staging-external-secrets"
+  description = "Dev ESO controller ServiceAccount - matches the lab's scoped release ServiceAccount."
+  default     = "eso-dev-external-secrets"
 }
 
-variable "production_namespace" {
+variable "uat_namespace" {
   type        = string
-  description = "Production ESO controller pod namespace - ground truth verified live against the cluster."
-  default     = "eso-production"
+  description = "UAT ESO controller pod namespace - matches the lab's scoped release namespace (eso-uat)."
+  default     = "eso-uat"
 }
 
-variable "production_service_account" {
+variable "uat_service_account" {
   type        = string
-  description = "Production ESO controller ServiceAccount - ground truth verified live against the cluster."
-  default     = "eso-production-external-secrets"
+  description = "UAT ESO controller ServiceAccount - matches the lab's scoped release ServiceAccount."
+  default     = "eso-uat-external-secrets"
 }
 
-variable "staging_secret_name" {
+variable "prod_namespace" {
   type        = string
-  description = "Staging Secrets Manager secret name (a naming-convention decision, not a security/cost value)."
-  default     = "eks-gitops-platform-project/staging/backend"
+  description = "Prod ESO controller pod namespace - matches the lab's scoped release namespace (eso-prod)."
+  default     = "eso-prod"
 }
 
-variable "production_secret_name" {
+variable "prod_service_account" {
   type        = string
-  description = "Production Secrets Manager secret name."
-  default     = "eks-gitops-platform-project/production/backend"
+  description = "Prod ESO controller ServiceAccount - matches the lab's scoped release ServiceAccount."
+  default     = "eso-prod-external-secrets"
+}
+
+variable "dev_secret_name" {
+  type        = string
+  description = "Dev Secrets Manager secret name (a naming-convention decision, not a security/cost value)."
+  default     = "eks-gitops-platform-project/dev/backend"
+}
+
+variable "uat_secret_name" {
+  type        = string
+  description = "UAT Secrets Manager secret name (a naming-convention decision, not a security/cost value)."
+  default     = "eks-gitops-platform-project/uat/backend"
+}
+
+variable "prod_secret_name" {
+  type        = string
+  description = "Prod Secrets Manager secret name (a naming-convention decision, not a security/cost value)."
+  default     = "eks-gitops-platform-project/prod/backend"
 }
 
 variable "kms_deletion_window_in_days" {

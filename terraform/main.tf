@@ -19,8 +19,8 @@ variable "expected_environment" {
   description = "Toolchain smoke-test input only - exercises variable validation mechanics, not a real environment."
 
   validation {
-    condition     = contains(["staging", "production"], var.expected_environment)
-    error_message = "expected_environment must be exactly \"staging\" or \"production\"."
+    condition     = contains(["dev", "uat", "prod"], var.expected_environment)
+    error_message = "expected_environment must be exactly \"dev\", \"uat\", or \"prod\"."
   }
 }
 

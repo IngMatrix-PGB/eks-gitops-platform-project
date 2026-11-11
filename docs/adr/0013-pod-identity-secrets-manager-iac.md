@@ -3,6 +3,15 @@
 **Status:** Accepted
 **Date:** 2026-09-08
 
+> **Update (2026-11-11, Phase 2.7.2 / ADR-0015):** the environments
+> referenced below as `staging`/`production` (and `staging-aws`/
+> `production-aws`) are now `dev`/`uat`/`prod` (`dev-aws`/`uat-aws`/
+> `prod-aws`), with `dev` added as a third environment: three
+> `eso-identity` module instances, `dev_*`/`uat_*`/`prod_*` variables and
+> outputs, and every cross-environment check applied to every pair. The
+> decision itself is unchanged; names in the text below are kept as
+> written at the time of the decision.
+
 ## Context
 
 Following Phase 3.1 (Network/EKS IaC foundation, ADR-0012, merged via PR #12),

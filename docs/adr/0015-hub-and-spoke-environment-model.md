@@ -55,7 +55,8 @@ Adopt an explicit **hub-and-spoke** model with one hub and three spokes:
   replaces the code's earlier `production` name. The rename is
   sequenced inside Phase 2.7: 2.7.1 renames the local lab and adds the
   `dev` namespace (implemented), 2.7.2 renames the aws-eks profile and
-  Terraform, and 2.7.3–2.7.4 introduce the remote spokes.
+  Terraform and adds `dev` there (implemented, offline), and 2.7.3–2.7.4
+  introduce the remote spokes.
 - **Hub-to-spoke direction is pull-from-Git, push-to-cluster by the hub
   only.** The hub's Argo CD is the only component holding spoke
   credentials; spokes never hold credentials for the hub or for each

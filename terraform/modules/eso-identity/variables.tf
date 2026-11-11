@@ -8,11 +8,11 @@
 
 variable "environment" {
   type        = string
-  description = "Exactly \"staging\" or \"production\" - never shared, never invented, never a third value."
+  description = "Exactly \"dev\", \"uat\", or \"prod\" - never shared, never invented, never a fourth value."
 
   validation {
-    condition     = contains(["staging", "production"], var.environment)
-    error_message = "environment must be exactly \"staging\" or \"production\"."
+    condition     = contains(["dev", "uat", "prod"], var.environment)
+    error_message = "environment must be exactly \"dev\", \"uat\", or \"prod\"."
   }
 }
 
@@ -38,7 +38,7 @@ variable "cluster_name" {
 
 variable "namespace" {
   type        = string
-  description = "Exact Kubernetes namespace the ESO controller pod runs in - ground truth verified live against the cluster (eso-staging / eso-production), never assumed. No default."
+  description = "Exact Kubernetes namespace the ESO controller pod runs in - ground truth verified live against the cluster (eso-dev / eso-uat / eso-prod), never assumed. No default."
 
   validation {
     condition     = length(var.namespace) > 0 && can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.namespace))
@@ -48,7 +48,7 @@ variable "namespace" {
 
 variable "service_account" {
   type        = string
-  description = "Exact ServiceAccount name - ground truth verified live against the cluster (eso-staging-external-secrets / eso-production-external-secrets). No default."
+  description = "Exact ServiceAccount name - ground truth verified live against the cluster (eso-<env>-external-secrets, e.g. eso-uat-external-secrets). No default."
 
   validation {
     condition     = length(var.service_account) > 0 && can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.service_account))
@@ -63,7 +63,7 @@ variable "service_account" {
 
 variable "secret_name" {
   type        = string
-  description = "Deterministic Secrets Manager secret name (e.g. eks-gitops-platform-project/staging/backend). No default. Must be a plain name, never a hardcoded ARN."
+  description = "Deterministic Secrets Manager secret name (e.g. eks-gitops-platform-project/uat/backend). No default. Must be a plain name, never a hardcoded ARN."
 
   validation {
     condition     = length(var.secret_name) > 0 && !can(regex("^arn:", var.secret_name))

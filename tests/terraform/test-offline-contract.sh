@@ -144,8 +144,8 @@ EOF
 variable "expected_environment" {
   type = string
   validation {
-    condition     = contains(["staging", "production"], var.expected_environment)
-    error_message = "expected_environment must be exactly \"staging\" or \"production\"."
+    condition     = contains(["uat", "prod"], var.expected_environment)
+    error_message = "expected_environment must be exactly \"uat\" or \"prod\"."
   }
 }
 
@@ -170,14 +170,14 @@ mock_provider "aws" {
 run "plan_case" {
   command = plan
   variables {
-    expected_environment = "staging"
+    expected_environment = "uat"
   }
 }
 
 run "apply_case" {
   command = apply
   variables {
-    expected_environment = "production"
+    expected_environment = "prod"
   }
 }
 EOF
@@ -300,7 +300,7 @@ mock_provider "aws" {
 run "plan_only_case" {
   command = plan
   variables {
-    expected_environment = "staging"
+    expected_environment = "uat"
   }
 }
 EOF
@@ -321,7 +321,7 @@ mock_provider "aws" {
 run "apply_only_case" {
   command = apply
   variables {
-    expected_environment = "production"
+    expected_environment = "prod"
   }
 }
 EOF
@@ -505,7 +505,7 @@ setup_test_without_mock_provider() {
 run "plan_case" {
   command = plan
   variables {
-    expected_environment = "staging"
+    expected_environment = "uat"
   }
 
   assert {
@@ -824,7 +824,7 @@ setup_association_targets_webhook() {
   cat > "$d/terraform/envs/identity/main.tf" <<'EOF'
 resource "aws_eks_pod_identity_association" "example" {
   cluster_name    = "example"
-  namespace       = "eso-staging"
+  namespace       = "eso-uat"
   service_account = "external-secrets-webhook"
   role_arn        = "arn:aws:iam::aws:role/example"
 }
@@ -839,7 +839,7 @@ setup_association_targets_cert_controller() {
   cat > "$d/terraform/envs/identity/main.tf" <<'EOF'
 resource "aws_eks_pod_identity_association" "example" {
   cluster_name    = "example"
-  namespace       = "eso-staging"
+  namespace       = "eso-uat"
   service_account = "external-secrets-cert-controller"
   role_arn        = "arn:aws:iam::aws:role/example"
 }
@@ -854,8 +854,8 @@ setup_association_targets_real_controller_accepted() {
   cat > "$d/terraform/envs/identity/main.tf" <<'EOF'
 resource "aws_eks_pod_identity_association" "example" {
   cluster_name    = "example"
-  namespace       = "eso-staging"
-  service_account = "eso-staging-external-secrets"
+  namespace       = "eso-uat"
+  service_account = "eso-uat-external-secrets"
   role_arn        = "arn:aws:iam::aws:role/example"
 }
 EOF

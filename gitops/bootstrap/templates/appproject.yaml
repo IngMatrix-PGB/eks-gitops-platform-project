@@ -32,8 +32,8 @@ spec:
     applicationset.yaml's generator only ever emits one profile's
     Applications at a time (never both) - an AppProject destination
     whitelist is a static allow-list, not a profile-gated one, and
-    listing these here does not by itself create the staging-aws/
-    production-aws namespaces (CreateNamespace=true only fires for an
+    listing these here does not by itself create the dev-aws/uat-aws/
+    prod-aws namespaces (CreateNamespace=true only fires for an
     Application the ApplicationSet actually generates). DESIGNED / NOT
     DEPLOYED - see .local/evidence/phase-3.3.4-aws-application-
     bootstrap-addendum.md.
