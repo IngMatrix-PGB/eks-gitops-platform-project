@@ -71,5 +71,26 @@ configs:
   cm:
     admin.enabled: true
     users.anonymous.enabled: "false"   # chart's own key type: quoted string, not YAML boolean
+    # Phase 2.7.3 (ADR-0015, plan D1): which resource kinds Argo CD's
+    # cluster cache watches. In-cluster (lab-lite, and the hub's own
+    # argocd namespace) stays unrestricted - identical to the chart
+    # default. Remote spokes are limited to exactly the kinds their
+    # namespace-scoped credential may manage: proven empirically that,
+    # without this, the cache tries to list every namespaced kind
+    # (Pods first, Secrets too) and fails cluster sync under a
+    # credential that deliberately cannot read them.
+    resource.inclusions: |
+      - apiGroups: ["*"]
+        kinds: ["*"]
+        clusters: ["https://kubernetes.default.svc"]
+      - apiGroups: [""]
+        kinds: ["ConfigMap", "Service", "ServiceAccount"]
+        clusters: ["https://eks-gitops-*-control-plane:6443"]
+      - apiGroups: ["apps"]
+        kinds: ["Deployment"]
+        clusters: ["https://eks-gitops-*-control-plane:6443"]
+      - apiGroups: ["external-secrets.io"]
+        kinds: ["SecretStore", "ExternalSecret"]
+        clusters: ["https://eks-gitops-*-control-plane:6443"]
   params:
     server.insecure: "false"            # same: quoted string, per argocd-cmd-params-cm.yaml

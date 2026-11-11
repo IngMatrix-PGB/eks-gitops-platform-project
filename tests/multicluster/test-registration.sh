@@ -55,7 +55,10 @@ secret_token_sha() {
 cleanup_probe() {
   for s in $LAB_MC_ALL_SPOKES; do
     for app in "probe-$s" "probe-$s-outside"; do
-      pkubectl -n "$ARGOCD_NAMESPACE" delete application "$app" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+      pkubectl -n "$ARGOCD_NAMESPACE" delete application "$app" --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || true
+      # Only reached if the finalizer could not complete (e.g. the
+      # destination was unreachable) - never leave a stuck probe behind.
+      pkubectl -n "$ARGOCD_NAMESPACE" patch application "$app" --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1 || true
     done
   done
   pkubectl -n "$ARGOCD_NAMESPACE" delete appproject "$probe_project" --ignore-not-found >/dev/null 2>&1 || true
@@ -269,8 +272,15 @@ if pkubectl -n "$ARGOCD_NAMESPACE" get secret "spoke-$first" >/dev/null 2>&1; th
   echo "FAIL: hub cluster Secret spoke-$first still present after deregistration" >&2
   fail=1
 fi
-if ckubectl "$first" get namespace "$LAB_MC_ACCESS_NS" >/dev/null 2>&1; then
-  echo "FAIL: '$LAB_MC_ACCESS_NS' still present on '$first' after deregistration" >&2
+ns_gone=0
+for _ in $(seq 1 30); do
+  ckubectl "$first" get namespace "$LAB_MC_ACCESS_NS" >/dev/null 2>&1 || { ns_gone=1; break; }
+  sleep 3
+done
+if [ "$ns_gone" -eq 1 ]; then
+  echo "OK: '$LAB_MC_ACCESS_NS' (and with it every token issued for $LAB_MC_ACCESS_SA) is gone from '$first'"
+else
+  echo "FAIL: '$LAB_MC_ACCESS_NS' still present on '$first' 90s after deregistration" >&2
   fail=1
 fi
 pkubectl -n "$ARGOCD_NAMESPACE" patch application "probe-$first" --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1 || true
