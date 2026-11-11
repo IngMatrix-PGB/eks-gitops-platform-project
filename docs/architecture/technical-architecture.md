@@ -608,6 +608,7 @@ Implementation Status" below.
 | R-10 | `lab-multicluster` may be too resource-intensive for routine local iteration | Low | `lab-lite` is the default; `lab-multicluster` used deliberately; `prod` spoke is opt-in (ADR-0015) | Open |
 | R-11 | The hub holds credentials for every spoke, making it the most sensitive component | High | One least-privilege identity per spoke, no credential shared across spokes, spokes never trust the hub back; tested in Phase 2.7 (ADR-0015) | Open |
 | R-12 | Naming drift: ADR-0015 says `dev`/`uat`/`prod`; the aws-eks profile and Terraform still say `staging`/`production` | Low | Local lab renamed in Phase 2.7.1; aws-eks profile and Terraform renamed in Phase 2.7.2 | Open — partially closed by 2.7.1 |
+| R-13 | Fresh-cluster bootstrap ordering: Argo CD cannot sync `charts/standard-workload` until the ESO CRDs exist, while `make eso-install` needs the workload namespaces Argo CD creates. Only clusters that kept the CRDs from an earlier install bootstrap cleanly | Medium (a new engineer following the README on a fresh cluster gets three `OutOfSync`/`Missing` Applications) | Found during Phase 2.7.1 testing on a fresh `lab-lite`; worked around by applying the 25 CRDs first with the same pinned render and field manager as `lab/eso/install.sh` step 1. A CRD-only install entry point is the proposed fix, in its own phase | Open |
 
 ## Evidence and Implementation Status
 
