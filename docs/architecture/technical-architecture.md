@@ -5,10 +5,10 @@
 | Field | Value |
 |---|---|
 | Document | eks-gitops-platform-project Technical Architecture |
-| Version | 0.5.0 |
-| Status | Architecture baseline |
-| Phase | Phase 2.1 — Local tooling and kind foundation (implemented) |
-| Last updated | 2026-08-31 |
+| Version | 0.6.0 |
+| Status | Implementation in progress |
+| Phase | Phase 2.6.3b implemented (runtime-tested in `kind`); Phase 3.1–3.3.5 implemented as offline-validated code; roadmap realigned to the hub-and-spoke model (ADR-0015) |
+| Last updated | 2026-11-10 |
 
 This document is the **single, authoritative source of truth** for the
 project's architecture: scope, principles, topology, control plane,
@@ -36,12 +36,17 @@ Argo CD reconciling a closed set of environments through
 **plus** runtime trust boundaries (`AppProject`, RBAC, least-privilege
 credentials) — the PR alone is treated as necessary, not sufficient.
 
-As of this version, **nothing has been implemented**. This document
-describes the target architecture and the decisions behind it; the
-[evidence table](#evidence-and-implementation-status) states plainly
-that no runtime capability is `VERIFIED` yet. An `Accepted` ADR below
-records an approved decision — it does not mean that decision has been
-implemented.
+As of this version, the **local GitOps lab is implemented and
+runtime-tested** in a single `kind` cluster (Argo CD, `ApplicationSet`,
+the standard workload contract, and External Secrets Operator with a
+per-environment secret contract), and the **AWS layer exists as
+offline-validated Terraform and GitOps profiles only** — nothing has
+been applied against AWS. The environment model is being extended to a
+hub-and-spoke shape (`management` hub, `dev`/`uat`/`prod` spokes,
+ADR-0015); that extension is `PROPOSED`. The
+[evidence table](#evidence-and-implementation-status) states each
+capability's real status. An `Accepted` ADR below records an approved
+decision — it does not mean that decision has been implemented.
 
 ## Scope and Non-Goals
 
@@ -55,8 +60,8 @@ a layered, per-cluster isolation model; PR-gated environment promotion.
 **Non-goals:** a general-purpose internal-developer-portal UI; support
 for cloud providers other than AWS; a self-service infrastructure
 catalog in the MVP (Crossplane or equivalent — deferred, see ADR-0001);
-Progressive Delivery as the primary production gate; three permanently
-running EKS clusters; generating application workloads for the
+Progressive Delivery as the primary production gate; permanently
+running EKS clusters (hub or spokes); generating application workloads for the
 `management` cluster; deciding Argo CD's production AWS identity
 provider ahead of Phase 3/4 (see "Human Identity and SSO").
 
@@ -134,6 +139,16 @@ workload plane. Every cluster that creates Kubernetes `Secret`s runs its
 "Cluster and Environment Topology."
 
 ## Cluster and Environment Topology
+
+> **Target model (ADR-0015, `PROPOSED`):** `management` is the hub;
+> `dev`, `uat`, and `prod` are spokes. `dev` is reconciled automatically
+> on merge; `uat` and `prod` are PR-promoted, `prod` additionally behind
+> the `AppProject`/RBAC/least-privilege controls. `uat` replaces
+> `staging`; the implemented code and the table below still use the
+> `staging`/`production` names until Phase 2.7 performs the rename.
+> `lab-multicluster` becomes hub + `dev` + `uat` with `prod` opt-in. On
+> AWS the target is one account per environment; the first real
+> deployment uses a single sandbox account.
 
 | Environment | Role | Control-plane add-ons | Workload-cluster runtime add-ons | Application workloads |
 |---|---|---|---|---|
@@ -515,14 +530,21 @@ sequence (documented, not executed).
 ## Observability and Operations
 
 `NOT IMPLEMENTED`. The standard chart reserves a metrics/`ServiceMonitor`
-interface without forcing a Prometheus dependency. An observability
-stack, runbooks, and failure drills are Phase 6 scope.
+interface without forcing a Prometheus dependency. Phase 6.1 adds the
+stack in the hub-and-spoke shape: each spoke runs a metrics agent that
+ships to the hub, where dashboards, logs, and alerting live; one
+user-facing SLO with multi-window burn-rate alerts whose rules are unit
+tested offline; and alerts on Argo CD application health
+(`Degraded`/`OutOfSync` beyond a grace period). Runbooks and failure
+drills are Phase 6 scope.
 
 ## Availability and Recovery
 
-`NOT IMPLEMENTED`. Backup/DR boundaries and single-point-of-failure
-analysis for the GitOps delivery path (including the bootstrap-cycle
-risk in the table below) are Phase 6 scope.
+`NOT IMPLEMENTED`. Workload-level resilience (PodDisruptionBudget,
+topology spread, graceful shutdown, HPA) is Phase 2.8. Backup and a
+scripted restore drill are Phase 6.2. Single-point-of-failure analysis
+for the GitOps delivery path — now centered on the hub (R-11) and
+including the bootstrap-cycle risk (R-04) — is Phase 6 scope.
 
 ## Costs and FinOps
 
@@ -532,6 +554,8 @@ risk in the table below) are Phase 6 scope.
 | Terraform plan-only | No AWS service charges | `PROPOSED` as a standing rule |
 | One EKS cluster, standard support, control plane only | ≈US$0.10/hour | `INFERRED` — public AWS pricing at time of writing, not re-verified live |
 | Three EKS control planes running continuously | ≈US$219/month, before nodes/NAT/storage/transfer | `INFERRED` — same caveat; why this project never runs three permanent clusters |
+| Full hub-and-spoke (four control planes) running continuously | ≈US$292/month, before nodes/NAT/storage/transfer | `INFERRED` — same caveat; never the intended mode (ADR-0015) |
+| First sandbox deployment (hub + one spoke, a few hours, minimal spot nodes) | Low single-digit US$ | `INFERRED` — to be replaced by the measured bill once it is run; requires its own authorization and a budget alert in place first |
 
 "No AWS service charges" means no billed AWS resource consumption — it
 is not a claim of zero cost in every sense (local compute/electricity is
@@ -553,6 +577,11 @@ a fresh, explicit authorization.**
 | [ADR-0008](../adr/0008-standard-workload-before-sso.md) | Standard workload contract before SSO | Accepted |
 | [ADR-0009](../adr/0009-repository-governance-baseline.md) | Repository governance baseline | Accepted |
 | [ADR-0010](../adr/0010-external-secrets-operator-contract.md) | External Secrets Operator contract | Accepted |
+| [ADR-0011](../adr/0011-terraform-foundation.md) | Terraform foundation | Accepted |
+| [ADR-0012](../adr/0012-network-eks-iac-foundation.md) | Network and EKS IaC foundation | Accepted |
+| [ADR-0013](../adr/0013-pod-identity-secrets-manager-iac.md) | EKS Pod Identity and AWS Secrets Manager IaC | Accepted |
+| [ADR-0014](../adr/0014-eks-application-identity-boundary.md) | EKS application generation and identity boundary | Accepted |
+| [ADR-0015](../adr/0015-hub-and-spoke-environment-model.md) | Hub-and-spoke environment model (amends ADR-0002) | Accepted |
 
 Each ADR above records an **approved decision**, not an implemented one
 — every capability it describes is tracked honestly in "Evidence and
@@ -567,11 +596,13 @@ Implementation Status" below.
 | R-03 | A compromised Argo CD controller or admin-level cluster credential can mutate a cluster regardless of branch protection | High | `AppProject`, Argo CD RBAC, least-privilege cluster credentials (ADR-0003) | Open |
 | R-04 | Bootstrap cycle between Argo CD, the `management`-cluster ESO instance, and the OIDC client secret | Medium | Documented ordering; OIDC-secret seeding mechanism explicitly `UNKNOWN` pending Phase 4 (ADR-0005) | Open |
 | R-05 | Remote EKS cluster access/credentials for Argo CD not yet designed | Medium | Explicitly deferred to Phase 3/4 with a least-privilege requirement stated up front (ADR-0005) | Open |
-| R-06 | No CI or branch protection exists yet — the PR-gate design is unenforced | High (if a mutating change happened today) | No remote is configured during this phase; tracked for the phase that introduces one | Open |
+| R-06 | `main` has no server-side branch protection — the PR-gate design is enforced by process only | High (if a mutating change happened today) | A `validate` CI check runs on every PR; the repository is now public, so the ADR-0009 ruleset can be applied at no cost, pending explicit authorization | Open |
 | R-07 | AWS costs could be incurred without authorization | High if it happened | Standing rule: no `apply` without fresh, explicit, scoped authorization | Mitigated by policy, not tooling yet |
 | R-08 | TAD/code drift as implementation begins | Medium | TAD updated in the same PR as any architecture change (`AGENTS.md`) | Open |
 | R-09 | Secret and confidentiality-term scanning is pattern-based, not exhaustive | Medium | Documented explicitly in each script; never presented as a complete scanner | Accepted limitation |
-| R-10 | `lab-multicluster` may be too resource-intensive for routine local iteration | Low | `lab-lite` is the default; `lab-multicluster` used deliberately | Open |
+| R-10 | `lab-multicluster` may be too resource-intensive for routine local iteration | Low | `lab-lite` is the default; `lab-multicluster` used deliberately; `prod` spoke is opt-in (ADR-0015) | Open |
+| R-11 | The hub holds credentials for every spoke, making it the most sensitive component | High | One least-privilege identity per spoke, no credential shared across spokes, spokes never trust the hub back; tested in Phase 2.7 (ADR-0015) | Open |
+| R-12 | Naming drift: ADR-0015 says `uat`, implemented code still says `staging` | Low | Rename performed inside Phase 2.7, together with the remote spokes; tracked in the evidence table | Open |
 
 ## Evidence and Implementation Status
 
@@ -583,7 +614,7 @@ Implementation Status" below.
 | Local lab tooling (`make tools-check`/`tools-install`, `lab/kind/*.sh`) | `VERIFIED` | Executed in this phase: `make tools-install` downloaded and checksum-verified `kind v0.33.0`/`kubectl v1.36.4` into `.tools/bin/`; `make tools-check` confirmed them read-only |
 | `lab-lite` cluster: creation, idempotency, teardown, identity match | `VERIFIED`, scoped to exactly what was exercised (cluster lifecycle and identity — not Argo CD/workloads, which remain `NOT IMPLEMENTED`) | `make lab-test-lifecycle` proved create→create(no-op)→destroy→destroy(no-op); the persistent cluster was then created and confirmed: server `v1.36.4` exactly, node image digest matches the pin, node `Ready`, reachable only via `.local/kubeconfig`, no `staging`/`production`/`argocd` namespace present |
 | `lab-multicluster` | `NOT IMPLEMENTED` | Reserved for Phase 2.7, not created |
-| Repository governance baseline (Dependabot, Actions policy, merge-button policy) | `PARTIALLY VERIFIED` at commit time — the five settings are applied and read back via the GitHub API after this PR opens, with the result recorded in that PR's description rather than asserted here in advance | `.github/dependabot.yml` renders exactly one `github-actions` ecosystem entry; `main` branch protection and repository rulesets remain confirmed absent and plan-gated (`NOT IMPLEMENTED` — private repository on GitHub Free; see ADR-0009) |
+| Repository governance baseline (Dependabot, Actions policy, merge-button policy) | `PARTIALLY VERIFIED` at commit time — the five settings are applied and read back via the GitHub API after this PR opens, with the result recorded in that PR's description rather than asserted here in advance | `.github/dependabot.yml` renders exactly one `github-actions` ecosystem entry; `main` branch protection and repository rulesets are `NOT IMPLEMENTED` — now available because the repository is public (API: `Branch not protected`, rulesets `[]`, 2026-11-10), applying them pending explicit authorization (see ADR-0009) |
 | Argo CD control-plane bootstrap in `lab-lite` (`make argocd-*`) | `VERIFIED`, scoped to exactly what was exercised (Argo CD's own install/uninstall/upgrade lifecycle — not `ApplicationSet`/`Application` reconciliation behavior, which remains `NOT IMPLEMENTED` until Phase 2.3) | `make argocd-chart-fetch` downloaded and checksum-verified `argo-cd-10.4.2.tgz`; `make argocd-render` confirmed all 7 rendered image occurrences (2 distinct images) are digest-pinned and dex/notifications are absent; `make argocd-test-lifecycle` proved install→install(true no-op: Helm revision, live-manifest sha256, and every managed workload's `.metadata.generation` byte-identical)→uninstall(exactly the 3 pinned CRDs retained and `kubectl diff`-compatible)→uninstall(no-op)→restoration install using those retained CRDs, ending installed and healthy; a further two `make argocd-install` runs confirmed persistence (second run a true no-op) |
 | Private repository GitOps bootstrap (`make gitops-*`) | `PARTIALLY VERIFIED` at commit time — offline render and repository-authentication provisioning verified pre-merge; the runtime bootstrap/self-heal/uninstall lifecycle is verified via this phase's own PR feature-branch lifecycle test, whose result is recorded in that PR's description (and, if a correction was needed after that run, in a follow-up commit's message) rather than asserted here in advance | `make gitops-render` confirmed the chart renders exactly 1 `AppProject`, 1 `ApplicationSet` with exactly 2 generator elements, 0 `Secret` objects, no wildcard permissions, and correct revision propagation; `make gitops-repo-setup` provisioned the deploy key/GitHub deploy key/repository Secret and was confirmed idempotent (re-run is a true no-op); client- and server-side `kubectl apply --dry-run` passed for the root Application, the rendered AppProject/ApplicationSet, and both environment ConfigMaps |
 | Argo CD reconciliation / `ApplicationSet` behavior | `VERIFIED`, scoped to exactly what Phase 2.4's lifecycle test exercises | Scope is exactly `platform`/`platform-environments`/`platform-smoke-{staging,production}`, each now rendering `charts/standard-workload` (`Deployment`/`Service`/`ServiceAccount`/`ConfigMap`) instead of a bare `ConfigMap` — no other `Application`/`ApplicationSet`/`AppProject` exists |
@@ -594,7 +625,10 @@ Implementation Status" below.
 | Per-environment External Secrets reconciliation contract (`make eso-provision-source-secret`/`eso-test-secret-lifecycle`) | `PARTIALLY VERIFIED` at commit time — offline chart/schema render proof verified pre-merge (`make check-standard-workload-chart`: zero `Secret` rendered, read-only volume only, no `env`/`envFrom`/`secretKeyRef`, staging/production `SecretStore`/`ExternalSecret` fully isolated, `AppProject` grants exactly the two new namespaced kinds and never `Secret`); the runtime provision/reconcile/mount/rotate/propagate/delete-recreate/no-op/uninstall/restore lifecycle is verified via this phase's own PR feature-branch lifecycle test, whose result is recorded in that PR's description rather than asserted here in advance | `make check-standard-workload-chart` proved the static contract offline, including a disabled-by-default render byte-for-byte equivalent (kind-set and volume-set) to Phase 2.4's original 4-kind baseline; `make eso-test-secret-lifecycle` proves independent synthetic source Secrets for both environments (imperative, out-of-Git, never printed) → both `SecretStore`s Ready → both `ExternalSecret`s Ready → target Secrets owned exclusively by ESO → workload rollout → source/target/mounted-file SHA256 match per environment and differ between environments → controlled rotation of staging's source value propagates to its target Secret and mounted file with production's Secret resourceVersion/Pod UID/hash unchanged → manual deletion of the target Secret is recreated by ESO with the same value → a repeated `gitops-bootstrap` is a true resourceVersion no-op → `eso-uninstall` retains both target Secrets (never owned by the Helm release) with Argo CD and the workload baseline unaffected → a repeated uninstall is a no-op → restoration from `main` leaves both `ExternalSecret`s Ready again, throughout printing only hashes, resource states, and metadata, never a decoded secret value |
 | Transactional GitOps lifecycle and safe revision rollback (`make gitops-switch-revision`/`gitops-retire-appproject-kind`/`gitops-uninstall`) | `PARTIALLY VERIFIED` at commit time — offline classifier logic verified live read-only against the persistent lab cluster pre-merge (correctly classifies every real object in `staging`/`production` with zero `unknown`, and correctly flags an injected synthetic fixture as `unknown`); the runtime preflight-abort/ESO-retention/revision-switch/kind-retirement lifecycle is verified via this phase's own PR feature-branch test run, whose result is recorded in that PR's description rather than asserted here in advance | `tests/gitops/test-lifecycle.sh` proves an injected unclassifiable fixture aborts `gitops-uninstall` with zero mutation (root Application UID/generation unchanged, workload untouched), and that ESO's Helm-owned scoped RBAC (verified via exact `app.kubernetes.io/managed-by`/`meta.helm.sh/release-name` metadata) correctly forces `staging`/`production` to be retained rather than deleted or blocking the cascade; `tests/gitops/test-revision-switch.sh` proves a nonexistent revision fails closed with zero mutation, an in-place switch preserves the root Application's UID/finalizers across both directions (to a feature branch and back to `main`), and the stale-operation detector/remediation helpers work correctly; `tests/gitops/test-appproject-kind-retirement.sh` proves the full 8-step drain (self-heal paused, `SecretStore`/`ExternalSecret` deleted while still whitelisted, stable absence, target Secret retained per `deletionPolicy: Retain` with content hash unchanged, zero pending operations) and resume (self-heal restored, `SecretStore`/`ExternalSecret` recreated and Ready again) against staging's real, live contract |
 | Source-secret idempotency and kubeconfig evidence hardening (`lab/eso/provision-source-secret.sh` `--rotate`, `global_kubeconfig_fingerprint`) | `PARTIALLY VERIFIED` at commit time — offline fixture-based proof of the kubeconfig helper's isolation verified pre-merge (synthetic, credential-free fixtures under a `mktemp -d` scratch directory prove it measures an explicit path while ignoring an inherited `KUBECONFIG`, a stable `ABSENT` state, and correct handling of paths containing spaces); the runtime ensure/no-op/rotate/isolation lifecycle for the real source Secrets is verified via this phase's own PR feature-branch test run, whose result is recorded in that PR's description rather than asserted here in advance | `tests/eso/test-provision-source-secret-idempotency.sh` proves ensure is a true no-op against an existing Secret even when a different value is piped in (UID/resourceVersion/content-hash/RoleBinding all unchanged), `--rotate` changes resourceVersion/hash while preserving UID, a repeated ensure after rotate stays at the rotated value, full staging↔production isolation in both rotation directions, and the closed environment-name allowlist rejects an arbitrary value before any mutation; `tests/eso/test-secret-lifecycle.sh` uses the same `--rotate` flag and the `global_kubeconfig_fingerprint` helper in place of its previous ad-hoc inline check |
-| Production PR-gated promotion | `PROPOSED` | No remote, branch protection, or `AppProject` exists yet |
+| Production PR-gated promotion | `PROPOSED` | The `platform` `AppProject` and a `validate` CI check exist; branch protection on `main` is not applied, so the PR gate is not server-enforced |
+| Terraform/EKS/Pod Identity/Secrets Manager IaC and the `aws-eks` GitOps profile (Phase 3.1–3.3.5) | `CODE-CONFIRMED`, offline only — never applied against AWS | `terraform test` suites for `network`/`eks`/`identity`, the `aws-eks` profile render matrix, and the offline EKS identity matrix all run in `make validate` |
+| Hub-and-spoke model: `dev`/`uat`/`prod` spokes, remote-cluster registration, cluster-generator `ApplicationSet` (ADR-0015) | `PROPOSED` | Phase 2.7 lifecycle test in `lab-multicluster` |
+| Multi-account AWS layout with organization guardrails (ADR-0015) | `PROPOSED` | Phase 3.4 offline `terraform test` plus emulator `apply` |
 | Argo CD's production AWS identity provider | `UNKNOWN` | Explicitly undecided pending Phase 3/4 (ADR-0005) |
 | Crossplane-based self-service infrastructure | `OUT OF SCOPE` | Deferred past the MVP (ADR-0001) |
 | Progressive Delivery as primary production gate | `OUT OF SCOPE` | Not the design (see "Application Delivery and Promotion") |
@@ -618,19 +652,32 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
     - **2.6.2 — Secret reconciliation contract and workload consumption:** implemented (namespaced `SecretStore`/`ExternalSecret` per environment, Kubernetes-provider local backend; `charts/standard-workload` mounts the ESO-owned target Secret as a read-only volume, never `env`/`envFrom`; the source Secret is created and rotated exclusively by `lab/eso/provision-source-secret.sh`, imperative and out of Git; `AppProject` extended with exactly the two new namespaced kinds, never `Secret`; per `.local/evidence/phase-2.6-external-secrets-plan.md`).
     - **2.6.3a — Transactional GitOps lifecycle and safe revision rollback:** implemented (two-phase `gitops-uninstall`: a strictly read-only preflight classifies every namespaced object in `staging`/`production` as `argocd-tracked`/`helm-eso-scoped`/`kubernetes-builtin`/`unknown` via verifiable tracking-id/Helm-ownership metadata before the root Application is ever touched, aborting with zero mutation on an unclassifiable object, and retaining a namespace an active ESO scoped release still depends on; `lab/gitops/switch-revision.sh` switches the root Application's `targetRevision` via an in-place patch only, never delete+recreate, preserving `.metadata.uid`/`.metadata.finalizers`, requiring 3 consecutive stable reads before declaring convergence, and rolling back automatically on failure; `lab/gitops/retire-appproject-kind.sh` drains `SecretStore`/`ExternalSecret` from a generated Application - pausing self-heal, deleting while the AppProject still permits the kind, verifying target-Secret retention per its `deletionPolicy`, and never leaving self-heal silently disabled on any error path; per `.local/evidence/phase-2.6.3-gitops-lifecycle-hardening-plan.md`).
     - **2.6.3b — Source-secret idempotency and kubeconfig evidence hardening:** implemented (`lab/eso/provision-source-secret.sh`'s default invocation is now a true no-op when the source Secret already exists - never read, never re-applied, UID/resourceVersion/hash/RBAC all preserved - and rotating an existing value requires the explicit `--rotate` flag, which fails closed if the Secret does not exist yet; `global_kubeconfig_fingerprint`/`assert_kubeconfig_paths_distinct` in `scripts/lab/_lib.sh` read the true global kubeconfig state at an explicit path, immune to any inherited `KUBECONFIG`, never printing certificate/token/user/cluster content; per `.local/evidence/phase-2.6.3-gitops-lifecycle-hardening-plan.md`).
-  - **2.7 — Multicluster profile:** not started.
-  - **2.8 — Evidence and hardening:** not started.
-- **Phase 3 — Terraform/EKS, plan-only:** not started.
-- **Phase 4 — Identity and secrets:** not started.
-- **Phase 5 — Promotion and governance:** not started.
-- **Phase 6 — Hardening and operations:** not started.
+  - **2.7 — Hub-and-spoke multicluster profile:** not started. `lab-multicluster` as the `management` hub plus `dev`/`uat` spokes (`prod` opt-in); each spoke registered in the hub's Argo CD with its own least-privilege credential; `ApplicationSet` moved to a cluster generator keyed on spoke labels, failing closed on unknown labels; `staging` → `uat` rename across namespaces, values, ESO releases, and tests (ADR-0015).
+  - **2.8 — Workload resilience and evidence hardening:** not started. Standard chart gains PodDisruptionBudget, topology spread constraints, graceful-shutdown defaults (`preStop`, termination grace period), optional HPA, and default-deny NetworkPolicy — the optional resources ADR-0006 left `NOT IMPLEMENTED`.
+- **Phase 3 — Terraform/EKS, plan-only:**
+  - **3.1 — Network and EKS IaC foundation:** implemented, offline-validated only (ADR-0011, ADR-0012).
+  - **3.2 — Pod Identity and Secrets Manager IaC:** implemented, offline-validated only (ADR-0013).
+  - **3.3.1–3.3.3 — Dual-provider secret contract:** implemented, offline-validated only.
+  - **3.3.4a — Declarative `aws-eks` Application generation:** implemented, offline-validated only.
+  - **3.3.4b–3.3.5 — EKS application identity boundary:** implemented, offline-validated only (ADR-0014).
+  - **3.4 — Multi-account hub-and-spoke IaC:** not started. One account per environment under one organization; service control policies (region restriction, protection of security services); organization-wide threat detection, configuration recording, and security findings aggregation; per-environment budgets with alerts; Karpenter for spoke capacity; immutable-tag container registry with lifecycle rules and scan-on-push. Plan-only and emulator-applied; no real AWS apply.
+- **Phase 4 — Identity and secrets:** not started. Human access through IAM Identity Center permission sets with a documented, time-bound elevation path for production; Keycloak for the local lab (ADR-0005, ADR-0008); spoke ESO instances on the AWS Secrets Manager provider.
+- **Phase 5 — Promotion and governance:**
+  - **5.1 — Image CI and promotion:** not started. Build, vulnerability scan with a failing threshold, SBOM, signature, and push to the registry; promotion `dev` → `uat` → `prod` as PRs that bump an immutable image reference.
+  - **5.2 — Terraform CI:** not started. `terraform plan` and static analysis on every PR; `apply` of the supported resource types against a local AWS emulator in CI, so infrastructure changes are applied — not only validated — before any real account is involved.
+  - **5.3 — Branch protection:** not started. Apply the ADR-0009 ruleset, now available because the repository is public (requires explicit authorization).
+- **Phase 6 — Hardening and operations:**
+  - **6.1 — Observability:** not started. Per-spoke metrics shipped to the hub; dashboards and logs in the hub; one SLO with unit-tested multi-window burn-rate alerts; Argo CD health alerts.
+  - **6.2 — Backup and restore:** not started. Cluster-resource and volume backup to object storage, with a scripted restore drill whose result is recorded as evidence.
+  - **6.3 — Reference application:** not started. Replace `podinfo` with a small multi-language application (two or three services) and one data store whose credentials arrive through ESO, proving the standard chart across languages.
+  - **6.4 — First real AWS deployment:** not started. Hub plus one spoke in a single sandbox account, created and destroyed in one authorized session with a budget alert in place; measured cost and evidence recorded here.
 - **Phase 7 — Final evidence, draw.io, and DOCX:** not started.
 
 ## Definition of Done
 
 The project is done only when: a new engineer can launch the local lab
 from documented prerequisites; `ApplicationSet` creates the intended
-staging/production `Application` objects and never for `management`; the
+spoke `Application` objects and never for the `management` hub; the
 workload-identity contract is contract-tested and EKS Pod Identity is
 proven against a real, temporary, authorized EKS cluster; production
 promotion requires a reviewed PR **and** the `AppProject`/RBAC/
@@ -638,11 +685,11 @@ least-privilege-credential controls; external dependencies are pinned
 immutably while the desired-state branch itself is protected by review;
 every cluster's ESO instance reconciles under the layered isolation model
 with no secret value ever in Git; required CI checks are blocking and
-green; this TAD and its six ADRs match the actual implementation; every
+green; this TAD and its ADRs match the actual implementation; every
 unverified runtime statement is labeled honestly; no
 confidentiality-restricted material or its provenance is referenced
 anywhere in this repository's history; and no AWS resource was created
 without explicit authorization.
 
-None of these criteria are met yet — Phase 1 delivers the architecture
-baseline only; implementation begins in Phase 2.
+Not all of these criteria are met yet — see the evidence table for the
+status of each capability.

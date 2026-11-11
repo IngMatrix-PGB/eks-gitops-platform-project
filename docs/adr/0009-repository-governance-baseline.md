@@ -3,6 +3,19 @@
 **Status:** Accepted
 **Date:** 2026-09-03
 
+> **Update (2026-11-10): the repository is now public.** The visibility
+> premise below no longer holds. Verified via the GitHub REST API as the
+> repository owner on 2026-11-10: `GET /repos/{owner}/{repo}` returns
+> `"visibility": "public"`; `GET .../branches/main/protection` returns
+> **HTTP 404 `Branch not protected`** (the feature is available, nothing
+> is configured) instead of the earlier HTTP 403 plan-upgrade message;
+> `GET .../rulesets` returns `[]`. Branch protection and rulesets are
+> therefore **available at no cost but not yet applied** — `main` is
+> still protected by process only. Applying the ruleset described under
+> `Validation Method` is a repository-settings mutation and stays gated
+> on a fresh, explicit authorization (`AGENTS.md`). The original record
+> below is kept unchanged as the history of the decision.
+
 ## Context
 
 Phase 2.4 (the Standard Workload Contract) merged into `main` with no
