@@ -1,12 +1,12 @@
 #!/bin/sh
 # Fully offline Helm render of the pinned External Secrets Operator
-# chart, once per logical unit (the decoupled CRD set, the staging
-# scoped release, the production scoped release), plus the full
+# chart, once per logical unit (the decoupled CRD set and each of the
+# three scoped releases - dev, uat, prod), plus the full
 # collision/ownership proof required before any of this is ever
 # applied to a cluster: every rendered image is digest-pinned, no
-# wildcard RBAC exists anywhere, the 25 CRDs never appear in either
+# wildcard RBAC exists anywhere, the 25 CRDs never appear in any
 # scoped release's own render, no (apiVersion, kind, namespace, name)
-# tuple is rendered by both scoped releases, and the webhook/cert-
+# tuple is rendered by two scoped releases, and the webhook/cert-
 # controller singleton components render from exactly one release.
 # Never touches the cluster, never downloads anything. Backs
 # `make eso-render`.
@@ -41,24 +41,21 @@ if ! eso_render_crds_source "$workdir/crds-source.yaml" 2>"$workdir/crds.err"; t
 fi
 eso_extract_crds "$workdir/crds-source.yaml" > "$workdir/crds-only.yaml"
 
-echo "eso-render: rendering staging (scopedNamespace=staging, webhook/cert-controller owner) ..."
-eso_write_values "staging" "true" "true" "$workdir/values-staging.yaml"
-if ! phelm template eso-staging "$ESO_CHART_TGZ" -f "$workdir/values-staging.yaml" \
-      --namespace eso-staging > "$workdir/render-staging.yaml" 2>"$workdir/staging.err"; then
-  echo "FAIL: staging render failed" >&2
-  cat "$workdir/staging.err" >&2
-  exit 1
-fi
-
-echo "eso-render: rendering production (scopedNamespace=production, no webhook/cert-controller) ..."
-eso_write_values "production" "false" "false" "$workdir/values-production.yaml"
-if ! phelm template eso-production "$ESO_CHART_TGZ" -f "$workdir/values-production.yaml" \
-      --namespace eso-production > "$workdir/render-production.yaml" 2>"$workdir/production.err"; then
-  echo "FAIL: production render failed" >&2
-  cat "$workdir/production.err" >&2
-  exit 1
-fi
-echo "OK: all three renders succeeded"
+while IFS='|' read -r env_name ns release webhook_create cert_create; do
+  [ -z "$env_name" ] && continue
+  echo "eso-render: rendering $env_name (scopedNamespace=$env_name, webhook/cert-controller=$webhook_create) ..."
+  eso_write_values "$env_name" "$webhook_create" "$cert_create" "$workdir/values-${env_name}.yaml"
+  if ! phelm template "$release" "$ESO_CHART_TGZ" -f "$workdir/values-${env_name}.yaml" \
+        --namespace "$ns" > "$workdir/render-${env_name}.yaml" 2>"$workdir/${env_name}.err"; then
+    echo "FAIL: $env_name render failed" >&2
+    cat "$workdir/${env_name}.err" >&2
+    exit 1
+  fi
+done <<EOF
+$(eso_environments)
+EOF
+eso_env_names="$(eso_environments | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//')"
+echo "OK: CRD unit and every scoped release ($eso_env_names) rendered"
 
 # --- inventory: apiVersion<TAB>kind<TAB>namespace<TAB>name, one line per
 # rendered document, built with a POSIX-portable YAML multi-document
@@ -85,10 +82,11 @@ inventory() {
   ' "$infile" | grep -v '^\t\t\t$' | sort -u > "$outfile"
 }
 
-inventory "$workdir/render-staging.yaml" "$workdir/inv-staging.tsv"
-inventory "$workdir/render-production.yaml" "$workdir/inv-production.tsv"
+for env_name in $eso_env_names; do
+  inventory "$workdir/render-${env_name}.yaml" "$workdir/inv-${env_name}.tsv"
+done
 
-# --- 1/2. CRDs installed exactly once, never rendered by either scoped release ---
+# --- 1/2. CRDs installed exactly once, never rendered by any scoped release ---
 crd_count="$(grep -c '^kind: CustomResourceDefinition$' "$workdir/crds-only.yaml" || true)"
 if [ "$crd_count" -ne 25 ]; then
   echo "FAIL: expected exactly 25 CRDs, got $crd_count" >&2
@@ -96,22 +94,36 @@ if [ "$crd_count" -ne 25 ]; then
 else
   echo "OK: exactly 25 CRDs rendered by the decoupled CRD unit"
 fi
-if grep -q "CustomResourceDefinition" "$workdir/inv-staging.tsv" "$workdir/inv-production.tsv"; then
+crd_in_release=0
+for env_name in $eso_env_names; do
+  grep -q "CustomResourceDefinition" "$workdir/inv-${env_name}.tsv" && crd_in_release=1
+done
+if [ "$crd_in_release" -ne 0 ]; then
   echo "FAIL: a scoped release renders a CustomResourceDefinition - CRD ownership is not decoupled" >&2
   fail=1
 else
-  echo "OK: neither scoped release renders or adopts any CRD"
+  echo "OK: no scoped release renders or adopts any CRD"
 fi
 
-# --- 4. no namespaced/cluster-scoped resource collision between the two
-# scoped releases (identical apiVersion+kind+namespace+name tuple) ---
-collisions="$(comm -12 "$workdir/inv-staging.tsv" "$workdir/inv-production.tsv" || true)"
-if [ -n "$collisions" ]; then
-  echo "FAIL: staging and production releases render colliding resources:" >&2
-  printf '%s\n' "$collisions" >&2
+# --- 4. no namespaced/cluster-scoped resource collision between any two
+# scoped releases (identical apiVersion+kind+namespace+name tuple),
+# checked pairwise ---
+collision_fail=0
+for a_env in $eso_env_names; do
+  for b_env in $eso_env_names; do
+    [ "$a_env" \< "$b_env" ] || continue
+    collisions="$(comm -12 "$workdir/inv-${a_env}.tsv" "$workdir/inv-${b_env}.tsv" || true)"
+    if [ -n "$collisions" ]; then
+      echo "FAIL: $a_env and $b_env releases render colliding resources:" >&2
+      printf '%s\n' "$collisions" >&2
+      collision_fail=1
+    fi
+  done
+done
+if [ "$collision_fail" -ne 0 ]; then
   fail=1
 else
-  echo "OK: no (apiVersion, kind, namespace, name) collision between staging and production"
+  echo "OK: no (apiVersion, kind, namespace, name) collision between any two of $eso_env_names"
 fi
 
 # --- 5/6. webhook and cert-controller exist at most once in the
@@ -119,7 +131,10 @@ fi
 # ValidatingWebhookConfiguration names are fixed, non-release-qualified
 # strings, and cert-controller manages that same cluster-wide webhook) ---
 combined="$workdir/inv-combined.tsv"
-cat "$workdir/inv-staging.tsv" "$workdir/inv-production.tsv" > "$combined"
+: > "$combined"
+for env_name in $eso_env_names; do
+  cat "$workdir/inv-${env_name}.tsv" >> "$combined"
+done
 webhook_cfg_count="$(grep -c 'ValidatingWebhookConfiguration' "$combined" || true)"
 cert_deploy_count="$(awk -F'\t' '$2=="Deployment" && $4 ~ /cert-controller$/' "$combined" | wc -l | tr -d ' ')"
 webhook_deploy_count="$(awk -F'\t' '$2=="Deployment" && $4 ~ /webhook$/' "$combined" | wc -l | tr -d ' ')"
@@ -136,18 +151,16 @@ if [ "$webhook_deploy_count" -ne 1 ]; then
   fail=1
 fi
 [ "$webhook_cfg_count" -eq 2 ] && [ "$cert_deploy_count" -eq 1 ] && [ "$webhook_deploy_count" -eq 1 ] && \
-  echo "OK: webhook and cert-controller each exist exactly once across the complete set (owned by eso-staging)"
+  echo "OK: webhook and cert-controller each exist exactly once across the complete set (owned by eso-uat)"
 
 # --- 9/10/11: each controller's own Role is scoped to exactly its own
 # namespace, and no wildcard verb/resource/apiGroup exists anywhere. ---
-if ! awk -F'\t' '$2=="Role" && $3=="staging" && $4=="eso-staging-external-secrets-controller"' "$workdir/inv-staging.tsv" | grep -q .; then
-  echo "FAIL: staging controller Role not found scoped to namespace 'staging'" >&2
-  fail=1
-fi
-if ! awk -F'\t' '$2=="Role" && $3=="production" && $4=="eso-production-external-secrets-controller"' "$workdir/inv-production.tsv" | grep -q .; then
-  echo "FAIL: production controller Role not found scoped to namespace 'production'" >&2
-  fail=1
-fi
+for env_name in $eso_env_names; do
+  if ! awk -F'\t' -v e="$env_name" '$2=="Role" && $3==e && $4==("eso-" e "-external-secrets-controller")' "$workdir/inv-${env_name}.tsv" | grep -q .; then
+    echo "FAIL: $env_name controller Role not found scoped to namespace '$env_name'" >&2
+    fail=1
+  fi
+done
 if awk -F'\t' '$2=="ClusterRole" && $4 ~ /-external-secrets-controller$/' "$combined" | grep -q .; then
   echo "FAIL: the main controller's Role rendered as a ClusterRole - scopedRBAC did not take effect" >&2
   fail=1
@@ -160,7 +173,7 @@ echo "OK: each controller's Role is scoped to exactly its own namespace; no cont
 # exactly "*" in one of apiGroups/resources/verbs/resourceNames/
 # nonResourceURLs (see eso_check_no_rbac_wildcards in scripts/eso/_lib.sh).
 wildcard_fail=0
-for label in staging production; do
+for label in $eso_env_names; do
   hits="$(eso_check_no_rbac_wildcards "$workdir/render-${label}.yaml")" || wildcard_fail=1
   if [ -n "$hits" ]; then
     echo "FAIL: structural RBAC wildcard scan found violation(s) in $label:" >&2
@@ -170,17 +183,18 @@ done
 if [ "$wildcard_fail" -ne 0 ]; then
   fail=1
 else
-  echo "OK: structural scan of apiGroups/resources/verbs/resourceNames/nonResourceURLs found no wildcard in either scoped release"
+  echo "OK: structural scan of apiGroups/resources/verbs/resourceNames/nonResourceURLs found no wildcard in any scoped release"
 fi
 
 # --- every rendered image is digest-pinned, never a mutable tag alone ---
-for f in "$workdir/render-staging.yaml" "$workdir/render-production.yaml"; do
+for env_name in $eso_env_names; do
+  f="$workdir/render-${env_name}.yaml"
   if grep -E '^[[:space:]]*image:[[:space:]]' "$f" | grep -v '@sha256:' >/dev/null 2>&1; then
     echo "FAIL: $f contains a non-digest-pinned image reference" >&2
     fail=1
   fi
 done
-image_lines="$(grep -E '^[[:space:]]*image:[[:space:]]' "$workdir/render-staging.yaml" "$workdir/render-production.yaml" | sed -E 's/^.*image:[[:space:]]*//' | sort -u)"
+image_lines="$(for env_name in $eso_env_names; do grep -E '^[[:space:]]*image:[[:space:]]' "$workdir/render-${env_name}.yaml"; done | sed -E 's/^.*image:[[:space:]]*//' | sort -u)"
 [ "$fail" -eq 0 ] && echo "OK: every rendered image is digest-pinned:" && printf '%s\n' "$image_lines" | sed 's/^/      /'
 
 if [ "$fail" -ne 0 ]; then

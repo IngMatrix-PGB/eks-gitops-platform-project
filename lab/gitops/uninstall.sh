@@ -1,7 +1,7 @@
 #!/bin/sh
 # Two-phase transactional uninstall (Phase 2.6.3a). Phase A (preflight)
 # is strictly read-only: it classifies every namespaced object in
-# staging/production BEFORE the root Application is touched, and
+# dev/uat/prod BEFORE the root Application is touched, and
 # aborts with ZERO mutation if anything is unclassifiable. Phase B
 # (execution) only begins once Phase A has fully passed.
 #
@@ -16,7 +16,7 @@
 # Applications/their managed resources) and only checked namespace
 # contents afterward - by then, ESO's Phase 2.6.1 scoped-RBAC
 # Role/RoleBinding objects (which legitimately live inside
-# staging/production, not just eso-staging/eso-production) always made
+# uat/prod, not just eso-uat/eso-prod) always made
 # that check refuse to delete the namespace, but the workloads were
 # already gone. Reproduced and recovered once during Phase 2.6.2
 # testing.
@@ -74,8 +74,9 @@ pre_generation="$(gitops_app_generation "$GITOPS_ROOT_APP_NAME" || true)"
 echo "OK: captured pre-preflight root Application state (uid=$pre_uid generation=$pre_generation)"
 
 preflight_fail=0
-staging_decision="absent"
-production_decision="absent"
+dev_decision="absent"
+uat_decision="absent"
+prod_decision="absent"
 
 classify_and_decide_namespace() {
   # Prints exactly one of: absent | delete | retain_eso_active |
@@ -127,10 +128,12 @@ classify_and_decide_namespace() {
   echo "delete"
 }
 
-staging_decision="$(classify_and_decide_namespace staging platform-smoke-staging)"
-[ "$staging_decision" = "UNCLASSIFIABLE" ] && preflight_fail=1
-production_decision="$(classify_and_decide_namespace production platform-smoke-production)"
-[ "$production_decision" = "UNCLASSIFIABLE" ] && preflight_fail=1
+dev_decision="$(classify_and_decide_namespace dev platform-smoke-dev)"
+[ "$dev_decision" = "UNCLASSIFIABLE" ] && preflight_fail=1
+uat_decision="$(classify_and_decide_namespace uat platform-smoke-uat)"
+[ "$uat_decision" = "UNCLASSIFIABLE" ] && preflight_fail=1
+prod_decision="$(classify_and_decide_namespace prod platform-smoke-prod)"
+[ "$prod_decision" = "UNCLASSIFIABLE" ] && preflight_fail=1
 
 # ESO health is only a gate when ESO is actually installed - this
 # script must remain safe to run on a cluster that has never had ESO
@@ -165,7 +168,7 @@ if [ "$preflight_fail" -ne 0 ]; then
   echo "gitops-uninstall: Phase A FAILED - zero mutation performed, root Application untouched" >&2
   exit 1
 fi
-echo "OK: Phase A preflight passed (staging=$staging_decision production=$production_decision)"
+echo "OK: Phase A preflight passed (dev=$dev_decision uat=$uat_decision prod=$prod_decision)"
 
 # ============================================================
 # Phase B - execution (only reached if Phase A passed)
@@ -211,13 +214,14 @@ if [ "$cascade_fail" -ne 0 ]; then
   echo "gitops-uninstall: FAILED post-cascade check - this should be unreachable given a passing Phase A" >&2
   exit 3
 fi
-echo "OK: AppProject, ApplicationSet, and both generated Applications are gone"
+echo "OK: AppProject, ApplicationSet, and every generated Application is gone"
 
-for ns in staging production; do
+for ns in dev uat prod; do
   decision=""
   case "$ns" in
-    staging) decision="$staging_decision" ;;
-    production) decision="$production_decision" ;;
+    dev) decision="$dev_decision" ;;
+    uat) decision="$uat_decision" ;;
+    prod) decision="$prod_decision" ;;
   esac
   case "$decision" in
     absent)

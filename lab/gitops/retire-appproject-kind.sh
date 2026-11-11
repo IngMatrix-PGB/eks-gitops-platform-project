@@ -4,8 +4,8 @@
 # AppProject's namespaceResourceWhitelist (Phase 2.6.3a, Gap 3). This
 # is deliberately NOT a generic resource-retirement tool: the only two
 # kinds it ever touches are external-secrets.io/SecretStore and
-# external-secrets.io/ExternalSecret, and the only two environments are
-# staging and production - both fixed, not parameterizable.
+# external-secrets.io/ExternalSecret, and the only environments are
+# dev, uat and prod - a fixed, closed list, not parameterizable.
 #
 # Implements the plan's 8-step order:
 #   1. pause self-heal on the environment's generated Application (a
@@ -26,8 +26,8 @@
 # - self-heal is never left silently disabled on a failed drain.
 #
 # Usage:
-#   sh lab/gitops/retire-appproject-kind.sh <staging|production> --drain
-#   sh lab/gitops/retire-appproject-kind.sh <staging|production> --resume
+#   sh lab/gitops/retire-appproject-kind.sh <dev|uat|prod> --drain
+#   sh lab/gitops/retire-appproject-kind.sh <dev|uat|prod> --resume
 #
 # Exit codes:
 #   0  drain (or resume) completed and is stable
@@ -51,10 +51,11 @@ env_name="${1:-}"
 mode="${2:-}"
 
 case "$env_name" in
-  staging) app="platform-smoke-staging" ;;
-  production) app="platform-smoke-production" ;;
+  dev) app="platform-smoke-dev" ;;
+  uat) app="platform-smoke-uat" ;;
+  prod) app="platform-smoke-prod" ;;
   *)
-    echo "FAIL: usage: sh lab/gitops/retire-appproject-kind.sh <staging|production> <--drain|--resume>" >&2
+    echo "FAIL: usage: sh lab/gitops/retire-appproject-kind.sh <dev|uat|prod> <--drain|--resume>" >&2
     exit 1
     ;;
 esac
@@ -62,7 +63,7 @@ esac
 case "$mode" in
   --drain|--resume) : ;;
   *)
-    echo "FAIL: usage: sh lab/gitops/retire-appproject-kind.sh <staging|production> <--drain|--resume>" >&2
+    echo "FAIL: usage: sh lab/gitops/retire-appproject-kind.sh <dev|uat|prod> <--drain|--resume>" >&2
     exit 1
     ;;
 esac

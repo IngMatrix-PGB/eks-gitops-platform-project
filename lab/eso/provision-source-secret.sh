@@ -25,14 +25,14 @@
 # material is read, in case the caller's shell inherited it enabled.
 #
 # Usage:
-#   sh lab/eso/provision-source-secret.sh staging               # ensure: create if absent, true no-op if present (never reads stdin/prompt when present)
-#   printf '%s' "$VALUE" | sh lab/eso/provision-source-secret.sh staging --rotate   # rotate an EXISTING Secret's value only
-#   sh lab/eso/provision-source-secret.sh staging --delete       # idempotent teardown (unchanged, unrelated to ensure/rotate)
+#   sh lab/eso/provision-source-secret.sh uat               # ensure: create if absent, true no-op if present (never reads stdin/prompt when present)
+#   printf '%s' "$VALUE" | sh lab/eso/provision-source-secret.sh uat --rotate   # rotate an EXISTING Secret's value only
+#   sh lab/eso/provision-source-secret.sh uat --delete       # idempotent teardown (unchanged, unrelated to ensure/rotate)
 #
 # Also idempotently creates the source namespace and the narrow
 # Role/RoleBinding granting exactly the environment's dedicated auth
-# ServiceAccount (staging-secretstore-reader / production-
-# secretstore-reader - rendered by charts/standard-workload, not this
+# ServiceAccount (dev-secretstore-reader / uat-secretstore-reader /
+# prod-secretstore-reader - rendered by charts/standard-workload, not this
 # script) get/list/watch on exactly the one named source Secret - never
 # a wildcard resourceName, never cluster-scoped. Only done on the
 # create path (Secret absent) - never touched on the ensure no-op path
@@ -56,20 +56,26 @@ action="${2:-}"
 # Closed allowlist - reject any other value BEFORE any mutation, and
 # before reading anything from stdin.
 case "$env_name" in
-  staging)
-    source_ns="eso-source-staging"
-    source_secret="local-backend-staging"
-    target_ns="staging"
-    auth_sa="staging-secretstore-reader"
+  dev)
+    source_ns="eso-source-dev"
+    source_secret="local-backend-dev"
+    target_ns="dev"
+    auth_sa="dev-secretstore-reader"
     ;;
-  production)
-    source_ns="eso-source-production"
-    source_secret="local-backend-production"
-    target_ns="production"
-    auth_sa="production-secretstore-reader"
+  uat)
+    source_ns="eso-source-uat"
+    source_secret="local-backend-uat"
+    target_ns="uat"
+    auth_sa="uat-secretstore-reader"
+    ;;
+  prod)
+    source_ns="eso-source-prod"
+    source_secret="local-backend-prod"
+    target_ns="prod"
+    auth_sa="prod-secretstore-reader"
     ;;
   *)
-    echo "FAIL: usage: sh lab/eso/provision-source-secret.sh <staging|production> [--rotate|--delete]" >&2
+    echo "FAIL: usage: sh lab/eso/provision-source-secret.sh <dev|uat|prod> [--rotate|--delete]" >&2
     exit 1
     ;;
 esac

@@ -67,11 +67,11 @@ else
 fi
 
 generator_elements="$(grep -c '^\s*- env: ' "$render_out" || true)"
-if [ "$generator_elements" != "2" ]; then
-  echo "FAIL: expected exactly 2 generator list elements, found $generator_elements" >&2
+if [ "$generator_elements" != "3" ]; then
+  echo "FAIL: expected exactly 3 generator list elements, found $generator_elements" >&2
   fail=1
 else
-  echo "OK: exactly 2 generator elements (staging, production)"
+  echo "OK: exactly 3 generator elements (dev, uat, prod)"
 fi
 
 if grep -qE 'sourceRepos:\s*$' "$render_out" && grep -A1 'sourceRepos:' "$render_out" | grep -q '"\*"'; then
@@ -122,20 +122,20 @@ else
   echo "OK: the default render contains zero SecretStore/Secret/auth/serviceAccountRef/ARN/credential-shaped content (this chart only ever renders AppProject/ApplicationSet, never workload resources, for either profile)"
 fi
 
-# --- positive: AppProject's destination whitelist keeps both existing
-# local namespaces exactly as before, plus exactly the 2 aws-eks
+# --- positive: AppProject's destination whitelist keeps exactly the 3
+# local namespaces (dev, uat, prod), plus exactly the 2 aws-eks
 # namespaces added, never a wildcard - scoped to the AppProject
 # document only (kind: AppProject to the next "kind:" line), since the
 # ApplicationSet's own generator elements further down the same render
-# also contain "namespace: staging"/"namespace: production" lines that
+# also contain "namespace: dev"/"namespace: uat"/"namespace: prod" lines that
 # must not be double-counted as AppProject destinations. ---
 appproject_doc="$(awk '/^kind: AppProject$/{f=1} f && /^kind: ApplicationSet$/{exit} f{print}' "$render_out")"
-local_dest_count="$(printf '%s\n' "$appproject_doc" | grep -cE 'namespace: (staging|production)$' || true)"
+local_dest_count="$(printf '%s\n' "$appproject_doc" | grep -cE 'namespace: (dev|uat|prod)$' || true)"
 aws_dest_count="$(printf '%s\n' "$appproject_doc" | grep -cE 'namespace: (staging-aws|production-aws)$' || true)"
-if [ "$local_dest_count" = "2" ] && [ "$aws_dest_count" = "2" ]; then
-  echo "OK: AppProject destinations are exactly the 2 existing local namespaces (staging, production) plus exactly the 2 aws-eks namespaces (staging-aws, production-aws) - none removed, none wildcarded"
+if [ "$local_dest_count" = "3" ] && [ "$aws_dest_count" = "2" ]; then
+  echo "OK: AppProject destinations are exactly the 3 local namespaces (dev, uat, prod) plus exactly the 2 aws-eks namespaces (staging-aws, production-aws) - none removed, none wildcarded"
 else
-  echo "FAIL: AppProject destination count unexpected (local=$local_dest_count, expected 2; aws=$aws_dest_count, expected 2)" >&2
+  echo "FAIL: AppProject destination count unexpected (local=$local_dest_count, expected 3; aws=$aws_dest_count, expected 2)" >&2
   fail=1
 fi
 

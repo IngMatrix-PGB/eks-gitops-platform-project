@@ -4,12 +4,13 @@
 #   global-isolation baseline -> Argo CD/workload baseline -> install ->
 #   install (true no-op, per release) -> runtime health -> CRD
 #   ownership/isolation proof -> singleton-health guard (status.sh must
-#   fail while production exists if staging's shared webhook is
-#   unhealthy) -> CRD field-ownership conflict (install.sh's preflight
+#   fail while a dependent (dev, prod) exists if uat's shared webhook
+#   is unhealthy) -> CRD field-ownership conflict (install.sh's preflight
 #   must fail closed, with zero mutation and never a --force-conflicts
-#   retry) -> singleton-dependency guard (uninstalling staging while
-#   production exists must be refused) -> uninstall in the only order
-#   the guard allows (production, then staging; CRDs retained) ->
+#   retry) -> singleton-dependency guard (uninstalling uat while
+#   prod and dev exist must be refused, and still refused once only
+#   dev remains) -> uninstall in the only order the guard allows
+#   (prod, dev, then uat; CRDs retained) ->
 #   uninstall (no-op) -> restoration install -> restoration install
 #   (no-op) -> final health -> global-isolation re-check.
 #
@@ -77,25 +78,33 @@ echo "test-idempotency: first install ..."
 sh lab/eso/install.sh
 
 # --- 5. second install as a true no-op (per release) ---
-fp_staging_1="$(capture_release_fingerprint eso-staging eso-staging)"
-fp_production_1="$(capture_release_fingerprint eso-production eso-production)"
+fp_uat_1="$(capture_release_fingerprint eso-uat eso-uat)"
+fp_dev_1="$(capture_release_fingerprint eso-dev eso-dev)"
+fp_prod_1="$(capture_release_fingerprint eso-prod eso-prod)"
 
 echo "test-idempotency: second install (expect true no-op) ..."
 sh lab/eso/install.sh
 
-fp_staging_2="$(capture_release_fingerprint eso-staging eso-staging)"
-fp_production_2="$(capture_release_fingerprint eso-production eso-production)"
+fp_uat_2="$(capture_release_fingerprint eso-uat eso-uat)"
+fp_dev_2="$(capture_release_fingerprint eso-dev eso-dev)"
+fp_prod_2="$(capture_release_fingerprint eso-prod eso-prod)"
 
-if [ "$fp_staging_1" = "$fp_staging_2" ]; then
-  echo "OK: eso-staging second install is a true no-op (revision:manifest-sha256 unchanged: $fp_staging_1)"
+if [ "$fp_uat_1" = "$fp_uat_2" ]; then
+  echo "OK: eso-uat second install is a true no-op (revision:manifest-sha256 unchanged: $fp_uat_1)"
 else
-  echo "FAIL: eso-staging changed across the second install ($fp_staging_1 -> $fp_staging_2)" >&2
+  echo "FAIL: eso-uat changed across the second install ($fp_uat_1 -> $fp_uat_2)" >&2
   fail=1
 fi
-if [ "$fp_production_1" = "$fp_production_2" ]; then
-  echo "OK: eso-production second install is a true no-op (revision:manifest-sha256 unchanged: $fp_production_1)"
+if [ "$fp_dev_1" = "$fp_dev_2" ]; then
+  echo "OK: eso-dev second install is a true no-op (revision:manifest-sha256 unchanged: $fp_dev_1)"
 else
-  echo "FAIL: eso-production changed across the second install ($fp_production_1 -> $fp_production_2)" >&2
+  echo "FAIL: eso-dev changed across the second install ($fp_dev_1 -> $fp_dev_2)" >&2
+  fail=1
+fi
+if [ "$fp_prod_1" = "$fp_prod_2" ]; then
+  echo "OK: eso-prod second install is a true no-op (revision:manifest-sha256 unchanged: $fp_prod_1)"
+else
+  echo "FAIL: eso-prod changed across the second install ($fp_prod_1 -> $fp_prod_2)" >&2
   fail=1
 fi
 
@@ -105,12 +114,13 @@ sh tests/eso/test-runtime-health.sh || fail=1
 
 # --- 8. Helm ownership inventory: each release's resources carry that
 # release's own ownership annotation, never the other's. ---
-staging_owner="$(pkubectl get deployment eso-staging-external-secrets -n eso-staging -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null)"
-production_owner="$(pkubectl get deployment eso-production-external-secrets -n eso-production -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null)"
-if [ "$staging_owner" = "eso-staging" ] && [ "$production_owner" = "eso-production" ]; then
-  echo "OK: Helm ownership inventory correct (eso-staging owns its Deployment, eso-production owns its own - no cross-adoption)"
+uat_owner="$(pkubectl get deployment eso-uat-external-secrets -n eso-uat -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null)"
+dev_owner="$(pkubectl get deployment eso-dev-external-secrets -n eso-dev -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null)"
+prod_owner="$(pkubectl get deployment eso-prod-external-secrets -n eso-prod -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null)"
+if [ "$uat_owner" = "eso-uat" ] && [ "$dev_owner" = "eso-dev" ] && [ "$prod_owner" = "eso-prod" ]; then
+  echo "OK: Helm ownership inventory correct (eso-uat, eso-dev, and eso-prod each own only their own Deployment - no cross-adoption)"
 else
-  echo "FAIL: Helm ownership mismatch (staging owner='$staging_owner' production owner='$production_owner')" >&2
+  echo "FAIL: Helm ownership mismatch (uat owner='$uat_owner' dev owner='$dev_owner' prod owner='$prod_owner')" >&2
   fail=1
 fi
 
@@ -118,40 +128,41 @@ fi
 # to the other's namespace (already proven structurally by
 # test-runtime-health; here, confirm live RoleBindings reference only
 # their own release's ServiceAccount). ---
-staging_rb_subject="$(pkubectl get rolebinding eso-staging-external-secrets-controller -n staging -o jsonpath='{.subjects[0].namespace}' 2>/dev/null)"
-production_rb_subject="$(pkubectl get rolebinding eso-production-external-secrets-controller -n production -o jsonpath='{.subjects[0].namespace}' 2>/dev/null)"
-if [ "$staging_rb_subject" = "eso-staging" ] && [ "$production_rb_subject" = "eso-production" ]; then
+uat_rb_subject="$(pkubectl get rolebinding eso-uat-external-secrets-controller -n uat -o jsonpath='{.subjects[0].namespace}' 2>/dev/null)"
+dev_rb_subject="$(pkubectl get rolebinding eso-dev-external-secrets-controller -n dev -o jsonpath='{.subjects[0].namespace}' 2>/dev/null)"
+prod_rb_subject="$(pkubectl get rolebinding eso-prod-external-secrets-controller -n prod -o jsonpath='{.subjects[0].namespace}' 2>/dev/null)"
+if [ "$uat_rb_subject" = "eso-uat" ] && [ "$dev_rb_subject" = "eso-dev" ] && [ "$prod_rb_subject" = "eso-prod" ]; then
   echo "OK: each RoleBinding's subject ServiceAccount lives in its own operator namespace - no cross-environment reconciliation possible"
 else
-  echo "FAIL: RoleBinding subject mismatch (staging='$staging_rb_subject' production='$production_rb_subject')" >&2
+  echo "FAIL: RoleBinding subject mismatch (uat='$uat_rb_subject' dev='$dev_rb_subject' prod='$prod_rb_subject')" >&2
   fail=1
 fi
 
-# --- status.sh must fail while production exists if staging's shared
+# --- status.sh must fail while a dependent exists if uat's shared
 # webhook/cert-controller singleton is unhealthy - temporarily scale
 # the webhook Deployment to 0, confirm `eso-status` fails for exactly
 # that reason, then restore it and confirm status passes again. ---
 echo "test-idempotency: singleton health guard - scaling down the shared webhook Deployment ..."
-pkubectl scale deployment eso-staging-external-secrets-webhook -n eso-staging --replicas=0 >/dev/null
-pkubectl wait --for=jsonpath='{.status.replicas}'=0 deployment/eso-staging-external-secrets-webhook -n eso-staging --timeout=30s >/dev/null 2>&1 || true
+pkubectl scale deployment eso-uat-external-secrets-webhook -n eso-uat --replicas=0 >/dev/null
+pkubectl wait --for=jsonpath='{.status.replicas}'=0 deployment/eso-uat-external-secrets-webhook -n eso-uat --timeout=30s >/dev/null 2>&1 || true
 
 status_rc=0
 sh lab/eso/status.sh >/dev/null 2>&1 || status_rc=$?
 if [ "$status_rc" -eq 0 ]; then
-  echo "FAIL: eso-status succeeded even though the shared webhook singleton is unhealthy while production exists" >&2
+  echo "FAIL: eso-status succeeded even though the shared webhook singleton is unhealthy while the dependents exist" >&2
   fail=1
 else
   echo "OK: eso-status failed closed (exit $status_rc) while the shared webhook singleton was unhealthy"
 fi
 
 echo "test-idempotency: restoring the shared webhook Deployment ..."
-pkubectl scale deployment eso-staging-external-secrets-webhook -n eso-staging --replicas=1 >/dev/null
+pkubectl scale deployment eso-uat-external-secrets-webhook -n eso-uat --replicas=1 >/dev/null
 # Wait on the exact field status.sh itself reads (readyReplicas=1), not
 # just the Available condition - Available can flip true a moment
 # before status.readyReplicas catches up, which previously made the
 # very next status.sh call flap between "restored" and "still
 # unhealthy" depending on timing.
-pkubectl wait --for=jsonpath='{.status.readyReplicas}'=1 deployment/eso-staging-external-secrets-webhook -n eso-staging --timeout=120s >/dev/null
+pkubectl wait --for=jsonpath='{.status.readyReplicas}'=1 deployment/eso-uat-external-secrets-webhook -n eso-uat --timeout=120s >/dev/null
 
 status_rc=0
 status_tries=0
@@ -301,23 +312,26 @@ rm -f "$conflict_manifest" "$conflict_release_manifest" "$conflict_out"
 # --- second install after the conflict simulation must be a genuine
 # no-op, under the legitimate field manager only, with both releases
 # still at revision 1 and healthy. ---
-fp_staging_conflict_1="$(capture_release_fingerprint eso-staging eso-staging)"
-fp_production_conflict_1="$(capture_release_fingerprint eso-production eso-production)"
+fp_uat_conflict_1="$(capture_release_fingerprint eso-uat eso-uat)"
+fp_dev_conflict_1="$(capture_release_fingerprint eso-dev eso-dev)"
+fp_prod_conflict_1="$(capture_release_fingerprint eso-prod eso-prod)"
 sh lab/eso/install.sh
-fp_staging_conflict_2="$(capture_release_fingerprint eso-staging eso-staging)"
-fp_production_conflict_2="$(capture_release_fingerprint eso-production eso-production)"
-if [ "$fp_staging_conflict_1" = "$fp_staging_conflict_2" ] && [ "$fp_production_conflict_1" = "$fp_production_conflict_2" ]; then
-  echo "OK: post-conflict-simulation re-install is a true no-op for both releases"
+fp_uat_conflict_2="$(capture_release_fingerprint eso-uat eso-uat)"
+fp_dev_conflict_2="$(capture_release_fingerprint eso-dev eso-dev)"
+fp_prod_conflict_2="$(capture_release_fingerprint eso-prod eso-prod)"
+if [ "$fp_uat_conflict_1" = "$fp_uat_conflict_2" ] && [ "$fp_dev_conflict_1" = "$fp_dev_conflict_2" ] && [ "$fp_prod_conflict_1" = "$fp_prod_conflict_2" ]; then
+  echo "OK: post-conflict-simulation re-install is a true no-op for all three releases"
 else
-  echo "FAIL: post-conflict-simulation re-install was not a no-op (staging: $fp_staging_conflict_1 -> $fp_staging_conflict_2; production: $fp_production_conflict_1 -> $fp_production_conflict_2)" >&2
+  echo "FAIL: post-conflict-simulation re-install was not a no-op (uat: $fp_uat_conflict_1 -> $fp_uat_conflict_2; dev: $fp_dev_conflict_1 -> $fp_dev_conflict_2; prod: $fp_prod_conflict_1 -> $fp_prod_conflict_2)" >&2
   fail=1
 fi
-staging_rev="$(printf '%s' "$fp_staging_conflict_2" | cut -d: -f1)"
-production_rev="$(printf '%s' "$fp_production_conflict_2" | cut -d: -f1)"
-if [ "$staging_rev" = "1" ] && [ "$production_rev" = "1" ]; then
-  echo "OK: both releases remain at Helm revision 1 after the conflict simulation and re-install"
+uat_rev="$(printf '%s' "$fp_uat_conflict_2" | cut -d: -f1)"
+dev_rev="$(printf '%s' "$fp_dev_conflict_2" | cut -d: -f1)"
+prod_rev="$(printf '%s' "$fp_prod_conflict_2" | cut -d: -f1)"
+if [ "$uat_rev" = "1" ] && [ "$dev_rev" = "1" ] && [ "$prod_rev" = "1" ]; then
+  echo "OK: all three releases remain at Helm revision 1 after the conflict simulation and re-install"
 else
-  echo "FAIL: unexpected Helm revision after the conflict simulation (staging=$staging_rev production=$production_rev, expected 1/1)" >&2
+  echo "FAIL: unexpected Helm revision after the conflict simulation (uat=$uat_rev dev=$dev_rev prod=$prod_rev, expected 1/1/1)" >&2
   fail=1
 fi
 if printf '%s' "$restored_manager" | grep -q "^eks-gitops-lab-lite-eso-bootstrap$"; then
@@ -333,37 +347,51 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-# --- 11. singleton-dependency uninstall guard: removing staging (the
-# webhook/cert-controller owner) while production still exists must be
-# refused outright, with nothing uninstalled. ---
-echo "test-idempotency: singleton-dependency guard - uninstalling staging while production exists (expect refusal) ..."
-guard_out="$(mktemp)"
-guard_rc=0
-sh lab/eso/uninstall.sh staging >"$guard_out" 2>&1 || guard_rc=$?
-cat "$guard_out"
-rm -f "$guard_out"
+# --- 11. singleton-dependency uninstall guard: removing uat (the
+# webhook/cert-controller owner) while ANY dependent still exists must
+# be refused outright, with nothing uninstalled - checked twice: with
+# both dependents present, and again once only dev remains (proves the
+# guard covers every dependent, not just the first one listed). ---
+assert_uat_uninstall_refused() {
+  label="$1"
+  echo "test-idempotency: singleton-dependency guard - uninstalling uat while $label (expect refusal) ..."
+  guard_out="$(mktemp)"
+  guard_rc=0
+  sh lab/eso/uninstall.sh uat >"$guard_out" 2>&1 || guard_rc=$?
+  cat "$guard_out"
+  rm -f "$guard_out"
+  if [ "$guard_rc" -eq 0 ]; then
+    echo "FAIL: 'uninstall.sh uat' succeeded while $label - the singleton dependency was not enforced" >&2
+    fail=1
+  elif ! eso_release_exists eso-uat eso-uat; then
+    echo "FAIL: 'uninstall.sh uat' was refused but eso-uat is gone anyway" >&2
+    fail=1
+  else
+    echo "OK: 'uninstall.sh uat' was refused (exit $guard_rc) while $label, and eso-uat remains installed"
+  fi
+}
+assert_uat_uninstall_refused "dev and prod exist"
 
-if [ "$guard_rc" -eq 0 ]; then
-  echo "FAIL: 'uninstall.sh staging' succeeded while eso-production still exists - the singleton dependency was not enforced" >&2
+# --- ordinary uninstall, in the only order the guard allows: prod and
+# dev first (always safe), then uat (unblocked only once both are gone). ---
+echo "test-idempotency: uninstall prod (always safe) ..."
+sh lab/eso/uninstall.sh prod
+if eso_release_exists eso-prod eso-prod; then
+  echo "FAIL: eso-prod still exists after 'uninstall.sh prod'" >&2
   fail=1
-elif ! eso_release_exists eso-staging eso-staging; then
-  echo "FAIL: 'uninstall.sh staging' was refused but eso-staging is gone anyway" >&2
-  fail=1
-else
-  echo "OK: 'uninstall.sh staging' was refused (exit $guard_rc) and eso-staging remains installed"
 fi
 
-# --- ordinary uninstall, in the only order the guard allows: production
-# first (always safe), then staging (now unblocked). ---
-echo "test-idempotency: uninstall production (always safe) ..."
-sh lab/eso/uninstall.sh production
-if eso_release_exists eso-production eso-production; then
-  echo "FAIL: eso-production still exists after 'uninstall.sh production'" >&2
+assert_uat_uninstall_refused "only dev remains"
+
+echo "test-idempotency: uninstall dev (always safe) ..."
+sh lab/eso/uninstall.sh dev
+if eso_release_exists eso-dev eso-dev; then
+  echo "FAIL: eso-dev still exists after 'uninstall.sh dev'" >&2
   fail=1
 fi
 
-echo "test-idempotency: uninstall staging (now unblocked - production is gone) ..."
-sh lab/eso/uninstall.sh staging
+echo "test-idempotency: uninstall uat (now unblocked - every dependent is gone) ..."
+sh lab/eso/uninstall.sh uat
 
 # --- 12. confirm all 25 CRDs remain ---
 remaining=0
@@ -374,13 +402,13 @@ done <<EOF
 $(eso_crd_names)
 EOF
 if [ "$remaining" -eq 25 ]; then
-  echo "OK: all 25 CRDs retained after uninstalling both scoped releases"
+  echo "OK: all 25 CRDs retained after uninstalling every scoped release"
 else
   echo "FAIL: only $remaining/25 CRDs remain after uninstall - CRD decoupling failed" >&2
   fail=1
 fi
 
-if eso_release_exists eso-staging eso-staging || eso_release_exists eso-production eso-production; then
+if eso_release_exists eso-uat eso-uat || eso_release_exists eso-dev eso-dev || eso_release_exists eso-prod eso-prod; then
   echo "FAIL: a scoped release still exists after uninstall" >&2
   fail=1
 fi
@@ -394,13 +422,13 @@ echo "test-idempotency: restoration install ..."
 sh lab/eso/install.sh
 
 # --- 15. second restoration install as a no-op ---
-fp_staging_3="$(capture_release_fingerprint eso-staging eso-staging)"
+fp_uat_3="$(capture_release_fingerprint eso-uat eso-uat)"
 sh lab/eso/install.sh
-fp_staging_4="$(capture_release_fingerprint eso-staging eso-staging)"
-if [ "$fp_staging_3" = "$fp_staging_4" ]; then
+fp_uat_4="$(capture_release_fingerprint eso-uat eso-uat)"
+if [ "$fp_uat_3" = "$fp_uat_4" ]; then
   echo "OK: restoration install's second run is a true no-op"
 else
-  echo "FAIL: restoration install did not converge to a no-op ($fp_staging_3 -> $fp_staging_4)" >&2
+  echo "FAIL: restoration install did not converge to a no-op ($fp_uat_3 -> $fp_uat_4)" >&2
   fail=1
 fi
 

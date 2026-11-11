@@ -18,9 +18,9 @@ boundaries.
   **own** External Secrets Operator instance; application workloads run
   only in spokes. `dev` deploys automatically on merge, `uat` and `prod`
   by reviewed PR. On AWS the target is one account per environment.
-  *The implemented code still uses the earlier `staging`/`production`
-  names; the rename to `uat` lands with the multicluster profile
-  (Phase 2.7).*
+  *The local lab already uses `dev`/`uat`/`prod` (Phase 2.7.1); the
+  aws-eks profile and Terraform still use the earlier
+  `staging`/`production` names until Phase 2.7.2.*
 - **EKS Pod Identity** is the default workload identity mechanism; IRSA
   is an explicit compatibility path.
 - **External Secrets Operator + AWS Secrets Manager**, one ESO instance
@@ -41,11 +41,12 @@ GitOps bootstrap), Phase 2.4 (standard workload contract), Phase 2.5
 (repository governance baseline), Phase 2.6.1 (External Secrets
 Operator bootstrap), Phase 2.6.2 (External Secrets workload
 contract), Phase 2.6.3a (transactional GitOps lifecycle and safe
-revision rollback), and Phase 2.6.3b (source-secret idempotency and
-kubeconfig evidence hardening) are implemented** — a single, pinned `lab-lite`
+revision rollback), Phase 2.6.3b (source-secret idempotency and
+kubeconfig evidence hardening), and Phase 2.7.1 (`dev`/`uat`/`prod`
+environments in the local lab) are implemented** — a single, pinned `lab-lite`
 `kind` cluster running a pinned, digest-verified Argo CD control plane,
 reconciling this repository's own `gitops/` directory over a read-only
-SSH deploy key into a `staging` and a `production` namespace, each
+SSH deploy key into `dev`, `uat`, and `prod` namespaces, each
 running a real Restricted-PSS-compliant
 `Deployment`/`Service`/`ServiceAccount`/`ConfigMap`
 (`charts/standard-workload`, a pinned, non-root `podinfo` image) instead
@@ -74,7 +75,9 @@ delivery roadmap for what exists versus what is proposed.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 2.7 | `lab-multicluster`: `management` hub + `dev`/`uat` spokes (`prod` opt-in) in `kind`; remote-cluster registration with least-privilege credentials; cluster-generator `ApplicationSet`; `staging` → `uat` rename | `PROPOSED` |
+| 2.7.1 | `dev`/`uat`/`prod` in the local lab (`staging` → `uat`, `production` → `prod`, `dev` added, three ESO releases) | Implemented |
+| 2.7.2 | Same rename in the aws-eks profile and Terraform (offline) | `PROPOSED` |
+| 2.7.3–2.7.4 | `lab-multicluster`: `management` hub + `dev`/`uat` spokes (`prod` opt-in) in `kind`; remote-cluster registration with least-privilege credentials; cluster-generator `ApplicationSet`; one ESO per spoke | `PROPOSED` |
 | 2.8 | Workload resilience in the standard chart: PodDisruptionBudget, topology spread, graceful shutdown, HPA, NetworkPolicy | `PROPOSED` |
 | 3.4 | Multi-account hub-and-spoke Terraform: organization guardrails, threat detection and config recording, budgets, Karpenter, immutable container registry with lifecycle rules (plan-only) | `PROPOSED` |
 | 5.1 | Image CI: build, vulnerability scan, SBOM, signing, push; tag-bump promotion `dev` → `uat` → `prod` | `PROPOSED` |
@@ -105,10 +108,10 @@ make lab-destroy       # destroy only the exact project cluster (no-op if absent
 All lab commands use `.tools/bin/kind` and `.tools/bin/kubectl` (never
 the global binaries) and `.local/kubeconfig` (never `~/.kube/config` or
 the shell's current context) — both paths are gitignored. `lab-lite` is
-a single physical cluster; `staging`/`production` are namespace-level
+a single physical cluster; `dev`/`uat`/`prod` are namespace-level
 simulations at this stage, not real multi-cluster isolation (see the
 TAD's "Cluster and Environment Topology"). Phase 2.1 creates only the
-cluster itself — no `staging`/`production` namespace, no Argo CD, per
+cluster itself — no `dev`/`uat`/`prod` namespace, no Argo CD, per
 the imperative/declarative boundary in the TAD.
 
 ## Local lab: Argo CD bootstrap
@@ -138,7 +141,7 @@ TAD's "Local Lab Argo CD Bootstrap" and "GitOps Control Plane" sections).
 ## Local lab: private GitOps bootstrap
 
 Phase 2.3 gives Argo CD read-only SSH access to this private repository
-and reconciles a `staging` and a `production` environment from
+and reconciles the `dev`, `uat`, and `prod` environments from
 `gitops/` — only the root `Application` and the Argo CD repository
 credential `Secret` are ever applied imperatively; everything else
 (`AppProject`, `ApplicationSet`, the two generated `Application`
@@ -165,15 +168,15 @@ the full root-cause analysis):
 ```bash
 make gitops-switch-revision              # safely switch the root Application's targetRevision in place (patch, never delete+recreate); preserves UID/finalizers; requires 3 consecutive stable reads; rolls back automatically on failure (REVISION=<value>)
 make gitops-test-revision-switch         # mutating: proves the above end-to-end (REVISION=<pushed branch>)
-make gitops-retire-appproject-kind       # drain SecretStore/ExternalSecret from one environment before narrowing the AppProject whitelist - pauses self-heal, deletes while still whitelisted, verifies target-Secret retention, never leaves self-heal silently disabled (ENV=staging|production ACTION=--drain)
-make gitops-resume-appproject-kind       # resume automated sync after the drain + the whitelist-narrowing Git change have both landed (ENV=staging|production)
+make gitops-retire-appproject-kind       # drain SecretStore/ExternalSecret from one environment before narrowing the AppProject whitelist - pauses self-heal, deletes while still whitelisted, verifies target-Secret retention, never leaves self-heal silently disabled (ENV=dev|uat|prod ACTION=--drain)
+make gitops-resume-appproject-kind       # resume automated sync after the drain + the whitelist-narrowing Git change have both landed (ENV=dev|uat|prod)
 make gitops-test-appproject-kind-retirement  # mutating: proves the full 8-step drain/resume sequence end-to-end
 ```
 
 `gitops-uninstall`'s previous single-phase version deleted the root
 Application first and only checked namespace contents afterward -
 once ESO's scoped-RBAC `Role`/`RoleBinding` objects exist inside
-`staging`/`production` (Phase 2.6.1), that check always refused to
+`uat`/`prod` (Phase 2.6.1), that check always refused to
 delete the namespace, but the workloads were already gone by then. The
 two-phase version classifies every namespaced object
 (`argocd-tracked`/`helm-eso-scoped`/`kubernetes-builtin`/`unknown`,
@@ -196,7 +199,7 @@ reusable Helm chart at `charts/standard-workload/` — `Deployment`,
 Standards-compliant by default (non-root UID/GID `65532`, dropped
 capabilities, read-only root filesystem, `seccompProfile:
 RuntimeDefault`), running a digest-pinned, non-root, multi-arch
-`podinfo` image. `staging`/`production` differ in replica count,
+`podinfo` image. `dev`/`uat`/`prod` differ in replica count,
 resources, and a `PODINFO_UI_MESSAGE` value sourced from the chart's
 own `ConfigMap` — proven functionally consumed via `GET /api/info`, not
 just checksum-decoration. Ingress/HPA/PodDisruptionBudget/NetworkPolicy/
@@ -239,22 +242,22 @@ Phase 2.6.1 installs the External Secrets Operator (`v2.10.0`, chart
 (`kubectl apply`, never a release — the chart renders them as plain
 templates with no retention annotation, so a release that owned them
 would delete them on `helm uninstall`), and **two namespace-scoped
-controller releases** — `eso-staging` (watches only `staging`) and
-`eso-production` (watches only `production`), each with `scopedRBAC:
+controller releases** (three since Phase 2.7.1) — `eso-uat` (watches
+only `uat`), `eso-dev` (only `dev`), and `eso-prod` (only `prod`), each with `scopedRBAC:
 true` converting every cluster-scoped RBAC rule the controller itself
 needs into a `Role`/`RoleBinding` restricted to exactly that one
 namespace. The webhook and cert-controller components are cluster-wide
 singletons by construction (their object names are fixed, not
-release-qualified) and run from `eso-staging` only — proven, not
+release-qualified) and run from `eso-uat` only — proven, not
 assumed, by a collision/ownership gate that renders the full
 architecture offline before anything is ever applied. CRDs are applied
 under a single stable field manager with a `--dry-run=server` preflight
 first — a genuine field-ownership conflict stops the install with the
 CRD completely untouched; `--force-conflicts` is never used. Because
-`eso-production` has no webhook/cert-controller of its own, it depends
-on `eso-staging`'s — `make eso-uninstall ENV=staging` is refused
-outright while `eso-production` still exists, and `make eso-status`
-fails if `eso-production` exists but that shared webhook/cert-controller
+`eso-dev` and `eso-prod` have no webhook/cert-controller of their own,
+they depend on `eso-uat`'s — `make eso-uninstall ENV=uat` is refused
+outright while either of them still exists, and `make eso-status`
+fails if either exists but that shared webhook/cert-controller
 is unhealthy:
 
 ```bash
@@ -265,13 +268,13 @@ make eso-install                # fail-closed idempotent install: CRD preflight 
 make eso-status                 # read-only CRD/release/Deployment health report, including the shared-singleton dependency check
 make eso-test-runtime-health   # read-only health checks against an installed bootstrap
 make eso-test-lifecycle        # mutating: proves install/no-op/singleton guards/CRD-conflict fail-closed/uninstall(CRDs retained)/no-op/restore end-to-end
-make eso-uninstall              # uninstall both scoped releases (production then staging; ENV=staging|production for one at a time); never touches the CRDs; refuses staging while production exists
+make eso-uninstall              # uninstall all three scoped releases (prod, dev, then uat; ENV=dev|uat|prod for one at a time); never touches the CRDs; refuses uat while dev or prod exists
 ```
 
 Phase 2.6.2 adds the per-environment `SecretStore`/`ExternalSecret`
 reconciliation contract on top of that bootstrap. The `kubernetes`-
-provider `SecretStore` in each of `staging`/`production` reads from a
-dedicated `eso-source-staging`/`eso-source-production` namespace that
+provider `SecretStore` in each of `dev`/`uat`/`prod` reads from a
+dedicated `eso-source-<env>` namespace that
 is never touched by Argo CD or this chart — its Secret is created and
 rotated exclusively by `lab/eso/provision-source-secret.sh`, an
 imperative, out-of-Git script that reads the value only from stdin or
@@ -279,10 +282,10 @@ an echo-disabled prompt, never a CLI argument, and never prints it.
 Each `ExternalSecret` reconciles that source into a target Secret it
 owns exclusively (`creationPolicy: Owner`, `deletionPolicy: Retain`),
 which `charts/standard-workload` mounts as a read-only volume
-(`externalSecret.enabled`) — never `env`/`envFrom`. `staging` and
-`production` are fully isolated: distinct `SecretStore`s, distinct
-source namespaces/Secrets, distinct auth `ServiceAccount`s, and neither
-`SecretStore` can resolve the other's Secret. The `AppProject` grants
+(`externalSecret.enabled`) — never `env`/`envFrom`. `dev`, `uat`, and
+`prod` are pairwise isolated: distinct `SecretStore`s, distinct
+source namespaces/Secrets, distinct auth `ServiceAccount`s, and no
+`SecretStore` can resolve another environment's Secret. The `AppProject` grants
 only the two new namespaced kinds (`SecretStore`, `ExternalSecret`) —
 never `Secret`; Argo CD never manages a Secret in this design.
 
@@ -294,11 +297,11 @@ resourceVersion, content hash, and its Role/RoleBinding untouched.
 Rotating an existing value requires the explicit `--rotate` flag.
 
 ```bash
-make eso-provision-source-secret ENV=staging                    # ensure: create if absent, true no-op if already present (value never read on the no-op path)
-make eso-provision-source-secret ENV=production                 # same, production
-make eso-provision-source-secret ENV=staging ACTION=--rotate    # rotate an EXISTING staging value only (fails if absent); preserves UID, changes resourceVersion/hash, never the other environment
-make eso-provision-source-secret ENV=staging ACTION=--delete    # idempotent teardown of that environment's source namespace
-make eso-test-secret-lifecycle    # mutating: provision -> both SecretStores/ExternalSecrets Ready -> target Secrets owned by ESO -> read-only mount hash-verified per environment -> staging/production isolation -> controlled rotation + propagation (production unaffected) -> target-Secret delete/ESO-recreate -> no-op bootstrap -> ESO uninstall with target-Secret retention -> restore
+make eso-provision-source-secret ENV=uat                    # ensure: create if absent, true no-op if already present (value never read on the no-op path)
+make eso-provision-source-secret ENV=prod                 # same, prod (and ENV=dev)
+make eso-provision-source-secret ENV=uat ACTION=--rotate    # rotate an EXISTING uat value only (fails if absent); preserves UID, changes resourceVersion/hash, never another environment
+make eso-provision-source-secret ENV=uat ACTION=--delete    # idempotent teardown of that environment's source namespace
+make eso-test-secret-lifecycle    # mutating: provision -> every SecretStore/ExternalSecret Ready -> target Secrets owned by ESO -> read-only mount hash-verified per environment -> uat/prod isolation -> controlled rotation + propagation (production unaffected) -> target-Secret delete/ESO-recreate -> no-op bootstrap -> ESO uninstall with target-Secret retention -> restore
 make eso-test-provision-source-secret-idempotency  # mutating: proves ensure/--rotate/--delete semantics and the global kubeconfig fingerprint helper's isolation, restoring the pre-test value/state on exit
 ```
 

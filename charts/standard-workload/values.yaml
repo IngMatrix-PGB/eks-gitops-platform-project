@@ -80,7 +80,7 @@ externalSecret:
   enabled: false
   # Phase 3.3.1: which SecretStore backend templates/secretstore.yaml
   # renders. Defaults to "kubernetes" - every existing environment
-  # values file (values-staging.yaml/values-production.yaml) omits this
+  # values file (values-uat.yaml/values-prod.yaml) omits this
   # key and inherits this default via Helm's normal values merge, so
   # their render is unaffected by this key's introduction. "aws" is the
   # future EKS Pod Identity / Secrets Manager backend (not deployed by
@@ -92,8 +92,8 @@ externalSecret:
   secretStoreName: ""
   # --- provider: kubernetes only. Left at these harmless defaults
   # (never touched by any "aws" profile values file) rather than
-  # removed from this base file: values-staging.yaml/values-
-  # production.yaml already rely on inheriting sourceProperty's default
+  # removed from this base file: values-uat.yaml/values-
+  # prod.yaml already rely on inheriting sourceProperty's default
   # via Helm's normal deep-merge (they never set it themselves), so
   # this file's defaults cannot be deleted without changing their
   # render. values.schema.json's "aws" branch pins these same four

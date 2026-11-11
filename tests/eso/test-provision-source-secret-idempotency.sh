@@ -3,7 +3,7 @@
 #
 #   PART 1 - lab/eso/provision-source-secret.sh's ensure/--rotate/
 #   --delete semantics, proven against the real eks-gitops-lab-lite
-#   cluster's actual staging/production source Secrets - restores
+#   cluster's actual uat/prod source Secrets - restores
 #   whatever value existed before this test ran (or removes what it
 #   created, if nothing existed) so the persistent lab baseline is
 #   never left in a test-only state.
@@ -65,54 +65,54 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-staging_ns="eso-source-staging"; staging_secret="local-backend-staging"
-production_ns="eso-source-production"; production_secret="local-backend-production"
+uat_ns="eso-source-uat"; uat_secret="local-backend-uat"
+prod_ns="eso-source-prod"; prod_secret="local-backend-prod"
 
-staging_existed=0
-pkubectl get secret "$staging_secret" -n "$staging_ns" >/dev/null 2>&1 && staging_existed=1
-production_existed=0
-pkubectl get secret "$production_secret" -n "$production_ns" >/dev/null 2>&1 && production_existed=1
+uat_existed=0
+pkubectl get secret "$uat_secret" -n "$uat_ns" >/dev/null 2>&1 && uat_existed=1
+prod_existed=0
+pkubectl get secret "$prod_secret" -n "$prod_ns" >/dev/null 2>&1 && prod_existed=1
 
 restore_state() {
   # Best-effort restoration, run at the very end regardless of pass/
   # fail - never leaves the persistent lab baseline in a test-only
   # rotated state, and never leaves a Secret this test created behind
   # if it did not exist beforehand.
-  if [ "$staging_existed" -eq 1 ] && [ -n "${staging_original_value:-}" ]; then
-    printf '%s' "$staging_original_value" | sh lab/eso/provision-source-secret.sh staging --rotate >/dev/null 2>&1 || true
-  elif [ "$staging_existed" -eq 0 ]; then
-    sh lab/eso/provision-source-secret.sh staging --delete >/dev/null 2>&1 || true
+  if [ "$uat_existed" -eq 1 ] && [ -n "${uat_original_value:-}" ]; then
+    printf '%s' "$uat_original_value" | sh lab/eso/provision-source-secret.sh uat --rotate >/dev/null 2>&1 || true
+  elif [ "$uat_existed" -eq 0 ]; then
+    sh lab/eso/provision-source-secret.sh uat --delete >/dev/null 2>&1 || true
   fi
-  if [ "$production_existed" -eq 1 ] && [ -n "${production_original_value:-}" ]; then
-    printf '%s' "$production_original_value" | sh lab/eso/provision-source-secret.sh production --rotate >/dev/null 2>&1 || true
-  elif [ "$production_existed" -eq 0 ]; then
-    sh lab/eso/provision-source-secret.sh production --delete >/dev/null 2>&1 || true
+  if [ "$prod_existed" -eq 1 ] && [ -n "${prod_original_value:-}" ]; then
+    printf '%s' "$prod_original_value" | sh lab/eso/provision-source-secret.sh prod --rotate >/dev/null 2>&1 || true
+  elif [ "$prod_existed" -eq 0 ]; then
+    sh lab/eso/provision-source-secret.sh prod --delete >/dev/null 2>&1 || true
   fi
 }
 trap restore_state EXIT INT TERM
 
-if [ "$staging_existed" -eq 1 ]; then
-  echo "OK: staging source Secret already exists - will test ensure/no-op/rotate/isolation against it, restoring its exact current value at the end"
+if [ "$uat_existed" -eq 1 ]; then
+  echo "OK: uat source Secret already exists - will test ensure/no-op/rotate/isolation against it, restoring its exact current value at the end"
   # Establish a KNOWN baseline value (never read back the real one) so
   # this test can prove a real, verifiable rotation without ever
   # depending on whatever value happened to be there before.
-  staging_original_value="idempotency-test-baseline-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
-  printf '%s' "$staging_original_value" | sh lab/eso/provision-source-secret.sh staging --rotate >/dev/null
+  uat_original_value="idempotency-test-baseline-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
+  printf '%s' "$uat_original_value" | sh lab/eso/provision-source-secret.sh uat --rotate >/dev/null
 else
-  echo "OK: staging source Secret is absent - will test the create path, then remove what this test creates"
-  staging_original_value="idempotency-test-created-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
-  printf '%s' "$staging_original_value" | sh lab/eso/provision-source-secret.sh staging >/dev/null
+  echo "OK: uat source Secret is absent - will test the create path, then remove what this test creates"
+  uat_original_value="idempotency-test-created-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
+  printf '%s' "$uat_original_value" | sh lab/eso/provision-source-secret.sh uat >/dev/null
 fi
-baseline_uid="$(secret_uid "$staging_ns" "$staging_secret")"
-baseline_rv="$(secret_rv "$staging_ns" "$staging_secret")"
-baseline_hash="$(secret_hash "$staging_ns" "$staging_secret")"
-echo "OK: established a known staging baseline (uid=$baseline_uid rv=$baseline_rv sha256=$baseline_hash)"
+baseline_uid="$(secret_uid "$uat_ns" "$uat_secret")"
+baseline_rv="$(secret_rv "$uat_ns" "$uat_secret")"
+baseline_hash="$(secret_hash "$uat_ns" "$uat_secret")"
+echo "OK: established a known uat baseline (uid=$baseline_uid rv=$baseline_rv sha256=$baseline_hash)"
 
 echo "--- ensure (no flag), Secret exists: must be a TRUE no-op even with a DIFFERENT piped value ---"
-printf '%s' "definitely-a-different-value-$(date +%s)" | sh lab/eso/provision-source-secret.sh staging
-post_ensure_uid="$(secret_uid "$staging_ns" "$staging_secret")"
-post_ensure_rv="$(secret_rv "$staging_ns" "$staging_secret")"
-post_ensure_hash="$(secret_hash "$staging_ns" "$staging_secret")"
+printf '%s' "definitely-a-different-value-$(date +%s)" | sh lab/eso/provision-source-secret.sh uat
+post_ensure_uid="$(secret_uid "$uat_ns" "$uat_secret")"
+post_ensure_rv="$(secret_rv "$uat_ns" "$uat_secret")"
+post_ensure_hash="$(secret_hash "$uat_ns" "$uat_secret")"
 if [ "$post_ensure_uid" = "$baseline_uid" ] && [ "$post_ensure_rv" = "$baseline_rv" ] && [ "$post_ensure_hash" = "$baseline_hash" ]; then
   echo "OK: ensure was a true no-op - UID/resourceVersion/hash all unchanged"
 else
@@ -121,8 +121,8 @@ else
 fi
 
 echo "--- ensure with NO stdin content at all (interactive-shaped call from a script) must still no-op without hanging or reading ---"
-if printf '%s' "yet-another-different-value" | sh lab/eso/provision-source-secret.sh staging; then
-  post_ensure2_hash="$(secret_hash "$staging_ns" "$staging_secret")"
+if printf '%s' "yet-another-different-value" | sh lab/eso/provision-source-secret.sh uat; then
+  post_ensure2_hash="$(secret_hash "$uat_ns" "$uat_secret")"
   if [ "$post_ensure2_hash" = "$baseline_hash" ]; then
     echo "OK: a second ensure call remains a no-op (hash still $post_ensure2_hash)"
   else
@@ -135,9 +135,9 @@ else
 fi
 
 echo "--- RBAC/namespace preserved across ensure (resourceVersion unchanged) ---"
-role_rv_before="$(pkubectl get role "${staging_secret}-reader" -n "$staging_ns" -o jsonpath='{.metadata.resourceVersion}' 2>/dev/null || true)"
-printf '%s' "irrelevant-value" | sh lab/eso/provision-source-secret.sh staging >/dev/null
-role_rv_after="$(pkubectl get role "${staging_secret}-reader" -n "$staging_ns" -o jsonpath='{.metadata.resourceVersion}' 2>/dev/null || true)"
+role_rv_before="$(pkubectl get role "${uat_secret}-reader" -n "$uat_ns" -o jsonpath='{.metadata.resourceVersion}' 2>/dev/null || true)"
+printf '%s' "irrelevant-value" | sh lab/eso/provision-source-secret.sh uat >/dev/null
+role_rv_after="$(pkubectl get role "${uat_secret}-reader" -n "$uat_ns" -o jsonpath='{.metadata.resourceVersion}' 2>/dev/null || true)"
 if [ "$role_rv_before" = "$role_rv_after" ]; then
   echo "OK: Role/RoleBinding untouched across ensure (resourceVersion unchanged: $role_rv_after)"
 else
@@ -151,19 +151,19 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 echo "--- --rotate: must change resourceVersion/hash, preserve UID, never print the value ---"
-staging_rotated_value="rotated-synthetic-value-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
-staging_rotated_hash="$(printf '%s' "$staging_rotated_value" | shasum -a 256 | awk '{print $1}')"
-printf '%s' "$staging_rotated_value" | sh lab/eso/provision-source-secret.sh staging --rotate
-post_rotate_uid="$(secret_uid "$staging_ns" "$staging_secret")"
-post_rotate_rv="$(secret_rv "$staging_ns" "$staging_secret")"
-post_rotate_hash="$(secret_hash "$staging_ns" "$staging_secret")"
+uat_rotated_value="rotated-synthetic-value-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
+uat_rotated_hash="$(printf '%s' "$uat_rotated_value" | shasum -a 256 | awk '{print $1}')"
+printf '%s' "$uat_rotated_value" | sh lab/eso/provision-source-secret.sh uat --rotate
+post_rotate_uid="$(secret_uid "$uat_ns" "$uat_secret")"
+post_rotate_rv="$(secret_rv "$uat_ns" "$uat_secret")"
+post_rotate_hash="$(secret_hash "$uat_ns" "$uat_secret")"
 if [ "$post_rotate_uid" != "$baseline_uid" ]; then
   echo "FAIL: rotate changed the Secret UID ($baseline_uid -> $post_rotate_uid) - must be an update, never delete+recreate" >&2
   fail=1
 elif [ "$post_rotate_rv" = "$baseline_rv" ]; then
   echo "FAIL: rotate did not change resourceVersion" >&2
   fail=1
-elif [ "$post_rotate_hash" != "$staging_rotated_hash" ]; then
+elif [ "$post_rotate_hash" != "$uat_rotated_hash" ]; then
   echo "FAIL: rotate did not apply the new value (unexpected hash $post_rotate_hash)" >&2
   fail=1
 else
@@ -171,10 +171,10 @@ else
 fi
 
 echo "--- ensure again after rotate: must be a no-op AT THE NEW value, never revert or re-rotate ---"
-printf '%s' "should-be-ignored-$(date +%s)" | sh lab/eso/provision-source-secret.sh staging
-post_second_ensure_hash="$(secret_hash "$staging_ns" "$staging_secret")"
-post_second_ensure_rv="$(secret_rv "$staging_ns" "$staging_secret")"
-if [ "$post_second_ensure_hash" = "$staging_rotated_hash" ] && [ "$post_second_ensure_rv" = "$post_rotate_rv" ]; then
+printf '%s' "should-be-ignored-$(date +%s)" | sh lab/eso/provision-source-secret.sh uat
+post_second_ensure_hash="$(secret_hash "$uat_ns" "$uat_secret")"
+post_second_ensure_rv="$(secret_rv "$uat_ns" "$uat_secret")"
+if [ "$post_second_ensure_hash" = "$uat_rotated_hash" ] && [ "$post_second_ensure_rv" = "$post_rotate_rv" ]; then
   echo "OK: ensure after rotate is a no-op at the rotated value (hash $post_second_ensure_hash, rv $post_second_ensure_rv)"
 else
   echo "FAIL: ensure after rotate changed state unexpectedly" >&2
@@ -186,43 +186,43 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "--- environment isolation: staging rotate/ensure must never touch production ---"
-if [ "$production_existed" -eq 1 ]; then
-  production_original_value="idempotency-test-baseline-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
-  printf '%s' "$production_original_value" | sh lab/eso/provision-source-secret.sh production --rotate >/dev/null
+echo "--- environment isolation: uat rotate/ensure must never touch prod ---"
+if [ "$prod_existed" -eq 1 ]; then
+  prod_original_value="idempotency-test-baseline-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
+  printf '%s' "$prod_original_value" | sh lab/eso/provision-source-secret.sh prod --rotate >/dev/null
 else
-  production_original_value="idempotency-test-created-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
-  printf '%s' "$production_original_value" | sh lab/eso/provision-source-secret.sh production >/dev/null
+  prod_original_value="idempotency-test-created-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
+  printf '%s' "$prod_original_value" | sh lab/eso/provision-source-secret.sh prod >/dev/null
 fi
-production_uid_before="$(secret_uid "$production_ns" "$production_secret")"
-production_rv_before="$(secret_rv "$production_ns" "$production_secret")"
-production_hash_before="$(secret_hash "$production_ns" "$production_secret")"
+prod_uid_before="$(secret_uid "$prod_ns" "$prod_secret")"
+prod_rv_before="$(secret_rv "$prod_ns" "$prod_secret")"
+prod_hash_before="$(secret_hash "$prod_ns" "$prod_secret")"
 
-staging_rotated_again_value="rotated-again-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
-printf '%s' "$staging_rotated_again_value" | sh lab/eso/provision-source-secret.sh staging --rotate >/dev/null
+uat_rotated_again_value="rotated-again-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
+printf '%s' "$uat_rotated_again_value" | sh lab/eso/provision-source-secret.sh uat --rotate >/dev/null
 
-production_uid_after="$(secret_uid "$production_ns" "$production_secret")"
-production_rv_after="$(secret_rv "$production_ns" "$production_secret")"
-production_hash_after="$(secret_hash "$production_ns" "$production_secret")"
-if [ "$production_uid_before" = "$production_uid_after" ] && [ "$production_rv_before" = "$production_rv_after" ] && [ "$production_hash_before" = "$production_hash_after" ]; then
-  echo "OK: rotating staging left production's UID/resourceVersion/hash completely unchanged"
+prod_uid_after="$(secret_uid "$prod_ns" "$prod_secret")"
+prod_rv_after="$(secret_rv "$prod_ns" "$prod_secret")"
+prod_hash_after="$(secret_hash "$prod_ns" "$prod_secret")"
+if [ "$prod_uid_before" = "$prod_uid_after" ] && [ "$prod_rv_before" = "$prod_rv_after" ] && [ "$prod_hash_before" = "$prod_hash_after" ]; then
+  echo "OK: rotating uat left prod's UID/resourceVersion/hash completely unchanged"
 else
-  echo "FAIL: rotating staging affected production (uid: $production_uid_before -> $production_uid_after; rv: $production_rv_before -> $production_rv_after; hash: $production_hash_before -> $production_hash_after)" >&2
+  echo "FAIL: rotating uat affected prod (uid: $prod_uid_before -> $prod_uid_after; rv: $prod_rv_before -> $prod_rv_after; hash: $prod_hash_before -> $prod_hash_after)" >&2
   fail=1
 fi
 
-staging_uid_before_prod_rotate="$(secret_uid "$staging_ns" "$staging_secret")"
-staging_rv_before_prod_rotate="$(secret_rv "$staging_ns" "$staging_secret")"
-staging_hash_before_prod_rotate="$(secret_hash "$staging_ns" "$staging_secret")"
-production_rotated_value="prod-rotated-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
-printf '%s' "$production_rotated_value" | sh lab/eso/provision-source-secret.sh production --rotate >/dev/null
-staging_uid_after_prod_rotate="$(secret_uid "$staging_ns" "$staging_secret")"
-staging_rv_after_prod_rotate="$(secret_rv "$staging_ns" "$staging_secret")"
-staging_hash_after_prod_rotate="$(secret_hash "$staging_ns" "$staging_secret")"
-if [ "$staging_uid_before_prod_rotate" = "$staging_uid_after_prod_rotate" ] && [ "$staging_rv_before_prod_rotate" = "$staging_rv_after_prod_rotate" ] && [ "$staging_hash_before_prod_rotate" = "$staging_hash_after_prod_rotate" ]; then
-  echo "OK: rotating production left staging's UID/resourceVersion/hash completely unchanged"
+uat_uid_before_prod_rotate="$(secret_uid "$uat_ns" "$uat_secret")"
+uat_rv_before_prod_rotate="$(secret_rv "$uat_ns" "$uat_secret")"
+uat_hash_before_prod_rotate="$(secret_hash "$uat_ns" "$uat_secret")"
+prod_rotated_value="prod-rotated-$(date +%s)-$(head -c 8 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
+printf '%s' "$prod_rotated_value" | sh lab/eso/provision-source-secret.sh prod --rotate >/dev/null
+uat_uid_after_prod_rotate="$(secret_uid "$uat_ns" "$uat_secret")"
+uat_rv_after_prod_rotate="$(secret_rv "$uat_ns" "$uat_secret")"
+uat_hash_after_prod_rotate="$(secret_hash "$uat_ns" "$uat_secret")"
+if [ "$uat_uid_before_prod_rotate" = "$uat_uid_after_prod_rotate" ] && [ "$uat_rv_before_prod_rotate" = "$uat_rv_after_prod_rotate" ] && [ "$uat_hash_before_prod_rotate" = "$uat_hash_after_prod_rotate" ]; then
+  echo "OK: rotating prod left uat's UID/resourceVersion/hash completely unchanged"
 else
-  echo "FAIL: rotating production affected staging" >&2
+  echo "FAIL: rotating prod affected uat" >&2
   fail=1
 fi
 

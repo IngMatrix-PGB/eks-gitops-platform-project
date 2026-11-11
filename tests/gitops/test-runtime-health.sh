@@ -1,7 +1,7 @@
 #!/bin/sh
 # Read-only runtime health checks against an already-bootstrapped Phase
-# 2.3 GitOps state: root Application, AppProject, ApplicationSet, both
-# generated Applications, both namespaces, and both ConfigMaps. Never
+# 2.3 GitOps state: root Application, AppProject, ApplicationSet, all three
+# generated Applications, all three namespaces, and their ConfigMaps. Never
 # mutates anything. Backs `make gitops-test` only.
 set -eu
 
@@ -69,7 +69,7 @@ EOF
   fi
 done
 
-for ns in staging production; do
+for ns in dev uat prod; do
   actual="$(pkubectl -n "$ns" get configmap platform-smoke -o jsonpath='{.data.environment}' 2>/dev/null || true)"
   if [ "$actual" = "$ns" ]; then
     echo "OK: namespace '$ns' configmap/platform-smoke data.environment='$actual'"

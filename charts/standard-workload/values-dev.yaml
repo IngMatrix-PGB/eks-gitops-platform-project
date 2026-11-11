@@ -1,0 +1,26 @@
+# Environment overrides for dev only (Phase 2.7.1, ADR-0015). dev is the
+# spoke that reconciles every merge to main automatically; it carries
+# the smallest footprint of the three. Everything not listed here is
+# inherited from values.yaml.
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
+
+configMap:
+  uiMessage: "podinfo dev — phase 2.7.1"
+
+# Enables the read-only Secret mount for dev only - fully separate
+# SecretStore/source-namespace/source-Secret/auth ServiceAccount from
+# uat and prod, no shared object of any kind.
+externalSecret:
+  enabled: true
+  secretStoreName: "dev-kubernetes-backend"
+  sourceNamespace: "eso-source-dev"
+  sourceSecretName: "local-backend-dev"
+  authServiceAccountName: "dev-secretstore-reader"

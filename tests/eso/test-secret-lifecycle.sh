@@ -52,7 +52,7 @@ echo "OK: captured baseline (kubeconfig sha256 ${global_sha_before}, context ${g
 echo "test-secret-lifecycle: ensuring ESO is installed ..."
 sh lab/eso/install.sh
 
-# --- 3. both scoped releases' Deployments Available ---
+# --- 3. every scoped release's Deployments Available ---
 sh tests/eso/test-runtime-health.sh
 
 # --- 4. CRD counts by group ---
@@ -75,7 +75,7 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-# --- 5. independent, synthetic, lab-only source secrets for both
+# --- 5. independent, synthetic, lab-only source secrets for all three
 # environments - random, never printed, generated locally, exclusive to
 # this lab. Never the same value. This test is itself re-runnable, and
 # Phase 2.6.3b's default (no-flag) path is now a true no-op when the
@@ -84,25 +84,30 @@ fi
 # the Secret to pre-exist, so the first-ever run (absent) still uses
 # the plain create path. ---
 echo "test-secret-lifecycle: provisioning independent source secrets ..."
-staging_source_value="lab-$(date +%s)-$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-16)-staging"
-production_source_value="lab-$(date +%s)-$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-16)-production"
-staging_provision_flag=""
-pkubectl get secret local-backend-staging -n eso-source-staging >/dev/null 2>&1 && staging_provision_flag="--rotate"
-production_provision_flag=""
-pkubectl get secret local-backend-production -n eso-source-production >/dev/null 2>&1 && production_provision_flag="--rotate"
-printf '%s' "$staging_source_value" | sh lab/eso/provision-source-secret.sh staging $staging_provision_flag
-printf '%s' "$production_source_value" | sh lab/eso/provision-source-secret.sh production $production_provision_flag
-staging_source_sha="$(printf '%s' "$staging_source_value" | shasum -a 256 | awk '{print $1}')"
-production_source_sha="$(printf '%s' "$production_source_value" | shasum -a 256 | awk '{print $1}')"
-if [ "$staging_source_sha" = "$production_source_sha" ]; then
-  echo "FAIL: staging and production source values collided (identical hash) - test fixture is broken" >&2
+uat_source_value="lab-$(date +%s)-$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-16)-uat"
+prod_source_value="lab-$(date +%s)-$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-16)-prod"
+dev_source_value="lab-$(date +%s)-$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-16)-dev"
+uat_provision_flag=""
+pkubectl get secret local-backend-uat -n eso-source-uat >/dev/null 2>&1 && uat_provision_flag="--rotate"
+prod_provision_flag=""
+pkubectl get secret local-backend-prod -n eso-source-prod >/dev/null 2>&1 && prod_provision_flag="--rotate"
+dev_provision_flag=""
+pkubectl get secret local-backend-dev -n eso-source-dev >/dev/null 2>&1 && dev_provision_flag="--rotate"
+printf '%s' "$uat_source_value" | sh lab/eso/provision-source-secret.sh uat $uat_provision_flag
+printf '%s' "$prod_source_value" | sh lab/eso/provision-source-secret.sh prod $prod_provision_flag
+printf '%s' "$dev_source_value" | sh lab/eso/provision-source-secret.sh dev $dev_provision_flag
+uat_source_sha="$(printf '%s' "$uat_source_value" | shasum -a 256 | awk '{print $1}')"
+prod_source_sha="$(printf '%s' "$prod_source_value" | shasum -a 256 | awk '{print $1}')"
+dev_source_sha="$(printf '%s' "$dev_source_value" | shasum -a 256 | awk '{print $1}')"
+if [ "$uat_source_sha" = "$prod_source_sha" ] || [ "$dev_source_sha" = "$uat_source_sha" ] || [ "$dev_source_sha" = "$prod_source_sha" ]; then
+  echo "FAIL: two source values collided (identical hash) - test fixture is broken" >&2
   fail=1
 else
-  echo "OK: staging and production source secrets provisioned with distinct values (staging sha256 $staging_source_sha, production sha256 $production_source_sha)"
+  echo "OK: dev, uat, and prod source secrets provisioned with pairwise-distinct values (dev sha256 $dev_source_sha, uat sha256 $uat_source_sha, prod sha256 $prod_source_sha)"
 fi
 
 # --- 6. reconcile the chart's now-enabled SecretStore/ExternalSecret
-# for both environments, from this test branch.
+# for all three environments, from this test branch.
 #
 # `make gitops-bootstrap` (lab/gitops/bootstrap.sh) is deliberately
 # fail-closed on a revision switch: it treats "root Application already
@@ -113,13 +118,13 @@ fi
 # script's namespace-inventory check was written before Phase 2.6.1
 # existed, and does not account for the ESO scoped-RBAC Role/
 # RoleBinding objects (scopedRBAC: true) that now also live in the
-# staging/production namespaces. Verified empirically on this exact
-# cluster: calling it here left `staging`/`production` non-empty
+# uat/prod namespaces. Verified empirically on this exact
+# cluster: calling it here left `uat`/`prod` non-empty
 # (ESO's Roles/RoleBindings), which made the script refuse to delete
 # the namespace, and by then its earlier step had already cascaded the
 # root Application's deletion through to the generated Applications'
-# managed resources - deleting the running platform-smoke-staging/
-# platform-smoke-production Deployments outright. That was recovered
+# managed resources - deleting the running platform-smoke-uat/
+# platform-smoke-prod Deployments outright. That was recovered
 # by an immediate `make gitops-bootstrap REVISION=main`, and is flagged
 # separately as a pre-existing, out-of-scope gap in
 # lab/gitops/uninstall.sh (not one of this phase's 14 authorized
@@ -170,33 +175,45 @@ wait_for_condition() {
   wait_until _wait_for_condition_predicate "$timeout" 3
 }
 
-# --- 7. both SecretStores Ready ---
-echo "test-secret-lifecycle: waiting for both SecretStores to be Ready ..."
-if wait_for_condition secretstore/staging-kubernetes-backend staging 90; then
-  echo "OK: staging SecretStore Ready"
+# --- 7. every SecretStore Ready ---
+echo "test-secret-lifecycle: waiting for every SecretStore to be Ready ..."
+if wait_for_condition secretstore/dev-kubernetes-backend dev 90; then
+  echo "OK: dev SecretStore Ready"
 else
-  echo "FAIL: staging SecretStore did not become Ready in time" >&2
+  echo "FAIL: dev SecretStore did not become Ready in time" >&2
   fail=1
 fi
-if wait_for_condition secretstore/production-kubernetes-backend production 90; then
-  echo "OK: production SecretStore Ready"
+if wait_for_condition secretstore/uat-kubernetes-backend uat 90; then
+  echo "OK: uat SecretStore Ready"
 else
-  echo "FAIL: production SecretStore did not become Ready in time" >&2
+  echo "FAIL: uat SecretStore did not become Ready in time" >&2
+  fail=1
+fi
+if wait_for_condition secretstore/prod-kubernetes-backend prod 90; then
+  echo "OK: prod SecretStore Ready"
+else
+  echo "FAIL: prod SecretStore did not become Ready in time" >&2
   fail=1
 fi
 
-# --- 8. both ExternalSecrets Ready ---
-echo "test-secret-lifecycle: waiting for both ExternalSecrets to be Ready ..."
-if wait_for_condition externalsecret/platform-smoke-staging-standard-workload-secret staging 90; then
-  echo "OK: staging ExternalSecret Ready"
+# --- 8. every ExternalSecret Ready ---
+echo "test-secret-lifecycle: waiting for every ExternalSecret to be Ready ..."
+if wait_for_condition externalsecret/platform-smoke-dev-standard-workload-secret dev 90; then
+  echo "OK: dev ExternalSecret Ready"
 else
-  echo "FAIL: staging ExternalSecret did not become Ready in time" >&2
+  echo "FAIL: dev ExternalSecret did not become Ready in time" >&2
   fail=1
 fi
-if wait_for_condition externalsecret/platform-smoke-production-standard-workload-secret production 90; then
-  echo "OK: production ExternalSecret Ready"
+if wait_for_condition externalsecret/platform-smoke-uat-standard-workload-secret uat 90; then
+  echo "OK: uat ExternalSecret Ready"
 else
-  echo "FAIL: production ExternalSecret did not become Ready in time" >&2
+  echo "FAIL: uat ExternalSecret did not become Ready in time" >&2
+  fail=1
+fi
+if wait_for_condition externalsecret/platform-smoke-prod-standard-workload-secret prod 90; then
+  echo "OK: prod ExternalSecret Ready"
+else
+  echo "FAIL: prod ExternalSecret did not become Ready in time" >&2
   fail=1
 fi
 
@@ -206,18 +223,21 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 # --- 9. target Secrets created by ESO ---
-staging_target="platform-smoke-staging-standard-workload-secret"
-production_target="platform-smoke-production-standard-workload-secret"
-pkubectl get secret "$staging_target" -n staging >/dev/null 2>&1 && echo "OK: staging target Secret exists" || { echo "FAIL: staging target Secret missing" >&2; fail=1; }
-pkubectl get secret "$production_target" -n production >/dev/null 2>&1 && echo "OK: production target Secret exists" || { echo "FAIL: production target Secret missing" >&2; fail=1; }
+uat_target="platform-smoke-uat-standard-workload-secret"
+prod_target="platform-smoke-prod-standard-workload-secret"
+dev_target="platform-smoke-dev-standard-workload-secret"
+pkubectl get secret "$dev_target" -n dev >/dev/null 2>&1 && echo "OK: dev target Secret exists" || { echo "FAIL: dev target Secret missing" >&2; fail=1; }
+pkubectl get secret "$uat_target" -n uat >/dev/null 2>&1 && echo "OK: uat target Secret exists" || { echo "FAIL: uat target Secret missing" >&2; fail=1; }
+pkubectl get secret "$prod_target" -n prod >/dev/null 2>&1 && echo "OK: prod target Secret exists" || { echo "FAIL: prod target Secret missing" >&2; fail=1; }
 
 # --- ownership: the target Secret is owned by the ExternalSecret ---
-staging_owner_kind="$(pkubectl get secret "$staging_target" -n staging -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null || true)"
-production_owner_kind="$(pkubectl get secret "$production_target" -n production -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null || true)"
-if [ "$staging_owner_kind" = "ExternalSecret" ] && [ "$production_owner_kind" = "ExternalSecret" ]; then
-  echo "OK: both target Secrets are owned by their ExternalSecret (creationPolicy: Owner)"
+uat_owner_kind="$(pkubectl get secret "$uat_target" -n uat -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null || true)"
+prod_owner_kind="$(pkubectl get secret "$prod_target" -n prod -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null || true)"
+dev_owner_kind="$(pkubectl get secret "$dev_target" -n dev -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null || true)"
+if [ "$uat_owner_kind" = "ExternalSecret" ] && [ "$prod_owner_kind" = "ExternalSecret" ] && [ "$dev_owner_kind" = "ExternalSecret" ]; then
+  echo "OK: every target Secret is owned by its ExternalSecret (creationPolicy: Owner)"
 else
-  echo "FAIL: unexpected target Secret ownership (staging='$staging_owner_kind' production='$production_owner_kind')" >&2
+  echo "FAIL: unexpected target Secret ownership (dev='$dev_owner_kind' uat='$uat_owner_kind' prod='$prod_owner_kind')" >&2
   fail=1
 fi
 
@@ -229,9 +249,10 @@ fi
 # --- workloads Available (Pods were blocked in ContainerCreating until
 # the target Secret existed, since optional: false) ---
 echo "test-secret-lifecycle: waiting for workload rollout ..."
-pkubectl rollout status deployment/platform-smoke-staging-standard-workload -n staging --timeout=120s >/dev/null
-pkubectl rollout status deployment/platform-smoke-production-standard-workload -n production --timeout=120s >/dev/null
-echo "OK: staging and production workload Deployments are Available"
+pkubectl rollout status deployment/platform-smoke-uat-standard-workload -n uat --timeout=120s >/dev/null
+pkubectl rollout status deployment/platform-smoke-prod-standard-workload -n prod --timeout=120s >/dev/null
+pkubectl rollout status deployment/platform-smoke-dev-standard-workload -n dev --timeout=120s >/dev/null
+echo "OK: dev, uat, and prod workload Deployments are Available"
 
 # --- wait for the target Secret to reflect a specific expected hash,
 # within refreshInterval (1m) plus a generous bound. This test is
@@ -289,42 +310,55 @@ wait_for_mounted_hash() {
 }
 
 echo "test-secret-lifecycle: waiting for target Secrets and mounted files to reflect the provisioned source values ..."
-staging_target_sha_1="$(wait_for_target_hash staging "$staging_target" "$staging_source_sha")" \
-  && echo "OK: staging target Secret matches the provisioned source (sha256 $staging_target_sha_1)" \
-  || { echo "FAIL: staging target Secret did not converge to the provisioned source within 90s (got $staging_target_sha_1, expected $staging_source_sha)" >&2; fail=1; }
-production_target_sha_1="$(wait_for_target_hash production "$production_target" "$production_source_sha")" \
-  && echo "OK: production target Secret matches the provisioned source (sha256 $production_target_sha_1)" \
-  || { echo "FAIL: production target Secret did not converge to the provisioned source within 90s (got $production_target_sha_1, expected $production_source_sha)" >&2; fail=1; }
+uat_target_sha_1="$(wait_for_target_hash uat "$uat_target" "$uat_source_sha")" \
+  && echo "OK: uat target Secret matches the provisioned source (sha256 $uat_target_sha_1)" \
+  || { echo "FAIL: uat target Secret did not converge to the provisioned source within 90s (got $uat_target_sha_1, expected $uat_source_sha)" >&2; fail=1; }
+prod_target_sha_1="$(wait_for_target_hash prod "$prod_target" "$prod_source_sha")" \
+  && echo "OK: prod target Secret matches the provisioned source (sha256 $prod_target_sha_1)" \
+  || { echo "FAIL: prod target Secret did not converge to the provisioned source within 90s (got $prod_target_sha_1, expected $prod_source_sha)" >&2; fail=1; }
+dev_target_sha_1="$(wait_for_target_hash dev "$dev_target" "$dev_source_sha")" \
+  && echo "OK: dev target Secret matches the provisioned source (sha256 $dev_target_sha_1)" \
+  || { echo "FAIL: dev target Secret did not converge to the provisioned source within 90s (got $dev_target_sha_1, expected $dev_source_sha)" >&2; fail=1; }
 
 if [ "$fail" -ne 0 ]; then
   echo "test-secret-lifecycle: FAILED before mounted-file verification" >&2
   exit 1
 fi
 
-read -r staging_mounted_sha_1 staging_pod_1 <<EOF
-$(wait_for_mounted_hash staging staging "$staging_source_sha")
+read -r uat_mounted_sha_1 uat_pod_1 <<EOF
+$(wait_for_mounted_hash uat uat "$uat_source_sha")
 EOF
-if [ "$staging_mounted_sha_1" = "$staging_source_sha" ]; then
-  echo "OK: staging source/target/mounted-file hashes all match ($staging_mounted_sha_1)"
+if [ "$uat_mounted_sha_1" = "$uat_source_sha" ]; then
+  echo "OK: uat source/target/mounted-file hashes all match ($uat_mounted_sha_1)"
 else
-  echo "FAIL: staging mounted-file hash did not converge (source=$staging_source_sha target=$staging_target_sha_1 mounted=$staging_mounted_sha_1)" >&2
+  echo "FAIL: uat mounted-file hash did not converge (source=$uat_source_sha target=$uat_target_sha_1 mounted=$uat_mounted_sha_1)" >&2
   fail=1
 fi
-read -r production_mounted_sha_1 production_pod_1 <<EOF
-$(wait_for_mounted_hash production production "$production_source_sha")
+read -r prod_mounted_sha_1 prod_pod_1 <<EOF
+$(wait_for_mounted_hash prod prod "$prod_source_sha")
 EOF
-if [ "$production_mounted_sha_1" = "$production_source_sha" ]; then
-  echo "OK: production source/target/mounted-file hashes all match ($production_mounted_sha_1)"
+if [ "$prod_mounted_sha_1" = "$prod_source_sha" ]; then
+  echo "OK: prod source/target/mounted-file hashes all match ($prod_mounted_sha_1)"
 else
-  echo "FAIL: production mounted-file hash did not converge (source=$production_source_sha target=$production_target_sha_1 mounted=$production_mounted_sha_1)" >&2
+  echo "FAIL: prod mounted-file hash did not converge (source=$prod_source_sha target=$prod_target_sha_1 mounted=$prod_mounted_sha_1)" >&2
   fail=1
 fi
 
-# --- 10. staging and production hashes differ ---
-if [ "$staging_target_sha_1" != "$production_target_sha_1" ]; then
-  echo "OK: staging and production hashes differ - real per-environment isolation, not a copy-paste value"
+read -r dev_mounted_sha_1 dev_pod_1 <<EOF
+$(wait_for_mounted_hash dev dev "$dev_source_sha")
+EOF
+if [ "$dev_mounted_sha_1" = "$dev_source_sha" ]; then
+  echo "OK: dev source/target/mounted-file hashes all match ($dev_mounted_sha_1)"
 else
-  echo "FAIL: staging and production target Secret hashes are identical" >&2
+  echo "FAIL: dev mounted-file hash did not converge (source=$dev_source_sha target=$dev_target_sha_1 mounted=$dev_mounted_sha_1)" >&2
+  fail=1
+fi
+
+# --- 10. dev, uat, and prod hashes pairwise differ ---
+if [ "$uat_target_sha_1" != "$prod_target_sha_1" ] && [ "$dev_target_sha_1" != "$uat_target_sha_1" ] && [ "$dev_target_sha_1" != "$prod_target_sha_1" ]; then
+  echo "OK: dev, uat, and prod hashes pairwise differ - real per-environment isolation, not a copy-paste value"
+else
+  echo "FAIL: two environments' target Secret hashes are identical" >&2
   fail=1
 fi
 
@@ -333,32 +367,34 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-# --- capture production's resourceVersion/Pod UID before rotating
-# staging only, to prove isolation afterward ---
-production_target_rv_before="$(pkubectl get secret "$production_target" -n production -o jsonpath='{.metadata.resourceVersion}')"
-production_pod_uid_before="$(pkubectl get pod "$production_pod_1" -n production -o jsonpath='{.metadata.uid}')"
+# --- capture prod's and dev's resourceVersion/Pod UID before rotating
+# uat only, to prove isolation afterward ---
+prod_target_rv_before="$(pkubectl get secret "$prod_target" -n prod -o jsonpath='{.metadata.resourceVersion}')"
+prod_pod_uid_before="$(pkubectl get pod "$prod_pod_1" -n prod -o jsonpath='{.metadata.uid}')"
+dev_target_rv_before="$(pkubectl get secret "$dev_target" -n dev -o jsonpath='{.metadata.resourceVersion}')"
+dev_pod_uid_before="$(pkubectl get pod "$dev_pod_1" -n dev -o jsonpath='{.metadata.uid}')"
 
-# --- 13. rotate staging's source secret only. Phase 2.6.3b: the
+# --- 13. rotate uat's source secret only. Phase 2.6.3b: the
 # script's default (no-flag) path is now a true no-op on an existing
 # Secret - --rotate is required to actually change its value. ---
-echo "test-secret-lifecycle: rotating staging's source secret ..."
-staging_source_value_2="lab-$(date +%s)-$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-16)-rotated"
-printf '%s' "$staging_source_value_2" | sh lab/eso/provision-source-secret.sh staging --rotate
-staging_source_sha_2="$(printf '%s' "$staging_source_value_2" | shasum -a 256 | awk '{print $1}')"
-if [ "$staging_source_sha_2" = "$staging_source_sha" ]; then
-  echo "FAIL: rotated staging value hashes to the same value as before - test fixture is broken" >&2
+echo "test-secret-lifecycle: rotating uat's source secret ..."
+uat_source_value_2="lab-$(date +%s)-$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}' | cut -c1-16)-rotated"
+printf '%s' "$uat_source_value_2" | sh lab/eso/provision-source-secret.sh uat --rotate
+uat_source_sha_2="$(printf '%s' "$uat_source_value_2" | shasum -a 256 | awk '{print $1}')"
+if [ "$uat_source_sha_2" = "$uat_source_sha" ]; then
+  echo "FAIL: rotated uat value hashes to the same value as before - test fixture is broken" >&2
   fail=1
 fi
 
 # --- 12/14/15. propagation to target Secret and mounted file, within
-# refreshInterval (1m) plus a generous kubelet-sync bound; production
-# must remain fully unchanged throughout. ---
+# refreshInterval (1m) plus a generous kubelet-sync bound; prod and
+# dev must remain fully unchanged throughout. ---
 echo "test-secret-lifecycle: waiting for rotation to propagate (refreshInterval + kubelet sync, bounded) ..."
 propagated=0
 elapsed=0
 while [ "$elapsed" -lt 180 ]; do
-  current_target_sha="$(pkubectl get secret "$staging_target" -n staging -o jsonpath='{.data.message}' 2>/dev/null | base64 -d | shasum -a 256 | awk '{print $1}')"
-  if [ "$current_target_sha" = "$staging_source_sha_2" ]; then
+  current_target_sha="$(pkubectl get secret "$uat_target" -n uat -o jsonpath='{.data.message}' 2>/dev/null | base64 -d | shasum -a 256 | awk '{print $1}')"
+  if [ "$current_target_sha" = "$uat_source_sha_2" ]; then
     propagated=1
     break
   fi
@@ -366,9 +402,9 @@ while [ "$elapsed" -lt 180 ]; do
   elapsed=$((elapsed + 5))
 done
 if [ "$propagated" -eq 1 ]; then
-  echo "OK: staging target Secret propagated the rotated value within ${elapsed}s (sha256 $current_target_sha)"
+  echo "OK: uat target Secret propagated the rotated value within ${elapsed}s (sha256 $current_target_sha)"
 else
-  echo "FAIL: staging target Secret did not propagate the rotated value within 180s" >&2
+  echo "FAIL: uat target Secret did not propagate the rotated value within 180s" >&2
   fail=1
 fi
 
@@ -376,8 +412,8 @@ fi
 mounted_propagated=0
 elapsed=0
 while [ "$elapsed" -lt 180 ]; do
-  current_mounted_sha="$(pkubectl exec -n staging "$staging_pod_1" -- sha256sum /etc/secret/message 2>/dev/null | awk '{print $1}')"
-  if [ "$current_mounted_sha" = "$staging_source_sha_2" ]; then
+  current_mounted_sha="$(pkubectl exec -n uat "$uat_pod_1" -- sha256sum /etc/secret/message 2>/dev/null | awk '{print $1}')"
+  if [ "$current_mounted_sha" = "$uat_source_sha_2" ]; then
     mounted_propagated=1
     break
   fi
@@ -385,22 +421,33 @@ while [ "$elapsed" -lt 180 ]; do
   elapsed=$((elapsed + 5))
 done
 if [ "$mounted_propagated" -eq 1 ]; then
-  echo "OK: staging mounted file propagated the rotated value within ${elapsed}s, no Pod restart required (sha256 $current_mounted_sha)"
+  echo "OK: uat mounted file propagated the rotated value within ${elapsed}s, no Pod restart required (sha256 $current_mounted_sha)"
 else
-  echo "FAIL: staging mounted file did not propagate the rotated value within 180s" >&2
+  echo "FAIL: uat mounted file did not propagate the rotated value within 180s" >&2
   fail=1
 fi
 
-# --- 16. production remains fully unchanged ---
-production_target_rv_after="$(pkubectl get secret "$production_target" -n production -o jsonpath='{.metadata.resourceVersion}')"
-production_pod_uid_after="$(pkubectl get pod "$production_pod_1" -n production -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
-production_target_sha_after="$(pkubectl get secret "$production_target" -n production -o jsonpath='{.data.message}' | base64 -d | shasum -a 256 | awk '{print $1}')"
-if [ "$production_target_rv_before" = "$production_target_rv_after" ] \
-  && [ "$production_pod_uid_before" = "$production_pod_uid_after" ] \
-  && [ "$production_target_sha_after" = "$production_target_sha_1" ]; then
-  echo "OK: production target Secret resourceVersion, Pod UID, and hash are all unchanged (isolation proof)"
+# --- 16. prod and dev remain fully unchanged ---
+prod_target_rv_after="$(pkubectl get secret "$prod_target" -n prod -o jsonpath='{.metadata.resourceVersion}')"
+prod_pod_uid_after="$(pkubectl get pod "$prod_pod_1" -n prod -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
+prod_target_sha_after="$(pkubectl get secret "$prod_target" -n prod -o jsonpath='{.data.message}' | base64 -d | shasum -a 256 | awk '{print $1}')"
+if [ "$prod_target_rv_before" = "$prod_target_rv_after" ] \
+  && [ "$prod_pod_uid_before" = "$prod_pod_uid_after" ] \
+  && [ "$prod_target_sha_after" = "$prod_target_sha_1" ]; then
+  echo "OK: prod target Secret resourceVersion, Pod UID, and hash are all unchanged (isolation proof)"
 else
-  echo "FAIL: production changed during staging's rotation (rv: $production_target_rv_before -> $production_target_rv_after; uid: $production_pod_uid_before -> $production_pod_uid_after; hash: $production_target_sha_1 -> $production_target_sha_after)" >&2
+  echo "FAIL: prod changed during uat's rotation (rv: $prod_target_rv_before -> $prod_target_rv_after; uid: $prod_pod_uid_before -> $prod_pod_uid_after; hash: $prod_target_sha_1 -> $prod_target_sha_after)" >&2
+  fail=1
+fi
+dev_target_rv_after="$(pkubectl get secret "$dev_target" -n dev -o jsonpath='{.metadata.resourceVersion}')"
+dev_pod_uid_after="$(pkubectl get pod "$dev_pod_1" -n dev -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
+dev_target_sha_after="$(pkubectl get secret "$dev_target" -n dev -o jsonpath='{.data.message}' | base64 -d | shasum -a 256 | awk '{print $1}')"
+if [ "$dev_target_rv_before" = "$dev_target_rv_after" ] \
+  && [ "$dev_pod_uid_before" = "$dev_pod_uid_after" ] \
+  && [ "$dev_target_sha_after" = "$dev_target_sha_1" ]; then
+  echo "OK: dev target Secret resourceVersion, Pod UID, and hash are all unchanged (isolation proof)"
+else
+  echo "FAIL: dev changed during uat's rotation (rv: $dev_target_rv_before -> $dev_target_rv_after; uid: $dev_pod_uid_before -> $dev_pod_uid_after; hash: $dev_target_sha_1 -> $dev_target_sha_after)" >&2
   fail=1
 fi
 
@@ -410,17 +457,17 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 # --- 17 (per this task's numbering)/14 (per the plan): delete the
-# staging target Secret manually and confirm ESO recreates it with the
+# uat target Secret manually and confirm ESO recreates it with the
 # same (rotated) value, within refreshInterval. ---
-echo "test-secret-lifecycle: deleting the staging target Secret to prove ESO recreates it ..."
-staging_target_uid_before_delete="$(pkubectl get secret "$staging_target" -n staging -o jsonpath='{.metadata.uid}')"
-pkubectl delete secret "$staging_target" -n staging
+echo "test-secret-lifecycle: deleting the uat target Secret to prove ESO recreates it ..."
+uat_target_uid_before_delete="$(pkubectl get secret "$uat_target" -n uat -o jsonpath='{.metadata.uid}')"
+pkubectl delete secret "$uat_target" -n uat
 recreated=0
 elapsed=0
 while [ "$elapsed" -lt 90 ]; do
-  if pkubectl get secret "$staging_target" -n staging >/dev/null 2>&1; then
-    recreated_sha="$(pkubectl get secret "$staging_target" -n staging -o jsonpath='{.data.message}' | base64 -d | shasum -a 256 | awk '{print $1}')"
-    if [ "$recreated_sha" = "$staging_source_sha_2" ]; then
+  if pkubectl get secret "$uat_target" -n uat >/dev/null 2>&1; then
+    recreated_sha="$(pkubectl get secret "$uat_target" -n uat -o jsonpath='{.data.message}' | base64 -d | shasum -a 256 | awk '{print $1}')"
+    if [ "$recreated_sha" = "$uat_source_sha_2" ]; then
       recreated=1
       break
     fi
@@ -429,8 +476,8 @@ while [ "$elapsed" -lt 90 ]; do
   elapsed=$((elapsed + 3))
 done
 if [ "$recreated" -eq 1 ]; then
-  staging_target_uid_after_delete="$(pkubectl get secret "$staging_target" -n staging -o jsonpath='{.metadata.uid}')"
-  echo "OK: ESO recreated the deleted target Secret with the same value within ${elapsed}s (new UID, as expected for a fresh object: before=$staging_target_uid_before_delete after=$staging_target_uid_after_delete)"
+  uat_target_uid_after_delete="$(pkubectl get secret "$uat_target" -n uat -o jsonpath='{.metadata.uid}')"
+  echo "OK: ESO recreated the deleted target Secret with the same value within ${elapsed}s (new UID, as expected for a fresh object: before=$uat_target_uid_before_delete after=$uat_target_uid_after_delete)"
 else
   echo "FAIL: ESO did not recreate the deleted target Secret within 90s" >&2
   fail=1
@@ -439,15 +486,15 @@ fi
 # --- 18/15 (per the plan's numbering): re-run bootstrap and confirm a
 # true no-op on the chart-rendered GitOps resources. ---
 echo "test-secret-lifecycle: re-running gitops-bootstrap, expecting a true no-op ..."
-staging_ss_rv_1="$(pkubectl get secretstore staging-kubernetes-backend -n staging -o jsonpath='{.metadata.resourceVersion}')"
-staging_es_rv_1="$(pkubectl get externalsecret platform-smoke-staging-standard-workload-secret -n staging -o jsonpath='{.metadata.resourceVersion}')"
+uat_ss_rv_1="$(pkubectl get secretstore uat-kubernetes-backend -n uat -o jsonpath='{.metadata.resourceVersion}')"
+uat_es_rv_1="$(pkubectl get externalsecret platform-smoke-uat-standard-workload-secret -n uat -o jsonpath='{.metadata.resourceVersion}')"
 make gitops-bootstrap REVISION="$current_branch"
-staging_ss_rv_2="$(pkubectl get secretstore staging-kubernetes-backend -n staging -o jsonpath='{.metadata.resourceVersion}')"
-staging_es_rv_2="$(pkubectl get externalsecret platform-smoke-staging-standard-workload-secret -n staging -o jsonpath='{.metadata.resourceVersion}')"
-if [ "$staging_ss_rv_1" = "$staging_ss_rv_2" ] && [ "$staging_es_rv_1" = "$staging_es_rv_2" ]; then
+uat_ss_rv_2="$(pkubectl get secretstore uat-kubernetes-backend -n uat -o jsonpath='{.metadata.resourceVersion}')"
+uat_es_rv_2="$(pkubectl get externalsecret platform-smoke-uat-standard-workload-secret -n uat -o jsonpath='{.metadata.resourceVersion}')"
+if [ "$uat_ss_rv_1" = "$uat_ss_rv_2" ] && [ "$uat_es_rv_1" = "$uat_es_rv_2" ]; then
   echo "OK: re-running gitops-bootstrap is a true no-op (SecretStore/ExternalSecret resourceVersion unchanged)"
 else
-  echo "FAIL: gitops-bootstrap re-run was not a no-op (SecretStore rv $staging_ss_rv_1 -> $staging_ss_rv_2; ExternalSecret rv $staging_es_rv_1 -> $staging_es_rv_2)" >&2
+  echo "FAIL: gitops-bootstrap re-run was not a no-op (SecretStore rv $uat_ss_rv_1 -> $uat_ss_rv_2; ExternalSecret rv $uat_es_rv_1 -> $uat_es_rv_2)" >&2
   fail=1
 fi
 
@@ -466,8 +513,9 @@ apps_before="$(pkubectl get applications -n argocd -o jsonpath='{range .items[*]
 echo "test-secret-lifecycle: uninstalling ESO (scoped releases only) ..."
 sh lab/eso/uninstall.sh
 
-pkubectl get secret "$staging_target" -n staging >/dev/null 2>&1 && echo "OK: staging target Secret survives ESO uninstall" || { echo "FAIL: staging target Secret was deleted by ESO uninstall" >&2; fail=1; }
-pkubectl get secret "$production_target" -n production >/dev/null 2>&1 && echo "OK: production target Secret survives ESO uninstall" || { echo "FAIL: production target Secret was deleted by ESO uninstall" >&2; fail=1; }
+pkubectl get secret "$uat_target" -n uat >/dev/null 2>&1 && echo "OK: uat target Secret survives ESO uninstall" || { echo "FAIL: uat target Secret was deleted by ESO uninstall" >&2; fail=1; }
+pkubectl get secret "$prod_target" -n prod >/dev/null 2>&1 && echo "OK: prod target Secret survives ESO uninstall" || { echo "FAIL: prod target Secret was deleted by ESO uninstall" >&2; fail=1; }
+pkubectl get secret "$dev_target" -n dev >/dev/null 2>&1 && echo "OK: dev target Secret survives ESO uninstall" || { echo "FAIL: dev target Secret was deleted by ESO uninstall" >&2; fail=1; }
 
 # --- 18: Argo CD and the standard-workload baseline unaffected ---
 argocd_pods_after="$(pkubectl get pods -n argocd --no-headers 2>/dev/null | wc -l | tr -d ' ')"
@@ -489,23 +537,30 @@ sh lab/eso/uninstall.sh
 # was in before this test ran (main-tracked bootstrap, Phase 2.4/2.6.1
 # workloads, no SecretStore/ExternalSecret), not a state that assumes
 # an unmerged change. ESO itself is reinstalled (its 25 CRDs were never
-# removed - only its two scoped releases were, in the block above). As
+# removed - only its scoped releases were, in the block above). As
 # in step 6, this uses an in-place `kubectl apply` back to main rather
 # than lab/gitops/uninstall.sh + gitops-bootstrap, for the same reason:
 # that script's namespace-inventory check does not account for ESO's
-# scoped-RBAC objects now living in staging/production and would again
+# scoped-RBAC objects now living in dev/uat/prod and would again
 # refuse to clean up, after already cascading a delete through the
 # generated Applications' managed resources. The source Secrets
-# provisioned in step 5/13 (eso-source-staging/eso-source-production)
+# provisioned in step 5/13 (eso-source-dev/-uat/-prod)
 # are deliberately NOT deleted here: they are outside Git/Helm/Argo CD
 # entirely, and once this PR merges, main's own
-# values-staging.yaml/values-production.yaml will need them to already
+# values-{dev,uat,prod}.yaml will need them to already
 # exist for the ExternalSecrets to reconcile immediately. ---
-echo "test-secret-lifecycle: restoring persistent state (ESO reinstall + GitOps back to main, in-place apply) ..."
+#
+# RESTORE_REVISION (default: main) names the revision to restore to.
+# Phase 2.7.1: a change that renames the environments themselves (as
+# 2.7.1 does) cannot restore to a pre-merge main whose environments
+# have different names - pass RESTORE_REVISION=<this branch> for that
+# pre-merge run only, and record it as such in the PR's evidence.
+restore_revision="${RESTORE_REVISION:-main}"
+echo "test-secret-lifecycle: restoring persistent state (ESO reinstall + GitOps back to '$restore_revision', in-place apply) ..."
 sh lab/eso/install.sh
-main_apply_file="$(gitops_render_root_app_for_revision main)"
+main_apply_file="$(gitops_render_root_app_for_revision "$restore_revision")"
 pkubectl apply -f "$main_apply_file"
-echo "OK: root Application updated in place back to revision 'main' (no delete, no cascade)"
+echo "OK: root Application updated in place back to revision '$restore_revision' (no delete, no cascade)"
 
 # Observed empirically on this exact cluster: a self-heal-triggered
 # automated sync operation that was queued/retrying WHILE the
@@ -577,16 +632,21 @@ stable_checks=0
 elapsed=0
 while [ "$elapsed" -lt 420 ] && [ "$stable_checks" -lt 3 ]; do
   clean=1
-  ss_staging="$(pkubectl get secretstore staging-kubernetes-backend -n staging -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
-  [ "$ss_staging" = "True" ] || clean=0
-  ss_production="$(pkubectl get secretstore production-kubernetes-backend -n production -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
-  [ "$ss_production" = "True" ] || clean=0
-  es_staging="$(pkubectl get externalsecret "$staging_target" -n staging -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
-  [ "$es_staging" = "True" ] || clean=0
-  es_production="$(pkubectl get externalsecret "$production_target" -n production -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
-  [ "$es_production" = "True" ] || clean=0
-  pkubectl get secret "$staging_target" -n staging >/dev/null 2>&1 || clean=0
-  pkubectl get secret "$production_target" -n production >/dev/null 2>&1 || clean=0
+  ss_uat="$(pkubectl get secretstore uat-kubernetes-backend -n uat -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$ss_uat" = "True" ] || clean=0
+  ss_dev="$(pkubectl get secretstore dev-kubernetes-backend -n dev -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$ss_dev" = "True" ] || clean=0
+  es_dev="$(pkubectl get externalsecret "$dev_target" -n dev -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$es_dev" = "True" ] || clean=0
+  pkubectl get secret "$dev_target" -n dev >/dev/null 2>&1 || clean=0
+  ss_prod="$(pkubectl get secretstore prod-kubernetes-backend -n prod -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$ss_prod" = "True" ] || clean=0
+  es_uat="$(pkubectl get externalsecret "$uat_target" -n uat -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$es_uat" = "True" ] || clean=0
+  es_prod="$(pkubectl get externalsecret "$prod_target" -n prod -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+  [ "$es_prod" = "True" ] || clean=0
+  pkubectl get secret "$uat_target" -n uat >/dev/null 2>&1 || clean=0
+  pkubectl get secret "$prod_target" -n prod >/dev/null 2>&1 || clean=0
   for app in $GITOPS_GENERATED_APPS; do
     status="$(pkubectl get application "$app" -n argocd -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null)"
     [ "$status" = "Synced/Healthy" ] || clean=0
@@ -600,14 +660,15 @@ while [ "$elapsed" -lt 420 ] && [ "$stable_checks" -lt 3 ]; do
   elapsed=$((elapsed + 15))
 done
 if [ "$stable_checks" -ge 3 ]; then
-  echo "OK: SecretStore/ExternalSecret/target Secret present and Ready after restoring to main (main has Phase 2.6.2 merged and renders them), stable across 3 consecutive checks"
+  echo "OK: SecretStore/ExternalSecret/target Secret present and Ready after restoring to '$restore_revision' (it renders them), stable across 3 consecutive checks"
 else
-  echo "FAIL: cluster state did not stabilize (SecretStore/ExternalSecret Ready, target Secrets present, both Applications Synced/Healthy) within 420s after restoring to main" >&2
+  echo "FAIL: cluster state did not stabilize (SecretStore/ExternalSecret Ready, target Secrets present, every Application Synced/Healthy) within 420s after restoring to '$restore_revision'" >&2
   fail=1
 fi
-pkubectl rollout status deployment/platform-smoke-staging-standard-workload -n staging --timeout=120s >/dev/null
-pkubectl rollout status deployment/platform-smoke-production-standard-workload -n production --timeout=120s >/dev/null
-echo "OK: staging and production workload Deployments are Available again on main"
+pkubectl rollout status deployment/platform-smoke-uat-standard-workload -n uat --timeout=120s >/dev/null
+pkubectl rollout status deployment/platform-smoke-prod-standard-workload -n prod --timeout=120s >/dev/null
+pkubectl rollout status deployment/platform-smoke-dev-standard-workload -n dev --timeout=120s >/dev/null
+echo "OK: dev, uat, and prod workload Deployments are Available again on '$restore_revision'"
 
 # --- final health check (Phase 2.6.1 ESO bootstrap baseline) ---
 sh tests/eso/test-runtime-health.sh || fail=1

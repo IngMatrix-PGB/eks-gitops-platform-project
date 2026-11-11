@@ -1,0 +1,26 @@
+# Environment overrides for prod only. Everything not listed here
+# is inherited from values.yaml. This file is never touched by the
+# Phase 2.4 rollout-verification commit - its stability across that
+# change is the isolation proof.
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+configMap:
+  uiMessage: "podinfo prod — phase 2.4"
+
+# Phase 2.6.2: enables the read-only Secret mount for prod only -
+# fully separate SecretStore/source-namespace/source-Secret/auth
+# ServiceAccount from uat, no shared object of any kind.
+externalSecret:
+  enabled: true
+  secretStoreName: "prod-kubernetes-backend"
+  sourceNamespace: "eso-source-prod"
+  sourceSecretName: "local-backend-prod"
+  authServiceAccountName: "prod-secretstore-reader"

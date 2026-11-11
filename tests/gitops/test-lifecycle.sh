@@ -49,10 +49,12 @@ echo "OK: step 1 - cluster, Argo CD, and repository authentication baseline veri
 
 echo "test-lifecycle(gitops): step 2 - refuse if any Phase 2.3 object already exists"
 if gitops_root_app_exists || gitops_appproject_exists || gitops_appset_exists \
-   || gitops_generated_app_exists "platform-smoke-staging" \
-   || gitops_generated_app_exists "platform-smoke-production" \
-   || pkubectl get namespace staging >/dev/null 2>&1 \
-   || pkubectl get namespace production >/dev/null 2>&1; then
+   || gitops_generated_app_exists "platform-smoke-dev" \
+   || gitops_generated_app_exists "platform-smoke-uat" \
+   || gitops_generated_app_exists "platform-smoke-prod" \
+   || pkubectl get namespace dev >/dev/null 2>&1 \
+   || pkubectl get namespace uat >/dev/null 2>&1 \
+   || pkubectl get namespace prod >/dev/null 2>&1; then
   echo "FAIL: a Phase 2.3 object already exists - refusing to run the lifecycle test against a non-clean state" >&2
   exit 1
 fi
@@ -83,7 +85,7 @@ if ! gitops_appset_exists; then
 fi
 echo "OK: step 6 - ApplicationSet present"
 
-echo "test-lifecycle(gitops): step 7 - verify exactly two generated Applications"
+echo "test-lifecycle(gitops): step 7 - verify exactly three generated Applications"
 generated_count=0
 for app in $GITOPS_GENERATED_APPS; do
   if gitops_generated_app_exists "$app"; then
@@ -91,15 +93,15 @@ for app in $GITOPS_GENERATED_APPS; do
   fi
 done
 total_apps="$(pkubectl -n "$ARGOCD_NAMESPACE" get applications.argoproj.io -l "eks-gitops-lab-lite.local/owner=${GITOPS_NS_OWNER_LABEL_VALUE}" --no-headers 2>/dev/null | grep -vc "^${GITOPS_ROOT_APP_NAME} " || true)"
-if [ "$generated_count" -ne 2 ]; then
-  echo "FAIL: expected exactly 2 generated Applications, found $generated_count" >&2
+if [ "$generated_count" -ne 3 ]; then
+  echo "FAIL: expected exactly 3 generated Applications, found $generated_count" >&2
   exit 1
 fi
-echo "OK: step 7 - exactly 2 generated Applications ($GITOPS_GENERATED_APPS)"
+echo "OK: step 7 - exactly 3 generated Applications ($GITOPS_GENERATED_APPS)"
 
-echo "test-lifecycle(gitops): step 8 - verify staging/production namespaces and ownership metadata"
+echo "test-lifecycle(gitops): step 8 - verify dev/uat/prod namespaces and ownership metadata"
 escaped_owner_key="$(printf '%s' "$GITOPS_NS_OWNER_LABEL_KEY" | sed 's/\./\\./g')"
-for ns in staging production; do
+for ns in dev uat prod; do
   # Namespace creation is driven by the generated Application's own
   # CreateNamespace=true sync, which completes shortly after step 7
   # observes the Application object itself exists - poll briefly rather
@@ -122,7 +124,7 @@ for ns in staging production; do
 done
 
 echo "test-lifecycle(gitops): step 8b (Phase 2.6.3a) - install ESO and provision source Secrets"
-# main's current charts/standard-workload/values-{staging,production}.yaml
+# main's current charts/standard-workload/values-{dev,uat,prod}.yaml
 # (Phase 2.6.2, already merged) set externalSecret.enabled: true, and
 # the workload Pod's secret volume is optional: false - the Pod cannot
 # reach Ready without ESO's SecretStore/ExternalSecret/target Secret
@@ -131,15 +133,18 @@ echo "test-lifecycle(gitops): step 8b (Phase 2.6.3a) - install ESO and provision
 # printing the synthetic values used, only their SHA256 for later
 # comparison if ever needed).
 sh lab/eso/install.sh >/dev/null
-staging_source_sha_precheck="$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}')"
-production_source_sha_precheck="$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}')"
-printf 'lab-%s-staging' "$staging_source_sha_precheck" | sh lab/eso/provision-source-secret.sh staging >/dev/null
-printf 'lab-%s-production' "$production_source_sha_precheck" | sh lab/eso/provision-source-secret.sh production >/dev/null
-echo "OK: step 8b - ESO installed, independent synthetic source Secrets provisioned for both environments (values never printed)"
+dev_source_sha_precheck="$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}')"
+uat_source_sha_precheck="$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}')"
+prod_source_sha_precheck="$(head -c 16 /dev/urandom | shasum -a 256 | awk '{print $1}')"
+printf 'lab-%s-dev' "$dev_source_sha_precheck" | sh lab/eso/provision-source-secret.sh dev >/dev/null
+printf 'lab-%s-uat' "$uat_source_sha_precheck" | sh lab/eso/provision-source-secret.sh uat >/dev/null
+printf 'lab-%s-prod' "$prod_source_sha_precheck" | sh lab/eso/provision-source-secret.sh prod >/dev/null
+echo "OK: step 8b - ESO installed, independent synthetic source Secrets provisioned for all three environments (values never printed)"
 
-echo "test-lifecycle(gitops): step 9 - wait for both generated Applications Synced/Healthy"
-gitops_wait_for_synced_healthy "platform-smoke-staging" 180
-gitops_wait_for_synced_healthy "platform-smoke-production" 180
+echo "test-lifecycle(gitops): step 9 - wait for all three generated Applications Synced/Healthy"
+gitops_wait_for_synced_healthy "platform-smoke-dev" 180
+gitops_wait_for_synced_healthy "platform-smoke-uat" 180
+gitops_wait_for_synced_healthy "platform-smoke-prod" 180
 
 # Reachability check via the already-pinned podinfo image's own curl -
 # reused verbatim by the manual two-commit rollout proof this test
@@ -208,8 +213,8 @@ EOF
   echo "OK: '$ns' Service reachable, /healthz+/readyz OK, /api/info message='$expected_message'"
 }
 
-echo "test-lifecycle(gitops): step 10 - verify Deployment/Service/ServiceAccount/ConfigMap in both environments"
-for ns in staging production; do
+echo "test-lifecycle(gitops): step 10 - verify Deployment/Service/ServiceAccount/ConfigMap in all three environments"
+for ns in dev uat prod; do
   dep="platform-smoke-${ns}-standard-workload"
   avail="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
   desired="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.replicas}' 2>/dev/null || true)"
@@ -243,18 +248,20 @@ for ns in staging production; do
   echo "OK: namespace '$ns' Deployment ($avail/$desired Available), digest-pinned, UID/GID 65532/65532, Service/ServiceAccount/ConfigMap present"
 done
 
-expected_staging_message="podinfo staging — phase 2.4 verified"
-expected_production_message="podinfo production — phase 2.4"
-gitops_check_workload_endpoint staging "platform-smoke-staging-standard-workload" "$expected_staging_message"
-gitops_check_workload_endpoint production "platform-smoke-production-standard-workload" "$expected_production_message"
-echo "OK: step 10 - both environments' Deployment/Service/ServiceAccount/ConfigMap verified, both endpoints reachable with correct, differing per-environment messages"
+expected_dev_message="podinfo dev — phase 2.7.1"
+expected_uat_message="podinfo uat — phase 2.4 verified"
+expected_prod_message="podinfo prod — phase 2.4"
+gitops_check_workload_endpoint dev "platform-smoke-dev-standard-workload" "$expected_dev_message"
+gitops_check_workload_endpoint uat "platform-smoke-uat-standard-workload" "$expected_uat_message"
+gitops_check_workload_endpoint prod "platform-smoke-prod-standard-workload" "$expected_prod_message"
+echo "OK: step 10 - all three environments' Deployment/Service/ServiceAccount/ConfigMap verified, every endpoint reachable with correct, differing per-environment messages"
 
 echo "test-lifecycle(gitops): step 11-12 - bootstrap again, prove true no-op via resourceVersions"
 root_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.metadata.resourceVersion}')"
 proj_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get appproject "$GITOPS_PROJECT_NAME" -o jsonpath='{.metadata.resourceVersion}')"
 appset_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get applicationset "$GITOPS_APPSET_NAME" -o jsonpath='{.metadata.resourceVersion}')"
-staging_app_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get application platform-smoke-staging -o jsonpath='{.metadata.resourceVersion}')"
-prod_app_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get application platform-smoke-production -o jsonpath='{.metadata.resourceVersion}')"
+uat_app_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get application platform-smoke-uat -o jsonpath='{.metadata.resourceVersion}')"
+prod_app_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get application platform-smoke-prod -o jsonpath='{.metadata.resourceVersion}')"
 
 REVISION="$revision" sh lab/gitops/bootstrap.sh
 
@@ -263,25 +270,25 @@ if [ "$root_rv_before" != "$root_rv_after" ]; then
   echo "FAIL: root Application resourceVersion changed on the second bootstrap ($root_rv_before -> $root_rv_after) - not a true no-op" >&2
   exit 1
 fi
-echo "OK: step 11-12 - root Application resourceVersion unchanged ($root_rv_after); AppProject rv=$proj_rv_before, ApplicationSet rv=$appset_rv_before, staging app rv=$staging_app_rv_before, production app rv=$prod_app_rv_before (recorded, all driven by the same unchanged root)"
+echo "OK: step 11-12 - root Application resourceVersion unchanged ($root_rv_after); AppProject rv=$proj_rv_before, ApplicationSet rv=$appset_rv_before, uat app rv=$uat_app_rv_before, prod app rv=$prod_app_rv_before (recorded, all driven by the same unchanged root)"
 
-echo "test-lifecycle(gitops): step 13 - introduce controlled live drift in the staging ConfigMap only"
-staging_cm="platform-smoke-staging-standard-workload-config"
-production_cm="platform-smoke-production-standard-workload-config"
-pkubectl -n staging patch configmap "$staging_cm" --type=merge -p '{"data":{"ui-message":"DRIFTED"}}'
-drifted="$(pkubectl -n staging get configmap "$staging_cm" -o jsonpath='{.data.ui-message}')"
+echo "test-lifecycle(gitops): step 13 - introduce controlled live drift in the uat ConfigMap only"
+uat_cm="platform-smoke-uat-standard-workload-config"
+prod_cm="platform-smoke-prod-standard-workload-config"
+pkubectl -n uat patch configmap "$uat_cm" --type=merge -p '{"data":{"ui-message":"DRIFTED"}}'
+drifted="$(pkubectl -n uat get configmap "$uat_cm" -o jsonpath='{.data.ui-message}')"
 if [ "$drifted" != "DRIFTED" ]; then
   echo "FAIL: could not introduce the controlled drift (got '$drifted')" >&2
   exit 1
 fi
-echo "OK: step 13 - staging configmap/$staging_cm drifted to '$drifted'"
+echo "OK: step 13 - uat configmap/$uat_cm drifted to '$drifted'"
 
 echo "test-lifecycle(gitops): step 14 - verify self-heal restores Git state"
 elapsed=0
 healed=0
 while [ "$elapsed" -lt 90 ]; do
-  current="$(pkubectl -n staging get configmap "$staging_cm" -o jsonpath='{.data.ui-message}' 2>/dev/null || true)"
-  if [ "$current" = "$expected_staging_message" ]; then
+  current="$(pkubectl -n uat get configmap "$uat_cm" -o jsonpath='{.data.ui-message}' 2>/dev/null || true)"
+  if [ "$current" = "$expected_uat_message" ]; then
     healed=1
     break
   fi
@@ -289,24 +296,31 @@ while [ "$elapsed" -lt 90 ]; do
   elapsed=$((elapsed + 3))
 done
 if [ "$healed" -ne 1 ]; then
-  echo "FAIL: self-heal did not restore staging configmap/$staging_cm within 90s (last value: '$current')" >&2
+  echo "FAIL: self-heal did not restore uat configmap/$uat_cm within 90s (last value: '$current')" >&2
   exit 1
 fi
-echo "OK: step 14 - self-heal restored staging configmap/$staging_cm to data.ui-message='$expected_staging_message'"
+echo "OK: step 14 - self-heal restored uat configmap/$uat_cm to data.ui-message='$expected_uat_message'"
 
-echo "test-lifecycle(gitops): step 15 - verify production was never affected"
-prod_value="$(pkubectl -n production get configmap "$production_cm" -o jsonpath='{.data.ui-message}' 2>/dev/null || true)"
-if [ "$prod_value" != "$expected_production_message" ]; then
-  echo "FAIL: production configmap/$production_cm data.ui-message='${prod_value:-<absent>}' - expected it to be unaffected ('$expected_production_message')" >&2
+echo "test-lifecycle(gitops): step 15 - verify dev and prod were never affected"
+dev_cm="platform-smoke-dev-standard-workload-config"
+dev_value="$(pkubectl -n dev get configmap "$dev_cm" -o jsonpath='{.data.ui-message}' 2>/dev/null || true)"
+if [ "$dev_value" != "$expected_dev_message" ]; then
+  echo "FAIL: dev configmap/$dev_cm data.ui-message='${dev_value:-<absent>}' - expected it to be unaffected ('$expected_dev_message')" >&2
   exit 1
 fi
-echo "OK: step 15 - production configmap/$production_cm unaffected (data.ui-message='$prod_value')"
+echo "OK: step 15 - dev configmap/$dev_cm unaffected (data.ui-message='$dev_value')"
+prod_value="$(pkubectl -n prod get configmap "$prod_cm" -o jsonpath='{.data.ui-message}' 2>/dev/null || true)"
+if [ "$prod_value" != "$expected_prod_message" ]; then
+  echo "FAIL: prod configmap/$prod_cm data.ui-message='${prod_value:-<absent>}' - expected it to be unaffected ('$expected_prod_message')" >&2
+  exit 1
+fi
+echo "OK: step 15 - prod configmap/$prod_cm unaffected (data.ui-message='$prod_value')"
 
 echo "test-lifecycle(gitops): step 15b (Phase 2.6.3a) - preflight fail-closed on an unclassifiable object, zero mutation"
 fixture_name="phase263a-preflight-fixture-$$"
-cleanup_fixture() { pkubectl delete configmap "$fixture_name" -n staging --ignore-not-found >/dev/null 2>&1 || true; }
+cleanup_fixture() { pkubectl delete configmap "$fixture_name" -n uat --ignore-not-found >/dev/null 2>&1 || true; }
 trap cleanup_fixture EXIT INT TERM
-pkubectl create configmap "$fixture_name" -n staging --from-literal=marker=unknown >/dev/null
+pkubectl create configmap "$fixture_name" -n uat --from-literal=marker=unknown >/dev/null
 pre_fixture_uid="$(gitops_app_uid "$GITOPS_ROOT_APP_NAME")"
 pre_fixture_generation="$(gitops_app_generation "$GITOPS_ROOT_APP_NAME")"
 preflight_out="$(mktemp)"
@@ -331,20 +345,20 @@ if [ "$post_fixture_uid" != "$pre_fixture_uid" ] || [ "$post_fixture_generation"
   exit 1
 fi
 echo "OK: root Application UID/generation unchanged - zero mutation before the abort"
-dep_avail="$(pkubectl -n staging get deployment platform-smoke-staging-standard-workload -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
+dep_avail="$(pkubectl -n uat get deployment platform-smoke-uat-standard-workload -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
 if [ -z "$dep_avail" ] || [ "$dep_avail" -lt 1 ]; then
-  echo "FAIL: staging workload was affected by the aborted preflight (availableReplicas='${dep_avail:-<absent>}')" >&2
+  echo "FAIL: uat workload was affected by the aborted preflight (availableReplicas='${dep_avail:-<absent>}')" >&2
   exit 1
 fi
-echo "OK: staging workload untouched (availableReplicas=$dep_avail) - the aborted preflight performed zero deletion"
+echo "OK: uat workload untouched (availableReplicas=$dep_avail) - the aborted preflight performed zero deletion"
 cleanup_fixture
 trap - EXIT INT TERM
 echo "OK: step 15b - unclassifiable-fixture fixture cleaned up via trap"
 
-echo "test-lifecycle(gitops): step 15c (Phase 2.6.3a) - ESO ownership: scoped RBAC inside staging/production must retain the namespace, never block or lose it"
+echo "test-lifecycle(gitops): step 15c (Phase 2.6.3a) - ESO ownership: scoped RBAC inside dev/uat/prod must retain the namespace, never block or lose it"
 sh lab/eso/install.sh >/dev/null
 sh tests/eso/test-runtime-health.sh >/dev/null
-for ns in staging production; do
+for ns in dev uat prod; do
   role="eso-${ns}-external-secrets-controller"
   if ! pkubectl get role "$role" -n "$ns" >/dev/null 2>&1; then
     echo "FAIL: expected ESO scoped Role '$role' in namespace '$ns' not found after 'make eso-install'" >&2
@@ -366,7 +380,7 @@ for app in $GITOPS_GENERATED_APPS; do
     exit 1
   fi
 done
-for ns in staging production; do
+for ns in dev uat prod; do
   if ! pkubectl get namespace "$ns" >/dev/null 2>&1; then
     echo "FAIL: namespace '$ns' was deleted while an active ESO scoped release still targeted it - must be retained" >&2
     exit 1
@@ -382,26 +396,26 @@ if ! argocd_release_exists; then
   echo "FAIL: Argo CD itself was affected by gitops-uninstall (ESO-present case)" >&2
   exit 1
 fi
-echo "OK: step 15c - gitops-uninstall correctly retained staging/production and their ESO-owned RBAC while ESO was active; generated Applications still cascaded away; Argo CD untouched"
+echo "OK: step 15c - gitops-uninstall correctly retained dev/uat/prod and their ESO-owned RBAC while ESO was active; generated Applications still cascaded away; Argo CD untouched"
 
 echo "test-lifecycle(gitops): step 15d (Phase 2.6.3a) - now uninstall ESO too, then re-run gitops-uninstall to reach true absence"
 sh lab/eso/uninstall.sh
-for ns in staging production; do
+for ns in dev uat prod; do
   role="eso-${ns}-external-secrets-controller"
   if pkubectl get role "$role" -n "$ns" >/dev/null 2>&1; then
     echo "FAIL: ESO scoped Role '$role' in '$ns' still present after 'make eso-uninstall'" >&2
     exit 1
   fi
 done
-echo "OK: ESO scoped RBAC gone from staging/production after eso-uninstall"
+echo "OK: ESO scoped RBAC gone from dev/uat/prod after eso-uninstall"
 sh lab/gitops/uninstall.sh
-for ns in staging production; do
+for ns in dev uat prod; do
   if pkubectl get namespace "$ns" >/dev/null 2>&1; then
     echo "FAIL: namespace '$ns' still present after the second gitops-uninstall (ESO is now gone - it should delete cleanly)" >&2
     exit 1
   fi
 done
-echo "OK: step 15d - staging/production fully deleted now that ESO no longer depends on them"
+echo "OK: step 15d - dev/uat/prod fully deleted now that ESO no longer depends on them"
 
 echo "test-lifecycle(gitops): step 16-19 - uninstall again (true no-op), preserving Argo CD/CRDs/repo Secret/deploy key"
 sh lab/gitops/uninstall.sh
@@ -413,7 +427,7 @@ for app in $GITOPS_GENERATED_APPS; do
     exit 1
   fi
 done
-for ns in staging production; do
+for ns in dev uat prod; do
   if pkubectl get namespace "$ns" >/dev/null 2>&1; then
     echo "FAIL: namespace '$ns' still present after uninstall" >&2
     exit 1
@@ -444,8 +458,9 @@ sh lab/gitops/uninstall.sh
 
 echo "test-lifecycle(gitops): step 21 - final state: Phase 2.3 workload resources absent"
 if gitops_root_app_exists || gitops_appproject_exists || gitops_appset_exists \
-   || pkubectl get namespace staging >/dev/null 2>&1 \
-   || pkubectl get namespace production >/dev/null 2>&1; then
+   || pkubectl get namespace dev >/dev/null 2>&1 \
+   || pkubectl get namespace uat >/dev/null 2>&1 \
+   || pkubectl get namespace prod >/dev/null 2>&1; then
   echo "FAIL: a Phase 2.3 workload resource is unexpectedly still present at end of test" >&2
   exit 1
 fi

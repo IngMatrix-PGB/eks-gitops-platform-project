@@ -1,8 +1,8 @@
 #!/bin/sh
 # Read-only runtime health checks against an already-installed External
-# Secrets Operator bootstrap: all 25 CRDs Established, both scoped
+# Secrets Operator bootstrap: all 25 CRDs Established, every scoped
 # releases' Deployments Ready, the webhook/cert-controller singleton
-# present exactly once (owned by eso-staging), each controller's own
+# present exactly once (owned by eso-uat), each controller's own
 # Role scoped to exactly its own namespace (live, not just rendered),
 # and no wildcard verb/resource/apiGroup in any live Role. Never
 # mutates anything. Backs `make eso-test-runtime-health` only.
@@ -106,8 +106,8 @@ done <<EOF
 $(eso_environments)
 EOF
 
-echo "test-runtime-health: checking no unhealthy pods across eso-staging/eso-production ..."
-for ns in eso-staging eso-production; do
+echo "test-runtime-health: checking no unhealthy pods across eso-dev/eso-uat/eso-prod ..."
+for ns in eso-dev eso-uat eso-prod; do
   bad_pods="$(pkubectl -n "$ns" get pods --no-headers 2>/dev/null | awk '$3 != "Running" && $3 != "Completed" {print}')"
   if [ -n "$bad_pods" ]; then
     echo "FAIL: unhealthy pod(s) in namespace '$ns':" >&2

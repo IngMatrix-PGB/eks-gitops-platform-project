@@ -61,7 +61,7 @@ EOF
 done
 
 echo "--- environment ConfigMaps ---"
-for ns in staging production; do
+for ns in dev uat prod; do
   if pkubectl -n "$ns" get configmap platform-smoke >/dev/null 2>&1; then
     pkubectl -n "$ns" get configmap platform-smoke -o jsonpath="namespace=${ns} data={.data}{\"\n\"}"
   else

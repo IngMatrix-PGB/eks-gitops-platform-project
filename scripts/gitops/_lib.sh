@@ -25,7 +25,7 @@ GITOPS_ROOT_APP_NAME="platform-bootstrap"
 GITOPS_ROOT_APP_FILE="gitops/root-application.yaml"
 GITOPS_CHART_PATH="gitops/bootstrap"
 GITOPS_DEFAULT_REVISION="main"
-GITOPS_GENERATED_APPS="platform-smoke-staging platform-smoke-production"
+GITOPS_GENERATED_APPS="platform-smoke-dev platform-smoke-uat platform-smoke-prod"
 
 require_gh() {
   if ! command -v gh >/dev/null 2>&1; then

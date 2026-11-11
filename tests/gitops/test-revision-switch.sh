@@ -5,7 +5,8 @@
 # revision fails closed with zero mutation; an in-place switch
 # preserves the root Application's UID and finalizers (never a
 # delete+recreate); workloads stay available; the stale-operation
-# detector/remediation helpers work correctly; switching back to main
+# detector/remediation helpers work correctly; switching back to
+# BASE_REVISION (default main)
 # converges too, ending with the root Application's UID unchanged
 # throughout the whole test. Backs `make gitops-test-revision-switch`
 # only.
@@ -24,6 +25,16 @@ require_repo_root
 . scripts/gitops/_lib.sh
 
 revision="${REVISION:?REVISION is required, e.g. REVISION=feat/phase-2.6.3a-transactional-gitops-lifecycle}"
+# BASE_REVISION (default: main) is the revision switched back to at the
+# end. Phase 2.7.1: a change that renames the environments themselves
+# cannot switch back to a pre-merge main whose environments have
+# different names - for that pre-merge run only, pass the feature
+# branch as BASE_REVISION and a second pushed branch as REVISION.
+base_revision="${BASE_REVISION:-main}"
+if [ "$revision" = "$base_revision" ]; then
+  echo "FAIL: REVISION and BASE_REVISION must differ (both '$revision')" >&2
+  exit 1
+fi
 
 if ! check_cluster_identity; then
   echo "FAIL: project cluster '$PROJECT_CLUSTER_NAME' is missing or does not match its expected identity" >&2
@@ -96,9 +107,10 @@ else
 fi
 
 echo "test-revision-switch: step 4 - workloads remain available after the switch"
-pkubectl rollout status deployment/platform-smoke-staging-standard-workload -n staging --timeout=180s >/dev/null
-pkubectl rollout status deployment/platform-smoke-production-standard-workload -n production --timeout=180s >/dev/null
-echo "OK: staging and production workload Deployments are Available"
+for ns in dev uat prod; do
+  pkubectl rollout status deployment/platform-smoke-${ns}-standard-workload -n "$ns" --timeout=180s >/dev/null
+done
+echo "OK: dev, uat, and prod workload Deployments are Available"
 
 echo "test-revision-switch: step 5 - stale-operation detection/remediation (functional proof, never a decoded value)"
 pkubectl patch application "$GITOPS_ROOT_APP_NAME" -n "$ARGOCD_NAMESPACE" --type=merge \
@@ -118,12 +130,12 @@ else
 fi
 
 if [ "$fail" -ne 0 ]; then
-  echo "test-revision-switch: FAILED before switching back to main" >&2
+  echo "test-revision-switch: FAILED before switching back to '$base_revision'" >&2
   exit 1
 fi
 
-echo "test-revision-switch: step 6 - switching back to 'main'"
-sh lab/gitops/switch-revision.sh main
+echo "test-revision-switch: step 6 - switching back to '$base_revision'"
+sh lab/gitops/switch-revision.sh "$base_revision"
 final_uid="$(gitops_app_uid "$GITOPS_ROOT_APP_NAME")"
 final_rev="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.spec.source.targetRevision}')"
 if [ "$final_uid" = "$baseline_uid" ]; then
@@ -132,15 +144,16 @@ else
   echo "FAIL: root Application UID changed by the end of the test ($baseline_uid -> $final_uid)" >&2
   fail=1
 fi
-if [ "$final_rev" = "main" ]; then
-  echo "OK: root Application is back at revision 'main'"
+if [ "$final_rev" = "$base_revision" ]; then
+  echo "OK: root Application is back at revision '$base_revision'"
 else
-  echo "FAIL: root Application did not end at revision 'main' (got '$final_rev')" >&2
+  echo "FAIL: root Application did not end at revision '$base_revision' (got '$final_rev')" >&2
   fail=1
 fi
-pkubectl rollout status deployment/platform-smoke-staging-standard-workload -n staging --timeout=180s >/dev/null
-pkubectl rollout status deployment/platform-smoke-production-standard-workload -n production --timeout=180s >/dev/null
-echo "OK: staging and production workload Deployments are Available again on main"
+for ns in dev uat prod; do
+  pkubectl rollout status deployment/platform-smoke-${ns}-standard-workload -n "$ns" --timeout=180s >/dev/null
+done
+echo "OK: dev, uat, and prod workload Deployments are Available again on '$base_revision'"
 
 if [ "$fail" -ne 0 ]; then
   echo "test-revision-switch: FAILED"

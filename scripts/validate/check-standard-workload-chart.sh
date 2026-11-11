@@ -1,12 +1,12 @@
 #!/bin/sh
 # Fully offline validation of charts/standard-workload: lint + render for
-# both environments, deterministic post-merge negative schema fixtures
+# all three environments, deterministic post-merge negative schema fixtures
 # (built at runtime under mktemp -d, never a literal fixture file),
 # digest-only image enforcement, Restricted-PSS field presence, a
 # rendered-kind allowlist, proof no Secret renders, proof no deferred
 # optional resource (Ingress/HPA/PDB/NetworkPolicy/ServiceMonitor)
 # renders or is schema-exposed, and a client-side kubectl dry-run for
-# both environments. Never touches a cluster. Backs
+# all three environments. Never touches a cluster. Backs
 # `make check-standard-workload-chart` (wired into `make validate`).
 set -eu
 
@@ -27,43 +27,57 @@ fail=0
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT INT TERM
 
-echo "check-standard-workload-chart: helm lint (staging) ..."
-if ! "$HELM" lint "$CHART" -f "$CHART/values-staging.yaml"; then
-  echo "FAIL: helm lint failed for staging" >&2
+echo "check-standard-workload-chart: helm lint (dev) ..."
+if ! "$HELM" lint "$CHART" -f "$CHART/values-dev.yaml"; then
+  echo "FAIL: helm lint failed for dev" >&2
   fail=1
 fi
 
-echo "check-standard-workload-chart: helm lint (production) ..."
-if ! "$HELM" lint "$CHART" -f "$CHART/values-production.yaml"; then
-  echo "FAIL: helm lint failed for production" >&2
+echo "check-standard-workload-chart: helm lint (uat) ..."
+if ! "$HELM" lint "$CHART" -f "$CHART/values-uat.yaml"; then
+  echo "FAIL: helm lint failed for uat" >&2
   fail=1
 fi
 
-render_staging="$root/staging.yaml"
-render_production="$root/production.yaml"
+echo "check-standard-workload-chart: helm lint (prod) ..."
+if ! "$HELM" lint "$CHART" -f "$CHART/values-prod.yaml"; then
+  echo "FAIL: helm lint failed for prod" >&2
+  fail=1
+fi
 
-echo "check-standard-workload-chart: helm template (staging) ..."
+render_dev="$root/dev.yaml"
+render_uat="$root/uat.yaml"
+render_prod="$root/prod.yaml"
+
+echo "check-standard-workload-chart: helm template (dev) ..."
+if ! "$HELM" template platform-smoke-dev "$CHART" -f "$CHART/values-dev.yaml" --namespace dev > "$render_dev" 2>&1; then
+  echo "FAIL: helm template failed for dev" >&2
+  cat "$render_dev" >&2
+  fail=1
+fi
+
+echo "check-standard-workload-chart: helm template (uat) ..."
 # --namespace matters as of Phase 2.6.2: templates/secretstore.yaml
 # reads .Release.Namespace for the auth ServiceAccount reference, which
 # `helm template` otherwise defaults to "default" - not representative
 # of how Argo CD actually renders this chart (always with the
 # Application's real destination namespace). Passing it here makes the
 # offline render match the real deployed shape.
-if ! "$HELM" template platform-smoke-staging "$CHART" -f "$CHART/values-staging.yaml" --namespace staging > "$render_staging" 2>&1; then
-  echo "FAIL: helm template failed for staging" >&2
-  cat "$render_staging" >&2
+if ! "$HELM" template platform-smoke-uat "$CHART" -f "$CHART/values-uat.yaml" --namespace uat > "$render_uat" 2>&1; then
+  echo "FAIL: helm template failed for uat" >&2
+  cat "$render_uat" >&2
   fail=1
 fi
 
-echo "check-standard-workload-chart: helm template (production) ..."
-if ! "$HELM" template platform-smoke-production "$CHART" -f "$CHART/values-production.yaml" --namespace production > "$render_production" 2>&1; then
-  echo "FAIL: helm template failed for production" >&2
-  cat "$render_production" >&2
+echo "check-standard-workload-chart: helm template (prod) ..."
+if ! "$HELM" template platform-smoke-prod "$CHART" -f "$CHART/values-prod.yaml" --namespace prod > "$render_prod" 2>&1; then
+  echo "FAIL: helm template failed for prod" >&2
+  cat "$render_prod" >&2
   fail=1
 fi
 
 if [ "$fail" -ne 0 ]; then
-  echo "check-standard-workload-chart: FAILED (cannot continue without both renders)" >&2
+  echo "check-standard-workload-chart: FAILED (cannot continue without all three renders)" >&2
   exit 1
 fi
 
@@ -71,7 +85,7 @@ fi
 # ExternalSecret, SecretStore, Service, ServiceAccount (as of Phase
 # 2.6.2 - two ServiceAccount objects render: the workload's own and the
 # SecretStore's dedicated auth identity) ---
-for render in "$render_staging" "$render_production"; do
+for render in "$render_dev" "$render_uat" "$render_prod"; do
   kinds="$(grep -E '^kind: ' "$render" | sort -u)"
   expected="$(printf 'kind: ConfigMap\nkind: Deployment\nkind: ExternalSecret\nkind: SecretStore\nkind: Service\nkind: ServiceAccount')"
   if [ "$kinds" != "$expected" ]; then
@@ -80,20 +94,20 @@ for render in "$render_staging" "$render_production"; do
     fail=1
   fi
 done
-[ "$fail" -eq 0 ] && echo "OK: rendered-kind allowlist matches exactly (ConfigMap, Deployment, ExternalSecret, SecretStore, Service, ServiceAccount) in both environments"
+[ "$fail" -eq 0 ] && echo "OK: rendered-kind allowlist matches exactly (ConfigMap, Deployment, ExternalSecret, SecretStore, Service, ServiceAccount) in all three environments"
 
 # --- no Secret renders ---
-for render in "$render_staging" "$render_production"; do
+for render in "$render_dev" "$render_uat" "$render_prod"; do
   if grep -q '^kind: Secret$' "$render"; then
     echo "FAIL: $render rendered a Secret - not authorized in Phase 2.4" >&2
     fail=1
   fi
 done
-[ "$fail" -eq 0 ] && echo "OK: no Secret rendered in either environment"
+[ "$fail" -eq 0 ] && echo "OK: no Secret rendered in any environment"
 
 # --- deferred optional resources: must not render and must not be schema-exposed ---
 for kind in Ingress HorizontalPodAutoscaler PodDisruptionBudget NetworkPolicy ServiceMonitor; do
-  for render in "$render_staging" "$render_production"; do
+  for render in "$render_dev" "$render_uat" "$render_prod"; do
     if grep -q "^kind: ${kind}$" "$render"; then
       echo "FAIL: $render rendered $kind - deferred capability must not render in Phase 2.4" >&2
       fail=1
@@ -109,7 +123,7 @@ done
 [ "$fail" -eq 0 ] && echo "OK: no deferred optional resource renders or is schema-exposed"
 
 # --- image digest-only enforcement ---
-for render in "$render_staging" "$render_production"; do
+for render in "$render_dev" "$render_uat" "$render_prod"; do
   if grep -E '^\s*image: ' "$render" | grep -v '@sha256:' >/dev/null 2>&1; then
     echo "FAIL: $render contains a tag-only (non-digest) image reference" >&2
     fail=1
@@ -118,7 +132,7 @@ done
 [ "$fail" -eq 0 ] && echo "OK: every rendered image reference is digest-pinned"
 
 # --- Restricted PSS field presence (grep-based, matches lab/argocd/render.sh style) ---
-for render in "$render_staging" "$render_production"; do
+for render in "$render_dev" "$render_uat" "$render_prod"; do
   for needle in "runAsNonRoot: true" "runAsUser: 65532" "runAsGroup: 65532" "allowPrivilegeEscalation: false" "readOnlyRootFilesystem: true" "- ALL" "seccompProfile" "type: RuntimeDefault" "automountServiceAccountToken: false"; do
     if ! grep -qF -- "$needle" "$render"; then
       echo "FAIL: $render is missing expected Restricted-PSS field: $needle" >&2
@@ -126,7 +140,7 @@ for render in "$render_staging" "$render_production"; do
     fi
   done
 done
-[ "$fail" -eq 0 ] && echo "OK: Restricted-PSS fields present in both rendered environments"
+[ "$fail" -eq 0 ] && echo "OK: Restricted-PSS fields present in all three rendered environments"
 
 # --- Service selector matches Deployment pod-template labels (duplicate/mismatch guard) ---
 #
@@ -137,7 +151,7 @@ done
 # ITS OWN indentation, and returns exactly the lines nested strictly
 # more than that - the real YAML rule for "this mapping has ended" -
 # never assuming what key (if any) comes next. Verified byte-for-byte
-# equivalent output against this chart's real staging/production
+# equivalent output against this chart's real uat/prod
 # renders before this change was made.
 #
 # yaml_indented_block <key-line, trimmed> - reads a YAML document on
@@ -162,7 +176,7 @@ yaml_indented_block() {
   }'
 }
 
-for render in "$render_staging" "$render_production"; do
+for render in "$render_dev" "$render_uat" "$render_prod"; do
   # "kind: X" and the "---" document separator are real YAML/Kubernetes
   # structural markers (not a heuristic), so isolating each resource's
   # own document this way is already correct - only the two sed ranges
@@ -184,7 +198,7 @@ for render in "$render_staging" "$render_production"; do
     fi
   done
 done
-[ "$fail" -eq 0 ] && echo "OK: Service selectors match Deployment pod-template labels in both environments"
+[ "$fail" -eq 0 ] && echo "OK: Service selectors match Deployment pod-template labels in all three environments"
 
 # --- Phase 2.6.2: default render (externalSecret.enabled left at the
 # chart's own values.yaml default: false) must be exactly the pre-
@@ -214,26 +228,26 @@ fi
 
 # --- no Secret is ever rendered by this chart (the target Secret is
 # created by ESO, never by any template) ---
-for render in "$render_staging" "$render_production"; do
+for render in "$render_dev" "$render_uat" "$render_prod"; do
   if grep -q '^kind: Secret$' "$render"; then
     echo "FAIL: $render rendered a Secret manifest - not authorized; the target Secret must be ESO-managed only" >&2
     fail=1
   fi
 done
-[ "$fail" -eq 0 ] && echo "OK: no Secret manifest rendered in either environment (target Secret is ESO-managed only)"
+[ "$fail" -eq 0 ] && echo "OK: no Secret manifest rendered in any environment (target Secret is ESO-managed only)"
 
 # --- SecretStore is always namespaced, never ClusterSecretStore ---
-for render in "$render_staging" "$render_production"; do
+for render in "$render_dev" "$render_uat" "$render_prod"; do
   if grep -q '^kind: ClusterSecretStore$' "$render"; then
     echo "FAIL: $render rendered a ClusterSecretStore - only a namespaced SecretStore is authorized" >&2
     fail=1
   fi
 done
-[ "$fail" -eq 0 ] && echo "OK: no ClusterSecretStore rendered in either environment"
+[ "$fail" -eq 0 ] && echo "OK: no ClusterSecretStore rendered in any environment"
 
 # --- the workload container never consumes the secret via env,
 # envFrom, or secretKeyRef - read-only file mount only ---
-for render in "$render_staging" "$render_production"; do
+for render in "$render_dev" "$render_uat" "$render_prod"; do
   if grep -qE '^\s*envFrom:' "$render"; then
     echo "FAIL: $render uses envFrom - the secret must only ever be consumed as a read-only file mount" >&2
     fail=1
@@ -243,51 +257,67 @@ for render in "$render_staging" "$render_production"; do
     fail=1
   fi
 done
-[ "$fail" -eq 0 ] && echo "OK: no envFrom/secretKeyRef in either environment - the secret is never exposed via environment variables"
+[ "$fail" -eq 0 ] && echo "OK: no envFrom/secretKeyRef in any environment - the secret is never exposed via environment variables"
 
 # --- the secret volumeMount is read-only ---
-for render in "$render_staging" "$render_production"; do
+for render in "$render_dev" "$render_uat" "$render_prod"; do
   if ! awk '/- name: secret$/{f=1} f && /mountPath:/{print; exit}' "$render" | grep -q .; then
     echo "FAIL: $render has no 'secret' volumeMount" >&2
     fail=1
   fi
 done
-if grep -A2 '            - name: secret$' "$render_staging" | grep -q 'readOnly: true' \
-  && grep -A2 '            - name: secret$' "$render_production" | grep -q 'readOnly: true'; then
-  echo "OK: the secret volumeMount is readOnly: true in both environments"
+if grep -A2 '            - name: secret$' "$render_dev" | grep -q 'readOnly: true' \
+  && grep -A2 '            - name: secret$' "$render_uat" | grep -q 'readOnly: true' \
+  && grep -A2 '            - name: secret$' "$render_prod" | grep -q 'readOnly: true'; then
+  echo "OK: the secret volumeMount is readOnly: true in all three environments"
 else
-  echo "FAIL: the secret volumeMount is not readOnly: true in one or both environments" >&2
+  echo "FAIL: the secret volumeMount is not readOnly: true in one or more environments" >&2
   fail=1
 fi
 
-# --- staging/production isolation: the two rendered environments must
-# never share a SecretStore name, source namespace, source Secret name,
-# or auth ServiceAccount name. Extracted from the isolated SecretStore
-# document only (bounded by its own "kind: SecretStore" ... next "---"
-# separator), since "kind: SecretStore" also appears as the literal
-# value of ExternalSecret's own secretStoreRef.kind field elsewhere in
-# the same file - a plain grep -A/-B against the whole file cannot tell
-# those two occurrences apart. ---
+# --- dev/uat/prod isolation: no two rendered environments may share a
+# SecretStore name, source namespace, source Secret name, or auth
+# ServiceAccount name (checked pairwise across all three). Extracted
+# from the isolated SecretStore document only (bounded by its own
+# "kind: SecretStore" ... next "---" separator), since "kind:
+# SecretStore" also appears as the literal value of ExternalSecret's
+# own secretStoreRef.kind field elsewhere in the same file - a plain
+# grep -A/-B against the whole file cannot tell those two occurrences
+# apart. ---
 secretstore_block() {
   awk '/^kind: SecretStore$/,0' "$1" | awk '/^---$/{exit} {print}'
 }
-staging_secretstore="$(secretstore_block "$render_staging" | grep 'name:' | head -1 | awk '{print $2}')"
-production_secretstore="$(secretstore_block "$render_production" | grep 'name:' | head -1 | awk '{print $2}')"
-staging_source_ns="$(secretstore_block "$render_staging" | grep 'remoteNamespace:' | awk '{print $2}')"
-production_source_ns="$(secretstore_block "$render_production" | grep 'remoteNamespace:' | awk '{print $2}')"
-staging_source_key="$(grep -A1 'remoteRef:' "$render_staging" | grep 'key:' | awk '{print $2}')"
-production_source_key="$(grep -A1 'remoteRef:' "$render_production" | grep 'key:' | awk '{print $2}')"
-staging_auth_sa="$(secretstore_block "$render_staging" | grep -A1 'serviceAccount:' | grep 'name:' | awk '{print $2}')"
-production_auth_sa="$(secretstore_block "$render_production" | grep -A1 'serviceAccount:' | grep 'name:' | awk '{print $2}')"
+isolation_identity() {
+  # $1=render file. Prints "secretstore|source-ns|source-key|auth-sa".
+  printf '%s|%s|%s|%s\n' \
+    "$(secretstore_block "$1" | grep 'name:' | head -1 | awk '{print $2}')" \
+    "$(secretstore_block "$1" | grep 'remoteNamespace:' | awk '{print $2}')" \
+    "$(grep -A1 'remoteRef:' "$1" | grep 'key:' | awk '{print $2}')" \
+    "$(secretstore_block "$1" | grep -A1 'serviceAccount:' | grep 'name:' | awk '{print $2}')"
+}
 isolation_fail=0
-[ "$staging_secretstore" = "$production_secretstore" ] && { echo "FAIL: staging and production share the same SecretStore name '$staging_secretstore'" >&2; isolation_fail=1; }
-[ "$staging_source_ns" = "$production_source_ns" ] && { echo "FAIL: staging and production share the same source namespace '$staging_source_ns'" >&2; isolation_fail=1; }
-[ "$staging_source_key" = "$production_source_key" ] && { echo "FAIL: staging and production share the same source Secret name '$staging_source_key'" >&2; isolation_fail=1; }
-[ "$staging_auth_sa" = "$production_auth_sa" ] && { echo "FAIL: staging and production share the same auth ServiceAccount name '$staging_auth_sa'" >&2; isolation_fail=1; }
+for pair in "dev:uat" "dev:prod" "uat:prod"; do
+  a="${pair%%:*}"; b="${pair##*:}"
+  eval "a_render=\$render_$a"; eval "b_render=\$render_$b"
+  a_id="$(isolation_identity "$a_render")"; b_id="$(isolation_identity "$b_render")"
+  i=1
+  for label in "SecretStore name" "source namespace" "source Secret name" "auth ServiceAccount name"; do
+    a_val="$(printf '%s' "$a_id" | cut -d'|' -f"$i")"
+    b_val="$(printf '%s' "$b_id" | cut -d'|' -f"$i")"
+    if [ -z "$a_val" ] || [ -z "$b_val" ]; then
+      echo "FAIL: could not extract the $label for $a or $b" >&2
+      isolation_fail=1
+    elif [ "$a_val" = "$b_val" ]; then
+      echo "FAIL: $a and $b share the same $label '$a_val'" >&2
+      isolation_fail=1
+    fi
+    i=$((i + 1))
+  done
+done
 if [ "$isolation_fail" -ne 0 ]; then
   fail=1
 else
-  echo "OK: staging and production have fully distinct SecretStore/source-namespace/source-Secret/auth-ServiceAccount names"
+  echo "OK: dev, uat, and prod have pairwise-distinct SecretStore/source-namespace/source-Secret/auth-ServiceAccount names"
 fi
 
 # --- kubectl itself must be present, executable, and version-capable
@@ -322,14 +352,14 @@ else
   elif ! pkubectl get --raw /healthz >/dev/null 2>&1; then
     echo "SKIP: $PROJECT_KUBECONFIG exists but the project cluster is not currently reachable; kubectl itself is verified functional above, and helm lint/template, the rendered-kind allowlist, and the schema regression matrix already cover structural correctness"
   else
-    for render in "$render_staging" "$render_production"; do
+    for render in "$render_dev" "$render_uat" "$render_prod"; do
       if ! pkubectl apply --dry-run=client -f "$render" >/dev/null 2>&1; then
         echo "FAIL: kubectl dry-run=client (against the project cluster, as a schema oracle only - nothing is persisted) rejected $render" >&2
         pkubectl apply --dry-run=client -f "$render" >&2 || true
         fail=1
       fi
     done
-    [ "$fail" -eq 0 ] && echo "OK: client-side kubectl dry-run passed for both environments (project cluster used as schema oracle, no mutation)"
+    [ "$fail" -eq 0 ] && echo "OK: client-side kubectl dry-run passed for all three environments (project cluster used as schema oracle, no mutation)"
   fi
 fi
 
@@ -339,9 +369,9 @@ run_negative_case() {
   fixture="$root/fixture-$$.yaml"
   printf '%s\n' "$fixture_content" > "$fixture"
   set +e
-  lint_out="$("$HELM" lint "$CHART" -f "$CHART/values-staging.yaml" -f "$fixture" 2>&1)"
+  lint_out="$("$HELM" lint "$CHART" -f "$CHART/values-uat.yaml" -f "$fixture" 2>&1)"
   lint_rc=$?
-  tmpl_out="$("$HELM" template x "$CHART" -f "$CHART/values-staging.yaml" -f "$fixture" 2>&1)"
+  tmpl_out="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" -f "$fixture" 2>&1)"
   tmpl_rc=$?
   set -e
   rm -f "$fixture"
@@ -360,18 +390,18 @@ run_negative_case() {
 }
 
 # Phase 3.3.3: run_negative_case always layers its fixture on top of
-# values-staging.yaml, which sets sourceNamespace/sourceSecretName/
+# values-uat.yaml, which sets sourceNamespace/sourceSecretName/
 # authServiceAccountName to real, non-default values - correct for a
 # "kubernetes" provider case (or one deliberately proving those values
 # leak through as a violation under "aws" - see the case that does
 # exactly that below), but wrong for an aws-provider case meant to
-# demonstrate one single, exact defect: layering on values-staging.yaml
+# demonstrate one single, exact defect: layering on values-uat.yaml
 # would ALSO trip the aws-branch's kubernetes-field exclusion rules,
 # masking the one defect under test behind an unrelated one and
 # violating "cada fixture debe demostrar la causa exacta del rechazo".
 # This variant instead builds a complete, standalone aws-profile
 # fixture (values.yaml's own base + this fixture only, never values-
-# staging.yaml) so the only possible violation is the one deliberately
+# uat.yaml) so the only possible violation is the one deliberately
 # introduced, and asserts none of the three kubernetes-only field names
 # appear in the error output as extra corroboration.
 run_negative_case_aws() {
@@ -505,10 +535,10 @@ run_negative_case "missing resource limits" 'resources:
 run_negative_case "externalSecret enabled without secretStoreName" 'externalSecret:
   enabled: true
   secretStoreName: null
-  sourceNamespace: "eso-source-staging"
-  sourceSecretName: "local-backend-staging"
+  sourceNamespace: "eso-source-uat"
+  sourceSecretName: "local-backend-uat"
   sourceProperty: "message"
-  authServiceAccountName: "staging-secretstore-reader"
+  authServiceAccountName: "uat-secretstore-reader"
   refreshInterval: "1m"
   key: "message"
   mountPath: "/etc/secret"
@@ -517,11 +547,11 @@ run_negative_case "externalSecret enabled without secretStoreName" 'externalSecr
 
 run_negative_case "externalSecret with an unknown extra property" 'externalSecret:
   enabled: true
-  secretStoreName: "staging-kubernetes-backend"
-  sourceNamespace: "eso-source-staging"
-  sourceSecretName: "local-backend-staging"
+  secretStoreName: "uat-kubernetes-backend"
+  sourceNamespace: "eso-source-uat"
+  sourceSecretName: "local-backend-uat"
   sourceProperty: "message"
-  authServiceAccountName: "staging-secretstore-reader"
+  authServiceAccountName: "uat-secretstore-reader"
   refreshInterval: "1m"
   key: "message"
   mountPath: "/etc/secret"
@@ -542,8 +572,8 @@ run_negative_case "externalSecret with an unknown extra property" 'externalSecre
 # --- positive: a full standalone AWS-provider render, staging and
 # production, each with its own distinct secretStoreName/region/
 # secretName (mirrors the same never-shared-identity convention as the
-# real kubernetes-provider values-staging.yaml/values-production.yaml).
-# Built as a complete values file (not layered on values-staging.yaml,
+# real kubernetes-provider values-uat.yaml/values-prod.yaml).
+# Built as a complete values file (not layered on values-uat.yaml,
 # which carries real kubernetes-only fields as non-default values that
 # would - correctly - trip the schema's provider-exclusivity rules; see
 # the negative case below that deliberately does layer on it). ---
@@ -801,8 +831,8 @@ run_negative_case "kubernetes provider missing a kubernetes-required field (sour
   fileName: "message"
   defaultMode: 288'
 
-# Layered on values-staging.yaml (via run_negative_case's own -f
-# values-staging.yaml -f <fixture> harness): values-staging.yaml's own
+# Layered on values-uat.yaml (via run_negative_case's own -f
+# values-uat.yaml -f <fixture> harness): values-uat.yaml's own
 # sourceNamespace/sourceSecretName/authServiceAccountName are real,
 # non-default values - switching only "provider" to "aws" here proves
 # those real kubernetes-only values are correctly rejected as misplaced
@@ -810,7 +840,7 @@ run_negative_case "kubernetes provider missing a kubernetes-required field (sour
 # harmless base-values.yaml defaults already prove is accepted, see the
 # positive aws_fixture renders above, which never touch values-
 # staging.yaml at all).
-run_negative_case "kubernetes-only fields (from values-staging.yaml) present under provider: aws" 'externalSecret:
+run_negative_case "kubernetes-only fields (from values-uat.yaml) present under provider: aws" 'externalSecret:
   provider: "aws"
   aws:
     region: "us-east-1"
@@ -1034,7 +1064,7 @@ fi
 # above checks by comparing the TRACKED fixture files against
 # Terraform's own defaults. What's verified here instead is that the
 # comparison itself actually catches a real mismatch when one exists -
-# built as a standalone render (not layered on values-staging.yaml,
+# built as a standalone render (not layered on values-uat.yaml,
 # whose real kubernetes-only fields would trip the aws mutual-exclusion
 # rules for an unrelated reason and mask what this case means to test),
 # using Terraform's OWN production_secret_name default rather than a

@@ -1,4 +1,4 @@
-# Environment overrides for staging only. Everything not listed here is
+# Environment overrides for uat only. Everything not listed here is
 # inherited from values.yaml. Commit 2 of the Phase 2.4 implementation
 # changes only configMap.uiMessage below, to a "final" value, as the
 # GitOps rollout proof (see docs/adr/0008-standard-workload-before-sso.md
@@ -14,12 +14,12 @@ resources:
     memory: 64Mi
 
 configMap:
-  uiMessage: "podinfo staging — phase 2.4 verified"
+  uiMessage: "podinfo uat — phase 2.4 verified"
 
-# Phase 2.6.2: enables the read-only Secret mount for staging only.
+# Phase 2.6.2: enables the read-only Secret mount for uat only.
 externalSecret:
   enabled: true
-  secretStoreName: "staging-kubernetes-backend"
-  sourceNamespace: "eso-source-staging"
-  sourceSecretName: "local-backend-staging"
-  authServiceAccountName: "staging-secretstore-reader"
+  secretStoreName: "uat-kubernetes-backend"
+  sourceNamespace: "eso-source-uat"
+  sourceSecretName: "local-backend-uat"
+  authServiceAccountName: "uat-secretstore-reader"

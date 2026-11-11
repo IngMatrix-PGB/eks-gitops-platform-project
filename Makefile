@@ -140,7 +140,7 @@ gitops-repo-check: ## Read-only inspection of the same repository-authentication
 gitops-repo-remove: ## Remove the repository Secret, GitHub deploy key, and local key files (requires CONFIRM=REMOVE; never run by the lifecycle test)
 	@sh lab/gitops/repo-remove.sh
 
-gitops-render: ## Fully offline Helm render of gitops/bootstrap; proves exactly 1 AppProject/1 ApplicationSet/2 generators/0 Secrets/no wildcards (accepts REVISION=<value>)
+gitops-render: ## Fully offline Helm render of gitops/bootstrap; proves exactly 1 AppProject/1 ApplicationSet/3 generators/0 Secrets/no wildcards (accepts REVISION=<value>)
 	@sh lab/gitops/render.sh
 
 gitops-bootstrap: ## Fail-closed idempotent apply of the root Application only (accepts REVISION=<value>, default main)
@@ -152,22 +152,22 @@ gitops-status: ## Report root Application/AppProject/ApplicationSet/generated Ap
 gitops-test: ## Read-only runtime health checks against an already-bootstrapped Phase 2.3 state
 	@sh tests/gitops/test-runtime-health.sh
 
-gitops-uninstall: ## Two-phase transactional uninstall (Phase 2.6.3a): read-only preflight classification of staging/production, zero mutation on any unclassifiable object; then deletes the root Application (foreground cascade) and only namespaces Phase A cleared; retains a namespace an active ESO scoped release still targets; preserves Argo CD/CRDs/repo Secret/deploy key
+gitops-uninstall: ## Two-phase transactional uninstall (Phase 2.6.3a): read-only preflight classification of dev/uat/prod, zero mutation on any unclassifiable object; then deletes the root Application (foreground cascade) and only namespaces Phase A cleared; retains a namespace an active ESO scoped release still targets; preserves Argo CD/CRDs/repo Secret/deploy key
 	@sh lab/gitops/uninstall.sh
 
 gitops-switch-revision: ## Phase 2.6.3a: safely switch the root Application's targetRevision in place (patch, never delete+recreate); preserves UID/finalizers; requires 3 stable reads; rolls back automatically on failure (REVISION=<value>)
 	@sh lab/gitops/switch-revision.sh
 
-gitops-retire-appproject-kind: ## Phase 2.6.3a: drain SecretStore/ExternalSecret from one environment before narrowing the AppProject whitelist (ENV=staging|production ACTION=--drain)
+gitops-retire-appproject-kind: ## Phase 2.6.3a: drain SecretStore/ExternalSecret from one environment before narrowing the AppProject whitelist (ENV=dev|uat|prod ACTION=--drain)
 	@sh lab/gitops/retire-appproject-kind.sh $(ENV) $(ACTION)
 
-gitops-resume-appproject-kind: ## Phase 2.6.3a: resume automated sync after retire-appproject-kind's drain + the whitelist-narrowing Git change have both landed (ENV=staging|production)
+gitops-resume-appproject-kind: ## Phase 2.6.3a: resume automated sync after retire-appproject-kind's drain + the whitelist-narrowing Git change have both landed (ENV=dev|uat|prod)
 	@sh lab/gitops/retire-appproject-kind.sh $(ENV) --resume
 
 gitops-test-lifecycle: ## Mutating: proves bootstrap/no-op/self-heal/isolation/uninstall/no-op end-to-end (requires REVISION=<pushed branch>)
 	@sh tests/gitops/test-lifecycle.sh
 
-gitops-test-revision-switch: ## Phase 2.6.3a: mutating, proves switch-revision.sh converges/rolls-back correctly (requires REVISION=<pushed branch>)
+gitops-test-revision-switch: ## Phase 2.6.3a: mutating, proves switch-revision.sh converges/rolls-back correctly (requires REVISION=<pushed branch>; switches back to BASE_REVISION, default main)
 	@sh tests/gitops/test-revision-switch.sh
 
 gitops-test-appproject-kind-retirement: ## Phase 2.6.3a: mutating, proves the 8-step SecretStore/ExternalSecret drain/resume sequence end-to-end
@@ -188,7 +188,7 @@ eso-install: ## Fail-closed idempotent install: 25 CRDs (kubectl apply, no Helm 
 eso-status: ## Report CRD/release/Deployment health for both scoped releases (read-only)
 	@sh lab/eso/status.sh
 
-eso-uninstall: ## Uninstall both scoped releases (production then staging; accepts ENV=staging|production for one at a time); never touches the 25 CRDs; refuses to uninstall staging while production still exists
+eso-uninstall: ## Uninstall all three scoped releases (prod, dev, then uat; accepts ENV=dev|uat|prod for one at a time); never touches the 25 CRDs; refuses to uninstall uat while dev or prod still exists
 	@sh lab/eso/uninstall.sh $(ENV)
 
 eso-test-runtime-health: ## Read-only runtime health checks against an already-installed ESO bootstrap
@@ -197,10 +197,10 @@ eso-test-runtime-health: ## Read-only runtime health checks against an already-i
 eso-test-lifecycle: ## Mutating: proves install/no-op/uninstall(CRDs retained)/no-op/restore end-to-end
 	@sh tests/eso/test-idempotency.sh
 
-eso-provision-source-secret: ## Phase 2.6.2: create/rotate (default) or delete (ACTION=--delete) the imperative, out-of-Git source Secret for ENV=staging|production; value is read from stdin or an echo-disabled prompt, never a CLI argument
+eso-provision-source-secret: ## Phase 2.6.2: create/rotate (default) or delete (ACTION=--delete) the imperative, out-of-Git source Secret for ENV=dev|uat|prod; value is read from stdin or an echo-disabled prompt, never a CLI argument
 	@sh lab/eso/provision-source-secret.sh $(ENV) $(ACTION)
 
-eso-test-secret-lifecycle: ## Phase 2.6.2: mutating end-to-end proof of the SecretStore/ExternalSecret contract (provision/reconcile/mount/rotate/propagate/delete-recreate/no-op/uninstall/restore); prints only hashes and states, never secret values; reconciles from the current pushed branch, restores to main
+eso-test-secret-lifecycle: ## Phase 2.6.2: mutating end-to-end proof of the SecretStore/ExternalSecret contract (provision/reconcile/mount/rotate/propagate/delete-recreate/no-op/uninstall/restore); prints only hashes and states, never secret values; reconciles from the current pushed branch, restores to RESTORE_REVISION (default main)
 	@sh tests/eso/test-secret-lifecycle.sh
 
 eso-test-provision-source-secret-idempotency: ## Phase 2.6.3b: mutating proof of provision-source-secret.sh's ensure/--rotate/--delete semantics and the global kubeconfig fingerprint helper's isolation (restores the pre-test value/state on exit)
