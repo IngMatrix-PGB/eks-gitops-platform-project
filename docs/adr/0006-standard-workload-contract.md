@@ -102,3 +102,36 @@ read by some template; `podIdentity` mode never sets an IAM annotation;
 annotation correctly when provided; and an invalid values combination
 fails rendering with a clear error. `NOT IMPLEMENTED` today; planned for
 Phase 2.
+
+## Amendment (Phase 2.8.1, 2026-11-11)
+
+Four of the deferred capabilities are now implemented, each with a real
+template, a schema entry, and a runtime test
+(`make workload-test-resilience`):
+
+- **Graceful termination:** the native `lifecycle.preStop.sleep` action
+  (5 s; no shell or binary needed in the image) plus a 5 s server
+  shutdown timeout. The render fails when preStop + shutdown + 5 s
+  exceeds `terminationGracePeriodSeconds` (30 s).
+- **`PodDisruptionBudget`:** `maxUnavailable: 1`, rendered only when
+  `replicaCount` is 2 or more (today `prod` and `prod-aws`). A budget on
+  one replica protects nothing, and a `minAvailable`-style budget would
+  block every drain. The eviction API enforces it on a single node, so
+  the lab tests it there: the first eviction is allowed, an immediate
+  second one is refused with HTTP 429.
+- **Topology spread:** hostname and zone, `ScheduleAnyway` by default
+  so a single-node lab still schedules; `values-prod-aws.yaml` makes
+  zone `DoNotSchedule`. Real distribution across nodes and zones can
+  only be shown on a multi-node cluster (Phase 6.4).
+- **`NetworkPolicy`:** one policy per workload, over its own pods,
+  Ingress and Egress: http only from its own namespace (plus any
+  namespace listed in `networkPolicy.ingressFromNamespaces`), egress
+  only DNS. **WC-09 above no longer holds:** measured on this project's
+  `kind` (`kindnetd v20260820`), ingress and egress policies are both
+  enforced. The aws overlays keep it disabled until the EKS VPC CNI has
+  network policy enabled (TAD R-14), so no policy renders where nothing
+  would enforce it.
+
+`HorizontalPodAutoscaler` (it needs metrics-server; Phase 2.8.2),
+`Ingress` (WC-10) and `ServiceMonitor` (WC-11) remain deferred and are
+still asserted absent by `check-standard-workload-chart`.

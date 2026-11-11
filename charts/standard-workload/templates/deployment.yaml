@@ -1,3 +1,7 @@
+{{- $gs := .Values.gracefulShutdown }}
+{{- if gt (add $gs.preStopSleepSeconds $gs.serverShutdownTimeoutSeconds 5) (int .Values.terminationGracePeriodSeconds) }}
+{{- fail (printf "standard-workload: gracefulShutdown.preStopSleepSeconds (%d) + serverShutdownTimeoutSeconds (%d) + 5 must not exceed terminationGracePeriodSeconds (%d)" (int $gs.preStopSleepSeconds) (int $gs.serverShutdownTimeoutSeconds) (int .Values.terminationGracePeriodSeconds)) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -29,6 +33,19 @@ spec:
         {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.topologySpread.maxSkew }}
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: {{ .Values.topologySpread.hostname }}
+          labelSelector:
+            matchLabels:
+              {{- include "standard-workload.selectorLabels" . | nindent 14 }}
+        - maxSkew: {{ .Values.topologySpread.maxSkew }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: {{ .Values.topologySpread.zone }}
+          labelSelector:
+            matchLabels:
+              {{- include "standard-workload.selectorLabels" . | nindent 14 }}
       serviceAccountName: {{ include "standard-workload.fullname" . }}
       securityContext:
         runAsNonRoot: {{ .Values.podSecurityContext.runAsNonRoot }}
@@ -57,6 +74,13 @@ spec:
                 configMapKeyRef:
                   name: {{ include "standard-workload.fullname" . }}-config
                   key: ui-message
+            # podinfo reads its flags from PODINFO_* environment variables.
+            - name: PODINFO_SERVER_SHUTDOWN_TIMEOUT
+              value: "{{ $gs.serverShutdownTimeoutSeconds }}s"
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ $gs.preStopSleepSeconds }}
           resources:
             requests:
               cpu: {{ .Values.resources.requests.cpu }}

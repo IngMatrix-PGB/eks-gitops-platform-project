@@ -270,7 +270,7 @@ else
   echo "FAIL: step 8 - after deregister: app/secret still present or stuck Applications '$stuck'" >&2
   fail=1
 fi
-dev_left="$(ckubectl dev -n dev get deployment,configmap,service,externalsecret,secretstore -o name 2>/dev/null | grep -c 'platform-smoke-dev' || true)"
+dev_left="$(ckubectl dev -n dev get deployment,configmap,service,externalsecret,secretstore,networkpolicy,poddisruptionbudget -o name 2>/dev/null | grep -c 'platform-smoke-dev' || true)"
 if [ "$dev_left" = "0" ] && ckubectl dev get namespace dev >/dev/null 2>&1; then
   echo "OK: step 8 - dev workloads removed on the spoke by the Application's finalizer; namespace dev kept"
 else
@@ -302,7 +302,7 @@ fi
 left_apps="$(pkubectl -n "$ARGOCD_NAMESPACE" get applications -o name 2>/dev/null | wc -l | tr -d ' ')"
 spoke_left=0
 for s in $spokes; do
-  c="$(ckubectl "$s" -n "$s" get deployment,configmap,service,externalsecret,secretstore -o name 2>/dev/null | grep -c "platform-smoke-$s" || true)"
+  c="$(ckubectl "$s" -n "$s" get deployment,configmap,service,externalsecret,secretstore,networkpolicy,poddisruptionbudget -o name 2>/dev/null | grep -c "platform-smoke-$s" || true)"
   spoke_left=$((spoke_left + c))
 done
 kept_secrets="$(for s in $spokes; do pkubectl -n "$ARGOCD_NAMESPACE" get secret "spoke-$s" -o name 2>/dev/null; done | wc -l | tr -d ' ')"
