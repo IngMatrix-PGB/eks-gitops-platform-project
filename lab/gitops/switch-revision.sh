@@ -104,7 +104,7 @@ switch_stable_predicate() {
   [ "$ssp_op" = "Running" ] && return 1
   ssp_oos="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.status.resources[?(@.status=="OutOfSync")]}' 2>/dev/null)"
   [ -z "$ssp_oos" ] || return 1
-  for ssp_app in $GITOPS_GENERATED_APPS; do
+  for ssp_app in $(gitops_generated_apps); do
     ssp_child="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$ssp_app" -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null)"
     [ "$ssp_child" = "Synced/Healthy" ] || return 1
   done
@@ -127,7 +127,7 @@ if gitops_detect_stale_operation "$GITOPS_ROOT_APP_NAME"; then
   echo "switch-revision: stale queued operation detected on root Application - clearing (self-heal will re-queue correctly)"
   gitops_clear_stale_operation "$GITOPS_ROOT_APP_NAME"
 fi
-for app in $GITOPS_GENERATED_APPS; do
+for app in $(gitops_generated_apps); do
   if gitops_detect_stale_operation "$app"; then
     echo "switch-revision: stale queued operation detected on $app - clearing"
     gitops_clear_stale_operation "$app"

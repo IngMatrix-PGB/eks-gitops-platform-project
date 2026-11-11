@@ -99,3 +99,25 @@ lab_mc_docker_free_mib() {
     END { printf "%d", s }')"
   awk -v t="$total_bytes" -v u="${used_mib:-0}" 'BEGIN { printf "%d\n", t / 1048576 - u }'
 }
+
+# lab_mc_spoke_ready <env> - read-only Phase 2.7.4 readiness of one
+# registered spoke for the hub bootstrap: its own ESO release's
+# controller and webhook are Available and its source Secret exists (so
+# the first sync of platform-smoke-<env> neither races the ESO CRDs/
+# webhook nor waits on missing source material). Never reads the
+# Secret's data. Prints the reason and returns 1 on the first gap.
+lab_mc_spoke_ready() {
+  msr_env="$1"
+  for msr_dep in "eso-${msr_env}-external-secrets" "eso-${msr_env}-external-secrets-webhook"; do
+    msr_av="$(ckubectl "$msr_env" -n "eso-${msr_env}" get deployment "$msr_dep" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
+    if [ "${msr_av:-0}" -lt 1 ] 2>/dev/null || [ -z "$msr_av" ]; then
+      echo "spoke '$msr_env': Deployment eso-${msr_env}/${msr_dep} not Available - run 'make mc-spoke-eso-install SPOKE=${msr_env}'"
+      return 1
+    fi
+  done
+  if ! ckubectl "$msr_env" -n "eso-source-${msr_env}" get secret "local-backend-${msr_env}" -o name >/dev/null 2>&1; then
+    echo "spoke '$msr_env': source Secret eso-source-${msr_env}/local-backend-${msr_env} absent - run 'make mc-spoke-source-secret SPOKE=${msr_env}'"
+    return 1
+  fi
+  return 0
+}
