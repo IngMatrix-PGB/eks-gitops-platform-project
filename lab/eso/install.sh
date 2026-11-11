@@ -28,6 +28,7 @@ fi
 require_repo_root
 # shellcheck source=../../scripts/eso/_lib.sh
 . scripts/eso/_lib.sh
+eso_require_workload_cluster
 
 if ! check_cluster_identity; then
   echo "FAIL: project cluster '$PROJECT_CLUSTER_NAME' is missing or does not match its expected identity - run 'make lab-create' first" >&2

@@ -23,6 +23,11 @@
 # cluster-wide webhook's CA) - running them from more than one release would
 # collide, not merely duplicate. `eso-uat` is the arbitrary but
 # fixed owner of both singletons.
+#
+# Phase 2.7.4 (ADR-0015): that describes lab-lite. On a lab-multicluster
+# spoke (LAB_CLUSTER=dev|uat|prod) the cluster holds one environment, so
+# a single release owns its own singletons; the hub runs no ESO. See
+# eso_environments() below.
 
 ESO_CHART_VERSION="2.10.0"
 ESO_CHART_APP_VERSION="v2.10.0"
@@ -72,9 +77,12 @@ ESO_CRD_FIELD_MANAGER="eks-gitops-lab-lite-eso-bootstrap"
 # SecretStore admission validation and CA management - removing eso-uat
 # while any dependent still exists would silently break admission
 # control for every environment.
-ESO_SINGLETON_OWNER_ENV="uat"
-ESO_SINGLETON_OWNER_NS="eso-uat"
-ESO_SINGLETON_OWNER_RELEASE="eso-uat"
+# Phase 2.7.4: the table (and therefore the singleton owner) depends on
+# the target cluster (LAB_CLUSTER, scripts/lab/_lib.sh) - see
+# eso_environments() below. ESO_SINGLETON_OWNER_* are derived from that
+# table at the end of this file: "uat" on lab-lite (unchanged), the
+# spoke's own environment on a lab-multicluster spoke, and empty on the
+# hub (which never runs ESO).
 
 HELM_BIN=".tools/bin/helm"
 
@@ -238,12 +246,40 @@ VALUESEOF
 # controller singletons (see the file header) - eso-dev and eso-prod
 # never create either. Row order is install order (owner first);
 # eso_uninstall_order() is its reverse.
+#
+# Phase 2.7.4 (ADR-0015): the rows depend on the target cluster.
+#   lab-lite       - the three rows below, unchanged (one cluster, three
+#                    environments, eso-uat owns the singletons).
+#   dev|uat|prod   - a lab-multicluster spoke runs exactly ONE release,
+#                    for its own environment, which therefore owns its
+#                    cluster's webhook/cert-controller singletons itself.
+#   hub            - no rows: ESO never runs on the hub (eso_require_
+#                    workload_cluster fails closed for mutating scripts).
 eso_environments() {
-  cat <<'EOF'
+  case "${LAB_CLUSTER:-lab-lite}" in
+    lab-lite)
+      cat <<'EOF'
 uat|eso-uat|eso-uat|true|true
 dev|eso-dev|eso-dev|false|false
 prod|eso-prod|eso-prod|false|false
 EOF
+      ;;
+    dev|uat|prod)
+      printf '%s|eso-%s|eso-%s|true|true\n' "$LAB_CLUSTER" "$LAB_CLUSTER" "$LAB_CLUSTER"
+      ;;
+    hub)
+      : ;;
+  esac
+}
+
+# Fails closed when the target cluster runs no ESO (the hub). Called by
+# every script that installs, uninstalls, inspects or provisions ESO
+# state, before any mutation.
+eso_require_workload_cluster() {
+  if [ -z "$(eso_environments)" ]; then
+    echo "FAIL: ESO does not run on cluster '${LAB_CLUSTER:-lab-lite}' - target lab-lite or a spoke (LAB_CLUSTER=dev|uat|prod)" >&2
+    exit 1
+  fi
 }
 
 # Space-separated env names of every release that depends on the
@@ -431,3 +467,15 @@ eso_check_no_rbac_wildcards() {
     END { exit fail }
   ' "$infile"
 }
+
+# Phase 2.7.4: the singleton owner, derived from the table above - the
+# one row with webhook create=true. Exactly one owner per cluster is an
+# invariant, checked here rather than assumed.
+ESO_SINGLETON_OWNER_ENV="$(eso_environments | awk -F'|' '$4=="true"{print $1}')"
+ESO_SINGLETON_OWNER_NS="$(eso_environments | awk -F'|' '$4=="true"{print $2}')"
+ESO_SINGLETON_OWNER_RELEASE="$(eso_environments | awk -F'|' '$4=="true"{print $3}')"
+eso_owner_rows="$(eso_environments | awk -F'|' '$4=="true"' | wc -l | tr -d ' ')"
+if [ -n "$(eso_environments)" ] && [ "$eso_owner_rows" != "1" ]; then
+  echo "FAIL: scripts/eso/_lib.sh: expected exactly 1 webhook/cert-controller owner for cluster '${LAB_CLUSTER:-lab-lite}', found $eso_owner_rows" >&2
+  exit 1
+fi

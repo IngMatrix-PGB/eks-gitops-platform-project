@@ -151,7 +151,7 @@ if [ "$webhook_deploy_count" -ne 1 ]; then
   fail=1
 fi
 [ "$webhook_cfg_count" -eq 2 ] && [ "$cert_deploy_count" -eq 1 ] && [ "$webhook_deploy_count" -eq 1 ] && \
-  echo "OK: webhook and cert-controller each exist exactly once across the complete set (owned by eso-uat)"
+  echo "OK: webhook and cert-controller each exist exactly once across the complete set (owned by $ESO_SINGLETON_OWNER_RELEASE)"
 
 # --- 9/10/11: each controller's own Role is scoped to exactly its own
 # namespace, and no wildcard verb/resource/apiGroup exists anywhere. ---

@@ -27,6 +27,32 @@ GITOPS_CHART_PATH="gitops/bootstrap"
 GITOPS_DEFAULT_REVISION="main"
 GITOPS_GENERATED_APPS="platform-smoke-dev platform-smoke-uat platform-smoke-prod"
 
+# Phase 2.7.4 (ADR-0015): the bootstrap profile is a property of the
+# target cluster, never a free choice. The lab-multicluster hub runs
+# "local-multicluster" (workloads go to the registered spokes, never to
+# the hub); every other local cluster runs "local-kind". A spoke never
+# runs the bootstrap at all.
+case "${LAB_CLUSTER:-lab-lite}" in
+  hub) GITOPS_PROFILE="local-multicluster" ;;
+  *)   GITOPS_PROFILE="local-kind" ;;
+esac
+
+# Space-separated names of the Applications the ApplicationSet is
+# expected to generate on this cluster. lab-lite: the fixed three. Hub:
+# one per spoke currently registered (hub cluster Secret carrying the
+# registration owner label and platform.environment in dev/uat/prod),
+# matching the clusters generator's own selector exactly.
+gitops_generated_apps() {
+  if [ "$GITOPS_PROFILE" != "local-multicluster" ]; then
+    printf '%s\n' "$GITOPS_GENERATED_APPS"
+    return 0
+  fi
+  pkubectl -n "$ARGOCD_NAMESPACE" get secret \
+    -l 'argocd.argoproj.io/secret-type=cluster,eks-gitops-lab-lite.local/owner=multicluster-registration,platform.environment in (dev,uat,prod)' \
+    -o jsonpath='{range .items[*]}{.metadata.labels.platform\.environment}{"\n"}{end}' 2>/dev/null \
+    | sort | awk 'NF{printf "%splatform-smoke-%s", sep, $1; sep=" "} END{print ""}'
+}
+
 require_gh() {
   if ! command -v gh >/dev/null 2>&1; then
     echo "FAIL: gh (GitHub CLI) not found in PATH" >&2
@@ -92,13 +118,30 @@ gitops_repo_secret_matches_local_key() {
 # Renders a temporary root-application manifest with targetRevision and
 # the gitRevision Helm parameter both overridden to $1, without ever
 # editing the committed GITOPS_ROOT_APP_FILE. Prints the temp file path.
+#
+# Phase 2.7.4: under GITOPS_PROFILE=local-multicluster a second Helm
+# parameter, profile=local-multicluster, is appended right after the
+# gitRevision one (the committed file never carries it, so the
+# local-kind output is byte-for-byte what it was).
 gitops_render_root_app_for_revision() {
   rev="$1"
   mkdir -p "$GITOPS_DEPLOY_KEY_DIR"
-  out="${GITOPS_DEPLOY_KEY_DIR}/root-application.${rev##*/}.yaml"
+  if [ "$GITOPS_PROFILE" = "local-multicluster" ]; then
+    out="${GITOPS_DEPLOY_KEY_DIR}/root-application.${rev##*/}.${GITOPS_PROFILE}.yaml"
+  else
+    out="${GITOPS_DEPLOY_KEY_DIR}/root-application.${rev##*/}.yaml"
+  fi
   sed -e "s#targetRevision: ${GITOPS_DEFAULT_REVISION}#targetRevision: ${rev}#" \
       -e "s#value: ${GITOPS_DEFAULT_REVISION}#value: ${rev}#" \
       "$GITOPS_ROOT_APP_FILE" > "$out"
+  if [ "$GITOPS_PROFILE" = "local-multicluster" ]; then
+    awk -v p="$GITOPS_PROFILE" '
+      { print }
+      /^[[:space:]]*- name: gitRevision$/ { want = 1; ind = $0; sub(/-.*/, "", ind); next }
+      want && /^[[:space:]]*value: / { printf "%s- name: profile\n%s  value: %s\n", ind, ind, p; want = 0 }
+    ' "$out" > "${out}.tmp" && mv "${out}.tmp" "$out"
+    grep -q "value: ${GITOPS_PROFILE}\$" "$out" || { echo "FAIL: could not add the profile parameter to $out" >&2; return 1; }
+  fi
   printf '%s\n' "$out"
 }
 
@@ -107,8 +150,9 @@ gitops_render_root_app_for_revision() {
 # would always differ).
 gitops_root_app_desired_fingerprint() {
   rev="$1"
-  printf 'repoURL=%s|targetRevision=%s|path=%s|helmGitRevision=%s|destNamespace=%s|automated=selfHeal:true,prune:true' \
-    "$GITOPS_REPO_URL" "$rev" "$GITOPS_CHART_PATH" "$rev" "$ARGOCD_NAMESPACE"
+  if [ "$GITOPS_PROFILE" = "local-multicluster" ]; then gdf_profile="$GITOPS_PROFILE"; else gdf_profile=""; fi
+  printf 'repoURL=%s|targetRevision=%s|path=%s|helmGitRevision=%s|helmProfile=%s|destNamespace=%s|automated=selfHeal:true,prune:true' \
+    "$GITOPS_REPO_URL" "$rev" "$GITOPS_CHART_PATH" "$rev" "$gdf_profile" "$ARGOCD_NAMESPACE"
 }
 
 gitops_root_app_live_fingerprint() {
@@ -116,11 +160,12 @@ gitops_root_app_live_fingerprint() {
   live_rev="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.spec.source.targetRevision}' 2>/dev/null)"
   live_path="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.spec.source.path}' 2>/dev/null)"
   live_helm_rev="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.spec.source.helm.parameters[?(@.name=="gitRevision")].value}' 2>/dev/null)"
+  live_helm_profile="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.spec.source.helm.parameters[?(@.name=="profile")].value}' 2>/dev/null)"
   live_dest_ns="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.spec.destination.namespace}' 2>/dev/null)"
   live_selfheal="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.spec.syncPolicy.automated.selfHeal}' 2>/dev/null)"
   live_prune="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.spec.syncPolicy.automated.prune}' 2>/dev/null)"
-  printf 'repoURL=%s|targetRevision=%s|path=%s|helmGitRevision=%s|destNamespace=%s|automated=selfHeal:%s,prune:%s' \
-    "$live_repo" "$live_rev" "$live_path" "$live_helm_rev" "$live_dest_ns" "$live_selfheal" "$live_prune"
+  printf 'repoURL=%s|targetRevision=%s|path=%s|helmGitRevision=%s|helmProfile=%s|destNamespace=%s|automated=selfHeal:%s,prune:%s' \
+    "$live_repo" "$live_rev" "$live_path" "$live_helm_rev" "$live_helm_profile" "$live_dest_ns" "$live_selfheal" "$live_prune"
 }
 
 gitops_root_app_exists() {

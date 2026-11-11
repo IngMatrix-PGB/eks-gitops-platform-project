@@ -15,7 +15,8 @@
 	terraform-fmt terraform-init terraform-validate terraform-test terraform-validate-offline \
 	check-terraform-offline check-terraform-offline-regression \
 	lab-mc-create lab-mc-destroy lab-mc-status mc-spoke-register mc-spoke-deregister \
-	lab-mc-test-lifecycle mc-test-registration
+	lab-mc-test-lifecycle mc-test-registration \
+	mc-spoke-eso-install mc-spoke-source-secret mc-bootstrap mc-up mc-test-e2e
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
@@ -98,6 +99,23 @@ lab-mc-test-lifecycle: ## Phase 2.7.3: mutating create/no-op/destroy/no-op proof
 
 mc-test-registration: ## Phase 2.7.3: mutating registration/rotation/RBAC/cross-token/probe/deregistration proof (requires REVISION=<pushed branch>)
 	@sh tests/multicluster/test-registration.sh
+
+mc-spoke-eso-install: ## Phase 2.7.4: install ESO on SPOKE=<dev|uat|prod> - one scoped release that owns that spoke's own webhook/cert-controller
+	@case "$(SPOKE)" in dev|uat|prod) ;; *) echo "FAIL: SPOKE must be exactly one of: dev uat prod (got '$(SPOKE)')" >&2; exit 1 ;; esac
+	@LAB_CLUSTER=$(SPOKE) sh lab/eso/install.sh
+
+mc-spoke-source-secret: ## Phase 2.7.4: ensure (or ACTION=--rotate/--delete) the ESO source Secret on SPOKE=<dev|uat|prod>; value from stdin or a hidden prompt, never an argument
+	@case "$(SPOKE)" in dev|uat|prod) ;; *) echo "FAIL: SPOKE must be exactly one of: dev uat prod (got '$(SPOKE)')" >&2; exit 1 ;; esac
+	@LAB_CLUSTER=$(SPOKE) sh lab/eso/provision-source-secret.sh $(SPOKE) $(ACTION)
+
+mc-bootstrap: ## Phase 2.7.4: hub root Application, profile local-multicluster (one Application per registered spoke; accepts REVISION=)
+	@LAB_CLUSTER=hub sh lab/gitops/bootstrap.sh
+
+mc-up: ## Phase 2.7.4: idempotent end-to-end bring-up - clusters, hub Argo CD + repo, per-spoke register/ESO/source Secret, hub bootstrap (SPOKES=, REVISION=)
+	@sh lab/multicluster/up.sh
+
+mc-test-e2e: ## Phase 2.7.4: mutating end-to-end proof - generator selection, per-spoke ESO/rotation/self-heal isolation, safe deregistration, hub uninstall (requires REVISION=<pushed branch>)
+	@sh tests/multicluster/test-e2e.sh
 
 lab-test-eks-identity-offline: ## Phase 3.3.4b: fully offline positive/negative matrix for check_eks_cluster_identity() (fake kubectl/aws, no cluster, no AWS, no network - DESIGNED/NOT DEPLOYED)
 	@sh tests/lab/test-eks-identity-offline.sh

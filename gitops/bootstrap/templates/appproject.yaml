@@ -23,6 +23,17 @@ spec:
   sourceRepos:
     - {{ .Values.repoURL }}
   destinations:
+    {{- if eq .Values.profile "local-multicluster" }}
+    {{- /*
+    Phase 2.7.4: spokes only, by cluster name - never the hub's
+    in-cluster server, so not even a hand-made Application in this
+    project can land on the hub.
+    */}}
+    {{- range .Values.multicluster.environments }}
+    - name: {{ $.Values.multicluster.clusterNamePrefix }}{{ . }}
+      namespace: {{ . }}
+    {{- end }}
+    {{- else }}
     {{- range .Values.environments }}
     - server: https://kubernetes.default.svc
       namespace: {{ .namespace }}
@@ -42,6 +53,7 @@ spec:
     - server: https://kubernetes.default.svc
       namespace: {{ .namespace }}
     {{- end }}
+    {{- end }}
   # Proven necessary empirically during this phase's lifecycle test, not
   # assumed: an empty clusterResourceWhitelist makes every generated
   # Application's CreateNamespace=true sync fail with "resource
@@ -50,9 +62,14 @@ spec:
   # not a permission-check-exempt controller step. This is the single
   # minimum grant that makes it work; see docs/adr/0007-private-gitops-
   # bootstrap.md for the empirical finding.
+  {{- if eq .Values.profile "local-multicluster" }}
+  # Phase 2.7.4: nothing cluster-scoped - CreateNamespace=false on spokes.
+  clusterResourceWhitelist: []
+  {{- else }}
   clusterResourceWhitelist:
     - group: ""
       kind: Namespace
+  {{- end }}
   namespaceResourceWhitelist:
     - group: ""
       kind: ConfigMap
