@@ -17,13 +17,15 @@ LAB_MC_TOKEN_DURATION="24h"
 LAB_MC_FIELD_MANAGER="eks-gitops-multicluster-registration"
 
 # Per-member memory budget in MiB for the preflight, from the Phase
-# 2.7.3 multicluster measurement (Docker view, steady state): hub with
-# Argo CD 1.20-1.46 GiB; a registered spoke 0.55-0.83 GiB before ESO and
-# workloads (Phase 2.7.4 adds ~0.12 GiB per spoke, measured in lab-lite).
-# Each budget is the highest observed value plus headroom - a floor for
-# refusing early, not a promise the cluster stays below it.
+# 2.7.3/2.7.4 multicluster measurements (Docker view, steady state):
+# hub with Argo CD 1.20-1.46 GiB; a spoke with registration, its ESO
+# release and the workload 1.10-1.17 GiB (Phase 2.7.4 - more than the
+# ~0.12 GiB lab-lite suggested: a spoke's single ESO release also runs
+# its own webhook and cert-controller). Each budget is the highest
+# observed value plus headroom - a floor for refusing early, not a
+# promise the cluster stays below it.
 LAB_MC_HUB_MIB=1600
-LAB_MC_SPOKE_MIB=1000
+LAB_MC_SPOKE_MIB=1300
 
 # lab_mc_spokes - prints the selected spokes, space separated, from
 # SPOKES (comma or space separated; default "dev,uat"). Fails closed on
