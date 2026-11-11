@@ -92,5 +92,12 @@ configs:
       - apiGroups: ["external-secrets.io"]
         kinds: ["SecretStore", "ExternalSecret"]
         clusters: ["https://eks-gitops-*-control-plane:6443"]
+      # Phase 2.8.1: the two resilience kinds the workload chart renders.
+      - apiGroups: ["policy"]
+        kinds: ["PodDisruptionBudget"]
+        clusters: ["https://eks-gitops-*-control-plane:6443"]
+      - apiGroups: ["networking.k8s.io"]
+        kinds: ["NetworkPolicy"]
+        clusters: ["https://eks-gitops-*-control-plane:6443"]
   params:
     server.insecure: "false"            # same: quoted string, per argocd-cmd-params-cm.yaml
