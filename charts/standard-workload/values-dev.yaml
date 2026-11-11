@@ -13,7 +13,7 @@ resources:
     memory: 64Mi
 
 configMap:
-  uiMessage: "podinfo dev — phase 2.7.1"
+  uiMessage: "podinfo dev — phase 2.7.4 isolation check"
 
 # Enables the read-only Secret mount for dev only - fully separate
 # SecretStore/source-namespace/source-Secret/auth ServiceAccount from
