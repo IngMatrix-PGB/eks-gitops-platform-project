@@ -34,8 +34,13 @@ fi
 
 if lab_mc_identity "$spoke"; then
   ckubectl "$spoke" -n "$spoke" delete rolebinding,role -l "$sel" --ignore-not-found >/dev/null
-  if ckubectl "$spoke" get namespace "$LAB_MC_ACCESS_NS" -l "$sel" -o name 2>/dev/null | grep -q .; then
-    ckubectl "$spoke" delete namespace "$LAB_MC_ACCESS_NS" --wait --timeout=60s >/dev/null
+  escaped_owner_key="$(printf '%s' "$LAB_MC_OWNER_LABEL_KEY" | sed 's/\./\\./g')"
+  access_owner="$(ckubectl "$spoke" get namespace "$LAB_MC_ACCESS_NS" -o jsonpath="{.metadata.labels.${escaped_owner_key}}" 2>/dev/null || true)"
+  if [ "$access_owner" = "$LAB_MC_OWNER_LABEL_VALUE" ]; then
+    ckubectl "$spoke" delete namespace "$LAB_MC_ACCESS_NS" --wait --timeout=90s >/dev/null
+  elif ckubectl "$spoke" get namespace "$LAB_MC_ACCESS_NS" >/dev/null 2>&1; then
+    echo "FAIL: namespace '$LAB_MC_ACCESS_NS' on '$spoke' is not owned by this registration - leaving it in place" >&2
+    exit 1
   fi
   echo "OK: spoke '$spoke': Role/RoleBinding and ${LAB_MC_ACCESS_NS} removed (or already absent); namespace '$spoke' kept"
 else

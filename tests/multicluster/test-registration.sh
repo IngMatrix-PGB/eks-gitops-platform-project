@@ -257,9 +257,10 @@ fi
 pkubectl -n "$ARGOCD_NAMESPACE" delete application "probe-$first-outside" --ignore-not-found --wait=false >/dev/null 2>&1 || true
 pkubectl -n "$ARGOCD_NAMESPACE" patch application "probe-$first-outside" --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1 || true
 
-# --- 6. deregistration cuts the hub off ---
-ckubectl "$first" -n "$first" delete configmap registration-probe --ignore-not-found >/dev/null
+# --- 6. deregistration cuts the hub off: deregister FIRST, then remove
+# the probe ConfigMap and prove self-heal can no longer recreate it ---
 sh lab/multicluster/spoke-deregister.sh "$first" >/dev/null
+ckubectl "$first" -n "$first" delete configmap registration-probe --ignore-not-found >/dev/null
 pkubectl -n "$ARGOCD_NAMESPACE" annotate application "probe-$first" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
 sleep 45
 if ckubectl "$first" -n "$first" get configmap registration-probe >/dev/null 2>&1; then
