@@ -1,7 +1,7 @@
 {{- /*
 Phase 2.8.2: CPU-utilization HPA over this Deployment. Rendered only when
-autoscaling.enabled; the Deployment then omits spec.replicas so the HPA
-alone owns it.
+autoscaling.enabled; the Deployment then renders minReplicas and is
+annotated replicas-owner=hpa, so Argo CD keeps the HPA's live value.
 */ -}}
 {{- if .Values.autoscaling.enabled }}
 apiVersion: autoscaling/v2

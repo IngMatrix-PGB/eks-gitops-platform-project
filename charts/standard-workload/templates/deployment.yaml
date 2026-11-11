@@ -19,9 +19,16 @@ metadata:
     eks-gitops-lab-lite.local/replicas-owner: hpa
   {{- end }}
 spec:
-  {{- if not $as.enabled }}
-  replicas: {{ .Values.replicaCount }}
-  {{- end }}
+  {{- /*
+  Phase 2.8.2: with an HPA, render its minReplicas instead of omitting
+  the field. Omitting it was measured to drop prod to 1 replica on the
+  hand-over sync: server-side apply removes a field its manager stops
+  sending and the API default (1) applies. Rendering minReplicas keeps
+  Argo CD the field's manager; on every later sync RespectIgnoreDifferences
+  (gitops/bootstrap, Deployments annotated replicas-owner=hpa) replaces
+  it with the live value the HPA chose, so Argo CD never fights the HPA.
+  */}}
+  replicas: {{ ternary .Values.autoscaling.minReplicas .Values.replicaCount .Values.autoscaling.enabled }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
   strategy:
     type: {{ .Values.strategy.type }}

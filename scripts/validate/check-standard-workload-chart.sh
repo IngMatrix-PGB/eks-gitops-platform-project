@@ -1236,7 +1236,7 @@ run_negative_case "unknown key under networkPolicy" 'networkPolicy:
 hpa="$(yaml_doc "$render_prod" HorizontalPodAutoscaler)"
 dep_prod="$(yaml_doc "$render_prod" Deployment)"
 hpa_ok=1
-printf '%s\n' "$dep_prod" | grep -qE '^  replicas: ' && hpa_ok=0
+printf '%s\n' "$dep_prod" | grep -qE '^  replicas: 2$' || hpa_ok=0
 printf '%s\n' "$dep_prod" | grep -qE '^    eks-gitops-lab-lite.local/replicas-owner: hpa$' || hpa_ok=0
 printf '%s\n' "$hpa" | grep -qE '^apiVersion: autoscaling/v2$' || hpa_ok=0
 printf '%s\n' "$hpa" | grep -qE '^    name: platform-smoke-prod-standard-workload$' || hpa_ok=0
@@ -1244,9 +1244,9 @@ printf '%s\n' "$hpa" | grep -qE '^  minReplicas: 2$' && printf '%s\n' "$hpa" | g
 printf '%s\n' "$hpa" | grep -qE '^          averageUtilization: 70$' || hpa_ok=0
 printf '%s\n' "$hpa" | grep -qE '^      stabilizationWindowSeconds: 60$' || hpa_ok=0
 if [ "$hpa_ok" -eq 1 ]; then
-  echo "OK: prod: HPA autoscaling/v2 on its own Deployment (2-4 replicas, CPU 70%, scale-down window 60s); the Deployment renders no spec.replicas and is annotated replicas-owner=hpa"
+  echo "OK: prod: HPA autoscaling/v2 on its own Deployment (2-4 replicas, CPU 70%, scale-down window 60s); the Deployment renders spec.replicas = minReplicas (never omitted: omitting it drops to 1 on the hand-over) and is annotated replicas-owner=hpa"
 else
-  echo "FAIL: prod HPA/Deployment shape is wrong (HPA target/min/max/metric/window, or the Deployment still renders spec.replicas)" >&2; fail=1
+  echo "FAIL: prod HPA/Deployment shape is wrong (HPA target/min/max/metric/window, Deployment spec.replicas != minReplicas, or missing replicas-owner)" >&2; fail=1
 fi
 for render in "$render_dev" "$render_uat" "$ov_dev" "$ov_uat" "$ov_prod"; do
   if grep -q '^kind: HorizontalPodAutoscaler$' "$render"; then echo "FAIL: $render renders an HPA (only prod; aws overlays wait for EKS metrics-server, TAD R-14)" >&2; fail=1; fi

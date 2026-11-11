@@ -123,13 +123,12 @@ spec:
           valueFiles:
             - "values-{{ $envRef }}.yaml"
       # Phase 2.8.2: an HPA owns spec.replicas of a Deployment the workload
-      # chart annotates replicas-owner=hpa (and then stops rendering the
-      # field). Only those: a static Deployment stays fully reconciled
+      # chart annotates replicas-owner=hpa (the chart renders minReplicas
+      # there). Only those: a static Deployment stays fully reconciled
       # from Git. ignoreDifferences hides the HPA's changes from the diff,
       # and RespectIgnoreDifferences (syncOptions below) makes every sync
-      # keep the live value instead of applying the chart's - which also
-      # keeps Argo CD's server-side-apply ownership of the field during the
-      # hand-over, so it is never dropped back to the API default of 1.
+      # send the live value instead of the chart's, so Argo CD keeps the
+      # field (never dropped to the API default of 1) without resetting it.
       ignoreDifferences:
         - group: apps
           kind: Deployment
