@@ -8,9 +8,11 @@
 #   REVISION       (required) a pushed revision carrying Phase 2.8.2
 #   PRE_REVISION   (optional) a pushed revision WITHOUT the HPA (static
 #                  replicas: 2). When set, the test first switches the
-#                  root Application to it, then switches to REVISION while
+#                  root Application to it, runs lab/workload/hpa-handover.sh
+#                  (unless HANDOVER=0), then switches to REVISION while
 #                  sampling the prod Deployment every second - proving the
 #                  static -> HPA hand-over never drops below minReplicas.
+#                  HANDOVER=0 measures the drop without the hand-over.
 #
 # Proves: metrics are served and the HPA is ScalingActive; (hand-over);
 # under load the HPA scales above minReplicas while Argo CD stays Synced
@@ -92,7 +94,17 @@ if [ -n "$pre_revision" ]; then
   switch_root "$pre_revision" >/dev/null
   i=0; while [ "$i" -lt 240 ] && pkubectl -n "$ns" get hpa "$dep" >/dev/null 2>&1; do sleep 5; i=$((i + 5)); done
   [ "$(spec_replicas)" = "2" ] || { echo "FAIL: step 1 - on '$pre_revision' prod is not static at 2 replicas (got $(spec_replicas))" >&2; exit 1; }
-  echo "OK: step 1 - root on '$pre_revision': prod static, spec.replicas=2, no HPA"
+  # start from a clean ownership state: release any earlier hand-over
+  # (an empty apply by the same manager drops the fields it owned)
+  printf 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: %s\n  namespace: %s\n' "$dep" "$ns" \
+    | pkubectl apply --server-side --field-manager=replicas-hpa-handover -f - >/dev/null
+  rep_owners="$(pkubectl -n "$ns" get deployment "$dep" --show-managed-fields -o jsonpath='{range .metadata.managedFields[*]}{.manager}{"|"}{.fieldsV1.f:spec.f:replicas}{"\n"}{end}' | awk -F'|' '$2 != "" {print $1}' | sort -u | tr '\n' ' ')"
+  echo "OK: step 1 - root on '$pre_revision': prod static, spec.replicas=2, no HPA; spec.replicas owners before the switch: $rep_owners"
+  if [ "${HANDOVER:-1}" = "1" ]; then
+    sh lab/workload/hpa-handover.sh "$ns" "$dep"
+  else
+    echo "NOTE: step 1 - HANDOVER=0: switching without the hand-over (measuring the drop)"
+  fi
   start_sampler "$work/handover.txt"
   switch_root "$revision" >/dev/null
   i=0; while [ "$i" -lt 240 ] && ! pkubectl -n "$ns" get hpa "$dep" >/dev/null 2>&1; do sleep 3; i=$((i + 3)); done
@@ -101,7 +113,9 @@ if [ -n "$pre_revision" ]; then
   owner="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.metadata.annotations.eks-gitops-lab-lite\.local/replicas-owner}')"
   min_spec="$(min_col "$work/handover.txt" 1)"; min_ready="$(min_col "$work/handover.txt" 2)"
   samples="$(grep -c . "$work/handover.txt")"
-  if [ "$owner" = "hpa" ] && [ "$min_spec" = "2" ] && [ "$min_ready" = "2" ]; then
+  if [ "${HANDOVER:-1}" != "1" ]; then
+    echo "NOTE: step 1 - without the hand-over: min spec.replicas=$min_spec, min Ready=$min_ready over $samples samples (informational)"
+  elif [ "$owner" = "hpa" ] && [ "$min_spec" = "2" ] && [ "$min_ready" = "2" ]; then
     echo "OK: step 1 - hand-over to the HPA on '$revision': $samples one-second samples, spec.replicas and Ready never below 2"
   else
     echo "FAIL: step 1 - hand-over: owner='$owner' min spec.replicas=$min_spec min Ready=$min_ready over $samples samples" >&2
@@ -129,7 +143,7 @@ fi
 
 # --- 3. scale up under load; 4. Argo CD does not fight ---
 image="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.template.spec.containers[0].image}')"
-for n in 1 2 3; do
+for n in 1 2 3 4 5; do
   cat <<EOF | pkubectl apply -f - >/dev/null
 apiVersion: v1
 kind: Pod
@@ -149,7 +163,7 @@ spec:
       args:
         - |
           end=\$((\$(date +%s)+420))
-          for w in 1 2 3 4 5 6 7 8; do
+          for w in 1 2 3 4 5 6 7 8 9 10 11 12; do
             ( while [ \$(date +%s) -lt \$end ]; do curl -s -o /dev/null --max-time 2 $svc/api/info; done ) &
           done
           wait

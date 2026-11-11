@@ -19,7 +19,8 @@
 	mc-spoke-eso-install mc-spoke-source-secret mc-bootstrap mc-up mc-test-e2e \
 	workload-test-resilience \
 	metrics-server-chart-fetch metrics-server-render check-metrics-server-chart metrics-server-install \
-	metrics-server-status metrics-server-uninstall mc-spoke-metrics-server workload-test-autoscaling
+	metrics-server-status metrics-server-uninstall mc-spoke-metrics-server workload-test-autoscaling \
+	workload-hpa-handover
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
@@ -140,6 +141,9 @@ metrics-server-uninstall: ## Phase 2.8.2: idempotent removal of the metrics-serv
 mc-spoke-metrics-server: ## Phase 2.8.2: install metrics-server on SPOKE=<dev|uat|prod>
 	@case "$(SPOKE)" in dev|uat|prod) ;; *) echo "FAIL: SPOKE must be exactly one of: dev uat prod (got '$(SPOKE)')" >&2; exit 1 ;; esac
 	@LAB_CLUSTER=$(SPOKE) sh lab/metrics-server/install.sh
+
+workload-hpa-handover: ## Phase 2.8.2: before Git enables an HPA for an existing Deployment, give its current spec.replicas a second field owner so Argo CD letting go never drops it to 1 (NS= DEPLOYMENT=, LAB_CLUSTER=)
+	@sh lab/workload/hpa-handover.sh $(NS) $(DEPLOYMENT)
 
 workload-test-autoscaling: ## Phase 2.8.2: mutating proof of the prod HPA - metrics served, static->HPA hand-over never below minReplicas, scale-up under load with Argo CD Synced, scale-down, static Deployments still reconciled (lab-lite or LAB_CLUSTER=prod)
 	@sh tests/workload/test-autoscaling.sh
