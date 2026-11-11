@@ -214,8 +214,9 @@ else
 fi
 wp="$(pkubectl -n "$ns" get pods -l "app.kubernetes.io/instance=${app}" -o jsonpath='{.items[0].metadata.name}')"
 dns="$(pkubectl -n "$ns" exec "$wp" -- sh -c 'nslookup kubernetes.default.svc.cluster.local >/dev/null 2>&1 && echo ok || echo fail' 2>/dev/null || echo fail)"
-api="$(pkubectl -n "$ns" exec "$wp" -- sh -c 'curl -sk -o /dev/null -w "%{http_code}" --max-time 4 https://kubernetes.default.svc:443/livez || echo 000' 2>/dev/null || echo 000)"
-ext="$(pkubectl -n "$ns" exec "$wp" -- sh -c "curl -s -o /dev/null -w '%{http_code}' --max-time 4 http://${dep}.${ns}.svc.cluster.local:9898/readyz || echo 000" 2>/dev/null || echo 000)"
+# curl prints 000 itself when it cannot connect; never append a second one.
+api="$(pkubectl -n "$ns" exec "$wp" -- sh -c 'c=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 4 https://kubernetes.default.svc:443/livez); echo "${c:-000}"' 2>/dev/null || echo 000)"
+ext="$(pkubectl -n "$ns" exec "$wp" -- sh -c "c=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 http://${dep}.${ns}.svc.cluster.local:9898/readyz); echo \"\${c:-000}\"" 2>/dev/null || echo 000)"
 if [ "$dns" = "ok" ] && [ "$api" = "000" ] && [ "$ext" = "000" ]; then
   echo "OK: step 3 - workload egress: DNS resolves; the API server and even its own Service are unreachable (egress is DNS-only)"
 else
