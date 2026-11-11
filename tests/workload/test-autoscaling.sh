@@ -239,13 +239,21 @@ else
 fi
 
 # --- 7. PDB still enforced with the HPA ---
-pods="$(pkubectl -n "$ns" get pods -l "app.kubernetes.io/instance=${app}" -o jsonpath='{range .items[?(@.status.phase=="Running")]}{.metadata.name}{" "}{end}')"
+# wait until the scale-down has fully settled: exactly 2 pods that are
+# not terminating, and 2 Ready - a terminating pod still reports Running
+live_pods() { pkubectl -n "$ns" get pods -l "app.kubernetes.io/instance=${app}" -o jsonpath='{range .items[?(@.status.phase=="Running")]}{.metadata.name}{"|"}{.metadata.deletionTimestamp}{"\n"}{end}' | awk -F'|' '$2 == "" {printf "%s ", $1}'; }
+i=0
+while [ "$i" -lt 180 ]; do
+  [ "$(printf '%s' "$(live_pods)" | wc -w | tr -d ' ')" = "2" ] && [ "$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.status.readyReplicas}')" = "2" ] && [ "$(pkubectl -n "$ns" get pods -l "app.kubernetes.io/instance=${app}" -o name | wc -l | tr -d ' ')" = "2" ] && break
+  sleep 3; i=$((i + 3))
+done
+pods="$(live_pods)"
 p1="${pods%% *}"; rest="${pods#* }"; p2="${rest%% *}"
 evict() { printf '{"apiVersion":"policy/v1","kind":"Eviction","metadata":{"name":"%s","namespace":"%s"}}' "$1" "$ns" | pkubectl create --raw "/api/v1/namespaces/${ns}/pods/$1/eviction" -f - >/dev/null 2>"$2"; }
 if evict "$p1" "$work/e1" && ! evict "$p2" "$work/e2" && grep -qiE '429|disruption budget' "$work/e2"; then
   echo "OK: step 7 - with the HPA, the PDB still allows one eviction and refuses an immediate second (429)"
 else
-  echo "FAIL: step 7 - PDB eviction behavior changed under the HPA" >&2
+  echo "FAIL: step 7 - PDB eviction behavior changed under the HPA (pods: $pods; second eviction: $(head -c 200 "$work/e2" 2>/dev/null))" >&2
   fail=1
 fi
 i=0; while [ "$i" -lt 180 ] && [ "$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.status.readyReplicas}')" != "2" ]; do sleep 3; i=$((i + 3)); done
