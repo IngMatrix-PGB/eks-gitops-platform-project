@@ -80,7 +80,8 @@ delivery roadmap for what exists versus what is proposed.
 | 2.7.2 | Same rename in the aws-eks profile and Terraform, `dev` added there too (offline) | Implemented |
 | 2.7.3 | `lab-multicluster`: `management` hub + `dev`/`uat` spokes (`prod` opt-in) in `kind`; spoke registration with a namespace-scoped, rotating credential | Implemented |
 | 2.7.4 | Cluster-generator `ApplicationSet` and one ESO per spoke; `make mc-up` brings the whole profile up | Implemented |
-| 2.8 | Workload resilience in the standard chart: PodDisruptionBudget, topology spread, graceful shutdown, HPA, NetworkPolicy | `PROPOSED` |
+| 2.8.1 | Workload resilience in the standard chart: PodDisruptionBudget, topology spread, graceful shutdown, NetworkPolicy (`make workload-test-resilience`) | Implemented |
+| 2.8.2 | metrics-server and HPA | `PROPOSED` |
 | 3.4 | Multi-account hub-and-spoke Terraform: organization guardrails, threat detection and config recording, budgets, Karpenter, immutable container registry with lifecycle rules (plan-only) | `PROPOSED` |
 | 5.1 | Image CI: build, vulnerability scan, SBOM, signing, push; tag-bump promotion `dev` → `uat` → `prod` | `PROPOSED` |
 | 5.2 | Terraform CI: `plan` on every PR, static analysis, `apply` against a local AWS emulator | `PROPOSED` |
