@@ -153,3 +153,9 @@ Adopt an explicit **hub-and-spoke** model with one hub and three spokes:
   it supports; no real AWS apply without separate authorization.
 - Until those phases land, every capability in this ADR is tracked as
   `PROPOSED` in the TAD's evidence table.
+- **Phase 2.7.3 result (2026-11-11):** hub + `dev`/`uat`, and again with
+  `prod`, created and registered; each spoke credential is
+  namespace-scoped (no ClusterRole, no Secrets), each token is rejected
+  by every other spoke (HTTP 401), the hub reconciled a probe into every
+  spoke, an out-of-scope destination never landed, and deregistration
+  cut the hub off. Generating Applications per spoke is Phase 2.7.4.

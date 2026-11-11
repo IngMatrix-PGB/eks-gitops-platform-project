@@ -43,7 +43,8 @@ contract), Phase 2.6.3a (transactional GitOps lifecycle and safe
 revision rollback), Phase 2.6.3b (source-secret idempotency and
 kubeconfig evidence hardening), Phase 2.7.1 (`dev`/`uat`/`prod`
 environments in the local lab), and Phase 2.7.2 (the same environments
-in the aws-eks profile and Terraform, offline) are implemented** — a single, pinned `lab-lite`
+in the aws-eks profile and Terraform, offline), and Phase 2.7.3 (hub
+and spoke `kind` clusters with Argo CD registration) are implemented** — a single, pinned `lab-lite`
 `kind` cluster running a pinned, digest-verified Argo CD control plane,
 reconciling this repository's own `gitops/` directory over a read-only
 SSH deploy key into `dev`, `uat`, and `prod` namespaces, each
@@ -77,7 +78,8 @@ delivery roadmap for what exists versus what is proposed.
 |---|---|---|
 | 2.7.1 | `dev`/`uat`/`prod` in the local lab (`staging` → `uat`, `production` → `prod`, `dev` added, three ESO releases) | Implemented |
 | 2.7.2 | Same rename in the aws-eks profile and Terraform, `dev` added there too (offline) | Implemented |
-| 2.7.3–2.7.4 | `lab-multicluster`: `management` hub + `dev`/`uat` spokes (`prod` opt-in) in `kind`; remote-cluster registration with least-privilege credentials; cluster-generator `ApplicationSet`; one ESO per spoke | `PROPOSED` |
+| 2.7.3 | `lab-multicluster`: `management` hub + `dev`/`uat` spokes (`prod` opt-in) in `kind`; spoke registration with a namespace-scoped, rotating credential | Implemented |
+| 2.7.4 | Cluster-generator `ApplicationSet` and one ESO per spoke | `PROPOSED` |
 | 2.8 | Workload resilience in the standard chart: PodDisruptionBudget, topology spread, graceful shutdown, HPA, NetworkPolicy | `PROPOSED` |
 | 3.4 | Multi-account hub-and-spoke Terraform: organization guardrails, threat detection and config recording, budgets, Karpenter, immutable container registry with lifecycle rules (plan-only) | `PROPOSED` |
 | 5.1 | Image CI: build, vulnerability scan, SBOM, signing, push; tag-bump promotion `dev` → `uat` → `prod` | `PROPOSED` |
@@ -212,6 +214,30 @@ make check-standard-workload-chart  # offline lint/render/schema/PSS/dry-run val
 
 See [ADR-0008](docs/adr/0008-standard-workload-before-sso.md) for why
 this phase came before Keycloak/SSO, not instead of it.
+
+## Local lab: hub and spoke clusters (`lab-multicluster`)
+
+Phase 2.7.3 adds a second local profile (ADR-0015): one `kind` cluster
+for the `management` hub plus one per spoke. Every lab target accepts
+`LAB_CLUSTER=lab-lite|hub|dev|uat|prod` (default `lab-lite`). lab-lite
+and lab-multicluster never run at the same time.
+
+```bash
+make lab-destroy                              # lab-lite must be down first
+make lab-mc-create                            # hub + dev + uat (SPOKES=dev,uat,prod adds prod)
+make argocd-install LAB_CLUSTER=hub           # Argo CD on the hub only
+make gitops-repo-setup LAB_CLUSTER=hub        # repository Secret on the hub
+make mc-spoke-register SPOKE=dev              # namespace-scoped credential, 24h token; re-run rotates it
+make mc-spoke-register SPOKE=uat
+make lab-mc-status                            # identity, registration (never the token), memory per member
+make mc-test-registration REVISION=<branch>   # mutating end-to-end registration proof
+make lab-mc-destroy
+```
+
+Each spoke's credential can manage only the six AppProject kinds in its
+own namespace: no ClusterRole, no Secrets, no `kube-system`. Measured
+memory for the hub plus three spokes is about 3.3 GiB. See the TAD's
+"Hub-and-Spoke Registration" section.
 
 ## Repository governance
 
