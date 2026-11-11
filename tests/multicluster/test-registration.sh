@@ -136,6 +136,8 @@ for s in $spokes; do
   can_i "$s" yes patch networkpolicies.networking.k8s.io -n "$s"
   can_i "$s" no create networkpolicies.networking.k8s.io -n default
   can_i "$s" no create poddisruptionbudgets.policy -n kube-system
+  can_i "$s" yes patch horizontalpodautoscalers.autoscaling -n "$s"
+  can_i "$s" no create horizontalpodautoscalers.autoscaling -n default
   for res in externalsecrets secretstores; do
     if [ "$(sar_allowed "$s" external-secrets.io "$res" create "$s")" = "true" ]; then
       echo "OK: '$s' SubjectAccessReview create $res.external-secrets.io -n $s -> allowed (CRD not installed yet; RBAC evaluated directly)"

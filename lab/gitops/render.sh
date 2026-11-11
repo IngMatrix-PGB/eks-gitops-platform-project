@@ -293,6 +293,23 @@ else
 fi
 rm -f "$short_env_values" "$short_env_out"
 
+# --- Phase 2.8.2: every profile lets an HPA own Deployment spec.replicas
+# (ignoreDifferences on exactly that pointer + RespectIgnoreDifferences) ---
+for prof_render in "$render_out" "$aws_render_out"; do
+  igd="$(awk '/ignoreDifferences:/{f=1} f&&/destination:/{exit} f{print}' "$prof_render")"
+  if printf '%s\n' "$igd" | grep -qE '^\s+- group: apps$' && printf '%s\n' "$igd" | grep -qE '^\s+kind: Deployment$' \
+     && ! printf '%s\n' "$igd" | grep -q 'jsonPointers:' \
+     && [ "$(printf '%s\n' "$igd" | grep -cE "^\s+- 'select")" = "1" ] \
+     && printf '%s\n' "$igd" | grep -qF -- "- 'select(.metadata.annotations[\"eks-gitops-lab-lite.local/replicas-owner\"] == \"hpa\") | .spec.replicas'" \
+     && grep -qE '^\s+- RespectIgnoreDifferences=true$' "$prof_render"; then
+    :
+  else
+    echo "FAIL: $prof_render does not ignore exactly spec.replicas of HPA-owned Deployments (replicas-owner=hpa) with RespectIgnoreDifferences=true" >&2
+    fail=1
+  fi
+done
+[ "$fail" -eq 0 ] && echo "OK: local-kind and aws-eks ignore spec.replicas only on Deployments annotated replicas-owner=hpa, with RespectIgnoreDifferences=true; static Deployments stay reconciled from Git"
+
 # =============================================================================
 # Phase 2.7.4: local-multicluster profile (hub Argo CD -> registered kind
 # spokes through a clusters generator). Offline shape only - which
@@ -339,6 +356,7 @@ else
   printf '%s\n' "$mc_project" | grep -qE '^\s*clusterResourceWhitelist: \[\]$' || { echo "FAIL: local-multicluster: clusterResourceWhitelist must be empty" >&2; mc_fail=1; }
   mc_appset="$(awk '/^kind: ApplicationSet$/{f=1} f{print}' "$mc_render_out")"
   printf '%s\n' "$mc_appset" | grep -qE '^\s*- CreateNamespace=false$' || { echo "FAIL: local-multicluster: CreateNamespace=false missing" >&2; mc_fail=1; }
+  printf '%s\n' "$mc_appset" | grep -qF 'replicas-owner"] == "hpa") | .spec.replicas' && printf '%s\n' "$mc_appset" | grep -qE '^\s+- RespectIgnoreDifferences=true$' || { echo "FAIL: local-multicluster: HPA hand-over settings (ignoreDifferences on replicas-owner=hpa Deployments + RespectIgnoreDifferences) missing" >&2; mc_fail=1; }
   if printf '%s\n' "$mc_appset" | grep -qE 'CreateNamespace=true|managedNamespaceMetadata:|server: https://kubernetes\.default\.svc'; then
     echo "FAIL: local-multicluster: template still creates namespaces or targets the hub's in-cluster server" >&2; mc_fail=1
   fi

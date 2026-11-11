@@ -17,7 +17,9 @@
 	lab-mc-create lab-mc-destroy lab-mc-status mc-spoke-register mc-spoke-deregister \
 	lab-mc-test-lifecycle mc-test-registration \
 	mc-spoke-eso-install mc-spoke-source-secret mc-bootstrap mc-up mc-test-e2e \
-	workload-test-resilience
+	workload-test-resilience \
+	metrics-server-chart-fetch metrics-server-render check-metrics-server-chart metrics-server-install \
+	metrics-server-status metrics-server-uninstall mc-spoke-metrics-server workload-test-autoscaling
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
@@ -117,6 +119,30 @@ mc-up: ## Phase 2.7.4: idempotent end-to-end bring-up - clusters, hub Argo CD + 
 
 mc-test-e2e: ## Phase 2.7.4: mutating end-to-end proof - generator selection, per-spoke ESO/rotation/self-heal isolation, safe deregistration, hub uninstall (requires REVISION=<pushed branch>)
 	@sh tests/multicluster/test-e2e.sh
+
+metrics-server-chart-fetch: ## Phase 2.8.2: download and checksum-verify the pinned metrics-server chart into .tools/charts/
+	@sh lab/metrics-server/chart-fetch.sh
+
+metrics-server-render: ## Phase 2.8.2: fully offline render of metrics-server with the lab values; proves object set, digest-pinned image, no RBAC wildcard, restricted security context
+	@sh lab/metrics-server/render.sh
+
+check-metrics-server-chart: metrics-server-render ## Phase 2.8.2: alias of metrics-server-render (needs the chart fetched; not part of validate, like check-eso-chart)
+
+metrics-server-install: ## Phase 2.8.2: fail-closed idempotent install on lab-lite or LAB_CLUSTER=dev|uat|prod (never the hub); LAB-ONLY --kubelet-insecure-tls
+	@sh lab/metrics-server/install.sh
+
+metrics-server-status: ## Phase 2.8.2: read-only release/Deployment/APIService/node-metrics check (LAB_CLUSTER=)
+	@sh lab/metrics-server/status.sh
+
+metrics-server-uninstall: ## Phase 2.8.2: idempotent removal of the metrics-server release (LAB_CLUSTER=)
+	@sh lab/metrics-server/uninstall.sh
+
+mc-spoke-metrics-server: ## Phase 2.8.2: install metrics-server on SPOKE=<dev|uat|prod>
+	@case "$(SPOKE)" in dev|uat|prod) ;; *) echo "FAIL: SPOKE must be exactly one of: dev uat prod (got '$(SPOKE)')" >&2; exit 1 ;; esac
+	@LAB_CLUSTER=$(SPOKE) sh lab/metrics-server/install.sh
+
+workload-test-autoscaling: ## Phase 2.8.2: mutating proof of the prod HPA - metrics served, static->HPA hand-over never below minReplicas, scale-up under load with Argo CD Synced, scale-down, static Deployments still reconciled (lab-lite or LAB_CLUSTER=prod)
+	@sh tests/workload/test-autoscaling.sh
 
 workload-test-resilience: ## Phase 2.8.1: mutating proof of the chart's resilience contract on the prod workload (zero-error rollout, PDB eviction, NetworkPolicy, spread, self-heal); lab-lite by default or LAB_CLUSTER=prod; RESILIENCE_BASELINE=1 adds an informational run without preStop
 	@sh tests/workload/test-resilience.sh
