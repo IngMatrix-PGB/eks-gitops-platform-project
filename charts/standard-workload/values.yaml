@@ -122,5 +122,45 @@ externalSecret:
   fileName: "message"
   defaultMode: 0440
 
+# Phase 2.8.1 (ADR-0006 amendment): graceful shutdown. On termination
+# Kubernetes removes the pod from the Service's endpoints in parallel with
+# running preStop - the native `sleep` preStop action (no shell needed in
+# the image) keeps the pod serving while that removal propagates, then
+# SIGTERM lets the server drain in-flight requests for up to
+# serverShutdownTimeoutSeconds. The template fails the render unless
+# preStopSleepSeconds + serverShutdownTimeoutSeconds + 5 <=
+# terminationGracePeriodSeconds.
+gracefulShutdown:
+  preStopSleepSeconds: 5
+  serverShutdownTimeoutSeconds: 5
+
+# Phase 2.8.1: rendered only when replicaCount >= 2 - with a single
+# replica a budget protects nothing, and a minAvailable-style budget
+# would block every drain forever. maxUnavailable keeps one eviction
+# always possible.
+podDisruptionBudget:
+  maxUnavailable: 1
+
+# Phase 2.8.1: spread replicas across nodes and zones. ScheduleAnyway by
+# default so a single-node lab (or a cluster without zone labels) still
+# schedules; an overlay that knows its cluster has several zones sets
+# zone to DoNotSchedule (values-prod-aws.yaml).
+topologySpread:
+  maxSkew: 1
+  hostname: ScheduleAnyway
+  zone: ScheduleAnyway
+
+# Phase 2.8.1: one policy for this workload's own pods (Ingress and
+# Egress). Ingress: only to the http port, only from pods in the same
+# namespace plus any namespace listed in ingressFromNamespaces (matched
+# by kubernetes.io/metadata.name). Egress: only DNS to kube-dns. The pod
+# never talks to the API server (automountServiceAccountToken: false);
+# ESO does that from its own namespace. Enforced by kind's kindnetd
+# (measured, Phase 2.8 plan); disabled in the aws overlays until the EKS
+# VPC CNI has network policy enabled (TAD R-14).
+networkPolicy:
+  enabled: true
+  ingressFromNamespaces: []
+
 podAnnotations: {}
 podLabels: {}
