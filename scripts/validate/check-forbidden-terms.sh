@@ -85,9 +85,38 @@ terraform_lock_hashes_open_pattern='^[[:space:]]*hashes[[:space:]]*=[[:space:]]*
 terraform_lock_hashes_close_pattern='^[[:space:]]*\][[:space:]]*$'
 terraform_lock_block_close_pattern='^[[:space:]]*\}[[:space:]]*$'
 
+# Narrow, single-purpose exception (Phase 2.8.2): a platform component's
+# shared library (scripts/<component>/_lib.sh) pins its upstream image by
+# the registry's own multi-arch index digest - an externally-fixed
+# 64-hex SHA256 that can coincidentally contain a 12+ digit run (true of
+# the pinned metrics-server v0.9.0 digest) with no way to change one
+# character without breaking the pin. Masks ONLY a line that is exactly
+#   <UPPER_SNAKE>_IMAGE_DIGEST="sha256:<64 lowercase hex>"
+# with nothing else on it, ONLY in a file at exactly scripts/<dir>/_lib.sh
+# - never any other line of that file, never a comment, never any other
+# path. The rest of the file is scanned normally.
+lib_image_digest_line_pattern='^[A-Z][A-Z0-9_]*_IMAGE_DIGEST="sha256:[0-9a-f]{64}"$'
+
 aws_account_hit_in_file() {
   local file="$1"
   local is_terraform_lock_file
+  case "$file" in
+    scripts/*/_lib.sh)
+      case "${file#scripts/}" in
+        */*/*) : ;;
+        *)
+          local line
+          while IFS= read -r line || [ -n "$line" ]; do
+            [[ "$line" =~ $lib_image_digest_line_pattern ]] && continue
+            if [[ "$line" =~ $aws_account_pattern ]]; then
+              return 0
+            fi
+          done < "$file"
+          return 1
+          ;;
+      esac
+      ;;
+  esac
   if [ "$file" = "scripts/lab/tool-versions.txt" ]; then
     local line masked
     while IFS= read -r line || [ -n "$line" ]; do

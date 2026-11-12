@@ -13,6 +13,7 @@
 #         (default 2); otherwise left alone so the token is not rotated
 #      b. ESO, one release owning its own webhook  (LAB_CLUSTER=<env> lab/eso/install.sh)
 #      c. ESO source Secret - created only if absent
+#      d. metrics-server (Phase 2.8.2)             (LAB_CLUSTER=<env> lab/metrics-server/install.sh)
 #   5. hub bootstrap, profile local-multicluster (LAB_CLUSTER=hub lab/gitops/bootstrap.sh)
 #
 # Register (4a) runs before ESO (4b) on purpose: it creates the workload
@@ -77,6 +78,7 @@ for s in $spokes; do
   fi
 
   LAB_CLUSTER="$s" sh lab/eso/install.sh
+  LAB_CLUSTER="$s" sh lab/metrics-server/install.sh
 
   if ckubectl "$s" -n "eso-source-${s}" get secret "local-backend-${s}" -o name >/dev/null 2>&1; then
     echo "OK: source Secret for '$s' already present - not read, not changed"

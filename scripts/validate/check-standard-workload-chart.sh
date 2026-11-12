@@ -90,7 +90,7 @@ fi
 for render in "$render_dev" "$render_uat" "$render_prod"; do
   kinds="$(grep -E '^kind: ' "$render" | sort -u)"
   if [ "$render" = "$render_prod" ]; then
-    expected="$(printf 'kind: ConfigMap\nkind: Deployment\nkind: ExternalSecret\nkind: NetworkPolicy\nkind: PodDisruptionBudget\nkind: SecretStore\nkind: Service\nkind: ServiceAccount')"
+    expected="$(printf 'kind: ConfigMap\nkind: Deployment\nkind: ExternalSecret\nkind: HorizontalPodAutoscaler\nkind: NetworkPolicy\nkind: PodDisruptionBudget\nkind: SecretStore\nkind: Service\nkind: ServiceAccount')"
   else
     expected="$(printf 'kind: ConfigMap\nkind: Deployment\nkind: ExternalSecret\nkind: NetworkPolicy\nkind: SecretStore\nkind: Service\nkind: ServiceAccount')"
   fi
@@ -100,7 +100,7 @@ for render in "$render_dev" "$render_uat" "$render_prod"; do
     fail=1
   fi
 done
-[ "$fail" -eq 0 ] && echo "OK: rendered-kind allowlist matches exactly (ConfigMap, Deployment, ExternalSecret, NetworkPolicy, SecretStore, Service, ServiceAccount; plus PodDisruptionBudget in prod) in all three environments"
+[ "$fail" -eq 0 ] && echo "OK: rendered-kind allowlist matches exactly (ConfigMap, Deployment, ExternalSecret, NetworkPolicy, SecretStore, Service, ServiceAccount; plus PodDisruptionBudget and HorizontalPodAutoscaler in prod) in all three environments"
 
 # --- no Secret renders ---
 for render in "$render_dev" "$render_uat" "$render_prod"; do
@@ -112,9 +112,9 @@ done
 [ "$fail" -eq 0 ] && echo "OK: no Secret rendered in any environment"
 
 # --- deferred optional resources: must not render and must not be schema-exposed ---
-# Phase 2.8.1 implemented PodDisruptionBudget and NetworkPolicy; these
-# three stay deferred (ADR-0006 amendment).
-for kind in Ingress HorizontalPodAutoscaler ServiceMonitor; do
+# Phase 2.8.1 implemented PodDisruptionBudget and NetworkPolicy, Phase
+# 2.8.2 HorizontalPodAutoscaler; these two stay deferred (ADR-0006).
+for kind in Ingress ServiceMonitor; do
   for render in "$render_dev" "$render_uat" "$render_prod"; do
     if grep -q "^kind: ${kind}$" "$render"; then
       echo "FAIL: $render rendered $kind - deferred capability must not render in Phase 2.4" >&2
@@ -122,7 +122,7 @@ for kind in Ingress HorizontalPodAutoscaler ServiceMonitor; do
     fi
   done
 done
-for key in ingress autoscaling serviceMonitor; do
+for key in ingress serviceMonitor; do
   if grep -qE "\"${key}\"" "$CHART/values.schema.json"; then
     echo "FAIL: values.schema.json exposes deferred key '$key' - dead configuration is not authorized" >&2
     fail=1
@@ -1229,6 +1229,66 @@ run_negative_case "unknown key under networkPolicy" 'networkPolicy:
   enabled: true
   ingressFromNamespaces: []
   egressAllowAll: true'
+
+# =============================================================================
+# Phase 2.8.2: HorizontalPodAutoscaler (ADR-0006 amendment).
+# =============================================================================
+hpa="$(yaml_doc "$render_prod" HorizontalPodAutoscaler)"
+dep_prod="$(yaml_doc "$render_prod" Deployment)"
+hpa_ok=1
+printf '%s\n' "$dep_prod" | grep -qE '^  replicas: 2$' || hpa_ok=0
+printf '%s\n' "$dep_prod" | grep -qE '^    eks-gitops-lab-lite.local/replicas-owner: hpa$' || hpa_ok=0
+printf '%s\n' "$hpa" | grep -qE '^apiVersion: autoscaling/v2$' || hpa_ok=0
+printf '%s\n' "$hpa" | grep -qE '^    name: platform-smoke-prod-standard-workload$' || hpa_ok=0
+printf '%s\n' "$hpa" | grep -qE '^  minReplicas: 2$' && printf '%s\n' "$hpa" | grep -qE '^  maxReplicas: 4$' || hpa_ok=0
+printf '%s\n' "$hpa" | grep -qE '^          averageUtilization: 70$' || hpa_ok=0
+printf '%s\n' "$hpa" | grep -qE '^      stabilizationWindowSeconds: 60$' || hpa_ok=0
+if [ "$hpa_ok" -eq 1 ]; then
+  echo "OK: prod: HPA autoscaling/v2 on its own Deployment (2-4 replicas, CPU 70%, scale-down window 60s); the Deployment renders spec.replicas = minReplicas (never omitted: omitting it drops to 1 on the hand-over) and is annotated replicas-owner=hpa"
+else
+  echo "FAIL: prod HPA/Deployment shape is wrong (HPA target/min/max/metric/window, Deployment spec.replicas != minReplicas, or missing replicas-owner)" >&2; fail=1
+fi
+for render in "$render_dev" "$render_uat" "$ov_dev" "$ov_uat" "$ov_prod"; do
+  if grep -q '^kind: HorizontalPodAutoscaler$' "$render"; then echo "FAIL: $render renders an HPA (only prod; aws overlays wait for EKS metrics-server, TAD R-14)" >&2; fail=1; fi
+  yaml_doc "$render" Deployment | grep -qE '^  replicas: [0-9]+$' || { echo "FAIL: $render Deployment lost spec.replicas without an HPA" >&2; fail=1; }
+  yaml_doc "$render" Deployment | grep -q 'replicas-owner' && { echo "FAIL: $render Deployment is annotated replicas-owner without an HPA (Argo CD would stop reconciling its replicas)" >&2; fail=1; }
+done
+[ "$fail" -eq 0 ] && echo "OK: dev, uat and every aws overlay render no HPA, keep a static spec.replicas and carry no replicas-owner annotation"
+pdb_hpa1="$("$HELM" template x "$CHART" -f "$CHART/values-prod.yaml" --set autoscaling.minReplicas=1 | grep -c '^kind: PodDisruptionBudget$' || true)"
+pdb_hpa2="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" --set autoscaling.enabled=true | grep -c '^kind: PodDisruptionBudget$' || true)"
+[ "$pdb_hpa1" = "0" ] && [ "$pdb_hpa2" = "1" ] || { echo "FAIL: with an HPA the PodDisruptionBudget must follow minReplicas (min 1 -> none: got $pdb_hpa1; min 2 with replicaCount 1 -> one: got $pdb_hpa2)" >&2; fail=1; }
+[ "$fail" -eq 0 ] && echo "OK: with an HPA the PodDisruptionBudget follows minReplicas, not replicaCount"
+maxmin_out="$("$HELM" template x "$CHART" -f "$CHART/values-prod.yaml" --set autoscaling.maxReplicas=1 2>&1 || true)"
+if printf '%s' "$maxmin_out" | grep -q 'autoscaling.maxReplicas (1) must be >= minReplicas (2)'; then
+  echo "OK: autoscaling.maxReplicas below minReplicas fails the render"
+else
+  echo "FAIL: autoscaling.maxReplicas below minReplicas rendered" >&2; fail=1
+fi
+run_negative_case "autoscaling target CPU 0%" 'autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 0
+  scaleDownStabilizationSeconds: 60'
+run_negative_case "autoscaling target CPU 101%" 'autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 101
+  scaleDownStabilizationSeconds: 60'
+run_negative_case "autoscaling minReplicas 0" 'autoscaling:
+  enabled: true
+  minReplicas: 0
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+  scaleDownStabilizationSeconds: 60'
+run_negative_case "unknown key under autoscaling" 'autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+  scaleDownStabilizationSeconds: 60
+  targetMemoryUtilizationPercentage: 80'
 
 if [ "$fail" -ne 0 ]; then
   echo "check-standard-workload-chart: FAILED"

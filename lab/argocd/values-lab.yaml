@@ -99,5 +99,9 @@ configs:
       - apiGroups: ["networking.k8s.io"]
         kinds: ["NetworkPolicy"]
         clusters: ["https://eks-gitops-*-control-plane:6443"]
+      # Phase 2.8.2: the workload chart's optional HPA.
+      - apiGroups: ["autoscaling"]
+        kinds: ["HorizontalPodAutoscaler"]
+        clusters: ["https://eks-gitops-*-control-plane:6443"]
   params:
     server.insecure: "false"            # same: quoted string, per argocd-cmd-params-cm.yaml

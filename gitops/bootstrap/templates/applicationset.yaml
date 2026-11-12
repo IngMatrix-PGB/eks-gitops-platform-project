@@ -122,6 +122,18 @@ spec:
         helm:
           valueFiles:
             - "values-{{ $envRef }}.yaml"
+      # Phase 2.8.2: an HPA owns spec.replicas of a Deployment the workload
+      # chart annotates replicas-owner=hpa (the chart renders minReplicas
+      # there). Only those: a static Deployment stays fully reconciled
+      # from Git. ignoreDifferences hides the HPA's changes from the diff,
+      # and RespectIgnoreDifferences (syncOptions below) makes every sync
+      # send the live value instead of the chart's, so Argo CD keeps the
+      # field (never dropped to the API default of 1) without resetting it.
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          jqPathExpressions:
+            - 'select(.metadata.annotations["eks-gitops-lab-lite.local/replicas-owner"] == "hpa") | .spec.replicas'
       destination:
         {{- if $multicluster }}
         name: "{{ "{{" }}.name{{ "}}" }}"
@@ -146,6 +158,7 @@ spec:
           - CreateNamespace=true
           {{- end }}
           - ServerSideApply=true
+          - RespectIgnoreDifferences=true
           # Graduated safety step (official Argo CD sync-options
           # mechanism): defers pruning of anything removed from the
           # desired state to the final sync wave, letting the rest of
