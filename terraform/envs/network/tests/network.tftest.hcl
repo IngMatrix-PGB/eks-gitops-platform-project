@@ -23,6 +23,7 @@ run "correct_subnet_to_az_mapping" {
     vpc_cidr           = "10.0.0.0/16"
     availability_zones = ["us-east-1a", "us-east-1b"]
     owner              = "not-a-real-owner-handle"
+    environment        = "dev"
   }
 
   assert {
@@ -44,6 +45,7 @@ run "single_nat_gateway_default" {
     vpc_cidr           = "10.0.0.0/16"
     availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
     owner              = "not-a-real-owner-handle"
+    environment        = "dev"
   }
 
   assert {
@@ -60,9 +62,63 @@ run "rejects_fewer_than_two_availability_zones" {
     vpc_cidr           = "10.0.0.0/16"
     availability_zones = ["us-east-1a"]
     owner              = "not-a-real-owner-handle"
+    environment        = "dev"
   }
 
   expect_failures = [
     var.availability_zones,
   ]
+}
+
+# --- Phase 3.4.3: NAT layout per environment --------------------------------------
+run "prod_has_one_nat_per_az" {
+  command = apply
+
+  variables {
+    aws_region         = "us-east-1"
+    vpc_cidr           = "10.30.0.0/16"
+    availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
+    owner              = "not-a-real-owner-handle"
+    environment        = "prod"
+  }
+
+  assert {
+    condition     = length(module.vpc.natgw_ids) == 3
+    error_message = "prod must have one NAT Gateway per availability zone."
+  }
+  assert {
+    condition     = module.vpc.name == "eks-gitops-platform-project-prod"
+    error_message = "The VPC is named after its environment."
+  }
+}
+
+run "non_prod_shares_one_nat" {
+  command = apply
+
+  variables {
+    aws_region         = "us-east-1"
+    vpc_cidr           = "10.10.0.0/16"
+    availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
+    owner              = "not-a-real-owner-handle"
+    environment        = "uat"
+  }
+
+  assert {
+    condition     = length(module.vpc.natgw_ids) == 1
+    error_message = "Outside prod a single shared NAT Gateway is used."
+  }
+}
+
+run "rejects_unknown_environment" {
+  command = plan
+
+  variables {
+    aws_region         = "us-east-1"
+    vpc_cidr           = "10.0.0.0/16"
+    availability_zones = ["us-east-1a", "us-east-1b"]
+    owner              = "not-a-real-owner-handle"
+    environment        = "qa"
+  }
+
+  expect_failures = [var.environment]
 }

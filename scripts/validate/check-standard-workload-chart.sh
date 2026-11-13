@@ -1168,8 +1168,10 @@ done
 
 # PDB and NetworkPolicy select exactly the Deployment's own pods
 dep_selector() { yaml_doc "$1" Deployment | awk '/^  selector:/{f=1;next} f&&/^  [a-z]/{exit} f&&/app.kubernetes.io/{gsub(/^ +/,"");print}' | sort | tr '\n' ' '; }
+# Phase 3.4.3a (R-14 closed): every aws overlay renders exactly one
+# NetworkPolicy, now that the EKS VPC CNI enforces it.
 for ov in "$ov_dev" "$ov_uat" "$ov_prod"; do
-  if grep -q '^kind: NetworkPolicy$' "$ov"; then echo "FAIL: $ov renders a NetworkPolicy - aws overlays keep it off until the EKS VPC CNI enforces it (TAD R-14)" >&2; fail=1; fi
+  [ "$(grep -c '^kind: NetworkPolicy$' "$ov")" = "1" ] || { echo "FAIL: $ov must render exactly one NetworkPolicy (R-14 is closed: the EKS VPC CNI enforces it)" >&2; fail=1; }
 done
 [ "$(grep -c '^kind: PodDisruptionBudget$' "$ov_prod")" = "1" ] && [ "$(cat "$ov_dev" "$ov_uat" | grep -c '^kind: PodDisruptionBudget$' || true)" = "0" ] \
   || { echo "FAIL: aws overlays: PodDisruptionBudget must render for prod-aws (2 replicas) only" >&2; fail=1; }
@@ -1182,7 +1184,7 @@ for render in "$render_prod" "$ov_prod"; do
     echo "FAIL: $render PodDisruptionBudget is not maxUnavailable: 1 over exactly the Deployment's selector" >&2; fail=1
   fi
 done
-for render in "$render_dev" "$render_uat" "$render_prod"; do
+for render in "$render_dev" "$render_uat" "$render_prod" "$ov_dev" "$ov_uat" "$ov_prod"; do
   np="$(yaml_doc "$render" NetworkPolicy)"
   np_sel="$(printf '%s\n' "$np" | awk '/^  podSelector:/{f=1;next} f&&/^  [a-z]/{exit} f&&/app.kubernetes.io/{gsub(/^ +/,"");print}' | sort | tr '\n' ' ')"
   ok=1
@@ -1193,7 +1195,7 @@ for render in "$render_dev" "$render_uat" "$render_prod"; do
   printf '%s\n' "$np" | grep -qE 'namespaceSelector: \{\}|ipBlock:|0\.0\.0\.0/0' && ok=0
   [ "$ok" -eq 1 ] || { echo "FAIL: $render NetworkPolicy is not exactly: own pods, Ingress+Egress, http from this namespace, DNS-only egress" >&2; fail=1; }
 done
-[ "$fail" -eq 0 ] && echo "OK: prod PodDisruptionBudgets are maxUnavailable: 1 over the Deployment's own selector; every NetworkPolicy selects only its own pods, allows http from its namespace, DNS-only egress, no ipBlock or any-namespace rule"
+[ "$fail" -eq 0 ] && echo "OK: prod PodDisruptionBudgets are maxUnavailable: 1 over the Deployment's own selector; every NetworkPolicy (local and aws) selects only its own pods, allows http from its namespace, DNS-only egress, no ipBlock or any-namespace rule"
 
 # PDB appears only with >= 2 replicas; ingressFromNamespaces adds one selector each
 pdb1="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" | grep -c '^kind: PodDisruptionBudget$' || true)"
@@ -1248,12 +1250,24 @@ if [ "$hpa_ok" -eq 1 ]; then
 else
   echo "FAIL: prod HPA/Deployment shape is wrong (HPA target/min/max/metric/window, Deployment spec.replicas != minReplicas, or missing replicas-owner)" >&2; fail=1
 fi
-for render in "$render_dev" "$render_uat" "$ov_dev" "$ov_uat" "$ov_prod"; do
-  if grep -q '^kind: HorizontalPodAutoscaler$' "$render"; then echo "FAIL: $render renders an HPA (only prod; aws overlays wait for EKS metrics-server, TAD R-14)" >&2; fail=1; fi
+for render in "$render_dev" "$render_uat" "$ov_dev" "$ov_uat"; do
+  if grep -q '^kind: HorizontalPodAutoscaler$' "$render"; then echo "FAIL: $render renders an HPA (only prod and prod-aws scale)" >&2; fail=1; fi
   yaml_doc "$render" Deployment | grep -qE '^  replicas: [0-9]+$' || { echo "FAIL: $render Deployment lost spec.replicas without an HPA" >&2; fail=1; }
   yaml_doc "$render" Deployment | grep -q 'replicas-owner' && { echo "FAIL: $render Deployment is annotated replicas-owner without an HPA (Argo CD would stop reconciling its replicas)" >&2; fail=1; }
 done
-[ "$fail" -eq 0 ] && echo "OK: dev, uat and every aws overlay render no HPA, keep a static spec.replicas and carry no replicas-owner annotation"
+[ "$fail" -eq 0 ] && echo "OK: dev, uat, dev-aws and uat-aws render no HPA, keep a static spec.replicas and carry no replicas-owner annotation"
+# Phase 3.4.3a (R-14 closed): prod-aws scales like prod, on the EKS
+# metrics-server add-on, with the chart's default 300s scale-down window.
+hpa_aws="$(yaml_doc "$ov_prod" HorizontalPodAutoscaler)"
+dep_aws="$(yaml_doc "$ov_prod" Deployment)"
+if printf '%s\n' "$hpa_aws" | grep -qE '^  minReplicas: 2$' && printf '%s\n' "$hpa_aws" | grep -qE '^  maxReplicas: 4$' \
+   && printf '%s\n' "$hpa_aws" | grep -qE '^      stabilizationWindowSeconds: 300$' \
+   && printf '%s\n' "$dep_aws" | grep -qE '^    eks-gitops-lab-lite.local/replicas-owner: hpa$' \
+   && printf '%s\n' "$dep_aws" | grep -qE '^  replicas: 2$'; then
+  echo "OK: prod-aws: HPA 2-4 replicas with a 300s scale-down window; the Deployment renders minReplicas and is annotated replicas-owner=hpa"
+else
+  echo "FAIL: prod-aws must render the HPA (2-4, 300s window) with its Deployment annotated replicas-owner=hpa and replicas = minReplicas (R-14 closed)" >&2; fail=1
+fi
 pdb_hpa1="$("$HELM" template x "$CHART" -f "$CHART/values-prod.yaml" --set autoscaling.minReplicas=1 | grep -c '^kind: PodDisruptionBudget$' || true)"
 pdb_hpa2="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" --set autoscaling.enabled=true | grep -c '^kind: PodDisruptionBudget$' || true)"
 [ "$pdb_hpa1" = "0" ] && [ "$pdb_hpa2" = "1" ] || { echo "FAIL: with an HPA the PodDisruptionBudget must follow minReplicas (min 1 -> none: got $pdb_hpa1; min 2 with replicaCount 1 -> one: got $pdb_hpa2)" >&2; fail=1; }

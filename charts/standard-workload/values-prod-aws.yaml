@@ -36,10 +36,10 @@ externalSecret:
     region: "us-east-1"
     secretName: "eks-gitops-platform-project/prod/backend"
 
-# Phase 2.8.1: off until the EKS VPC CNI enforces network policy (TAD
-# R-14) - a NetworkPolicy without enforcement would be dead config.
+# Phase 3.4.3a closes TAD R-14: terraform/envs/eks runs the VPC CNI add-on
+# with enableNetworkPolicy, so the policy is enforced on EKS too.
 networkPolicy:
-  enabled: false
+  enabled: true
 
 # Phase 2.8.1: EKS nodes carry topology.kubernetes.io/zone and prod runs
 # across several zones - two prod replicas must never share one.
@@ -47,3 +47,15 @@ topologySpread:
   maxSkew: 1
   hostname: ScheduleAnyway
   zone: DoNotSchedule
+
+# Phase 3.4.3a: metrics-server runs as an EKS add-on (terraform/envs/eks),
+# so prod-aws scales like prod (chart default 300s scale-down window). A
+# first deploy creates the Deployment, so no replicas hand-over is needed;
+# moving an already-running static prod-aws under the HPA needs
+# `make workload-hpa-handover` first (ADR-0006 amendment, Phase 2.8.2).
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+  scaleDownStabilizationSeconds: 300
