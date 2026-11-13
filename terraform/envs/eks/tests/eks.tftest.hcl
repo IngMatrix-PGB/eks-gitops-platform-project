@@ -88,6 +88,18 @@ mock_provider "aws" {
   }
 
   override_resource {
+    target          = aws_iam_role.argocd_manager
+    override_during = plan
+    values          = { arn = "arn:aws:iam::aws:role/eks-gitops-dev-argocd-manager" }
+  }
+
+  override_resource {
+    target          = aws_iam_role.argocd_hub
+    override_during = plan
+    values          = { arn = "arn:aws:iam::aws:role/eks-gitops-platform-argocd", id = "eks-gitops-platform-argocd" }
+  }
+
+  override_resource {
     target          = aws_iam_role.vpc_cni
     override_during = plan
     values          = { arn = "arn:aws:iam::aws:role/eks-gitops-dev-vpc-cni" }
@@ -108,18 +120,16 @@ variables {
   coredns_addon_version            = "v1.11.4-eksbuild.2"
   kube_proxy_addon_version         = "v1.36.0-eksbuild.1"
   metrics_server_addon_version     = "v0.7.2-eksbuild.1"
+  # Generated, never a committed 12-digit literal (check-forbidden-terms).
+  hub_account_id = format("%012d", 3)
 }
 
 run "correct_access_entries_wiring" {
   command = plan
 
   assert {
-    condition     = length(module.eks.access_entries) == 2
-    error_message = "expected exactly two Access Entries (admin, breakglass)"
-  }
-  assert {
-    condition     = contains(keys(module.eks.access_entries), "admin") && contains(keys(module.eks.access_entries), "breakglass")
-    error_message = "expected Access Entries keyed \"admin\" and \"breakglass\""
+    condition     = toset(keys(module.eks.access_entries)) == toset(["admin", "breakglass", "argocd"])
+    error_message = "A spoke has exactly three Access Entries: admin, breakglass and the hub's Argo CD (Phase 3.4.4a)."
   }
 }
 
@@ -221,7 +231,9 @@ run "karpenter_on_spokes" {
 run "hub_has_no_karpenter" {
   command = plan
   variables {
-    environment = "platform"
+    environment       = "platform"
+    hub_account_id    = null
+    spoke_account_ids = { dev = format("%012d", 11), uat = format("%012d", 12), prod = format("%012d", 13) }
   }
 
   assert {
@@ -232,6 +244,88 @@ run "hub_has_no_karpenter" {
     condition     = local.cluster_name == "eks-gitops-platform"
     error_message = "The hub cluster is named eks-gitops-platform."
   }
+}
+
+# --- Phase 3.4.4a: hub-to-spoke Argo CD identity (TAD R-05) ---------------------
+run "spoke_argocd_manager_identity" {
+  command = plan
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_role.argocd_manager[0].assume_role_policy).Statement[0].Principal.AWS == "arn:aws:iam::${format("%012d", 3)}:root" &&
+      jsondecode(aws_iam_role.argocd_manager[0].assume_role_policy).Statement[0].Condition.ArnEquals["aws:PrincipalArn"] == "arn:aws:iam::${format("%012d", 3)}:role/eks-gitops-platform-argocd"
+    )
+    error_message = "A spoke's argocd-manager role may be assumed only by the hub's Argo CD role."
+  }
+  assert {
+    condition     = aws_iam_role.argocd_manager[0].name == "eks-gitops-dev-argocd-manager" && length(aws_iam_role_policy.argocd_hub) == 0 && length(aws_iam_role.argocd_hub) == 0
+    error_message = "A spoke has its argocd-manager role and no hub Argo CD role or policy."
+  }
+  assert {
+    condition     = local.argocd_access_entry_resolved.argocd.type == "STANDARD" && local.argocd_access_entry_resolved.argocd.kubernetes_groups == ["argocd-manager"]
+    error_message = "The hub's Argo CD maps to the argocd-manager Kubernetes group through a STANDARD access entry."
+  }
+  assert {
+    condition     = !can(local.argocd_access_entry_resolved.argocd.policy_associations)
+    error_message = "The Argo CD access entry must carry no EKS access policy - permissions come only from the namespaced Role (platform/spoke-access/role.yaml)."
+  }
+}
+
+run "hub_argocd_identity" {
+  command = plan
+  variables {
+    environment       = "platform"
+    hub_account_id    = null
+    spoke_account_ids = { dev = format("%012d", 11), uat = format("%012d", 12), prod = format("%012d", 13) }
+  }
+
+  assert {
+    condition = toset(jsondecode(aws_iam_role_policy.argocd_hub[0].policy).Statement[0].Resource) == toset([
+      "arn:aws:iam::${format("%012d", 11)}:role/eks-gitops-dev-argocd-manager",
+      "arn:aws:iam::${format("%012d", 12)}:role/eks-gitops-uat-argocd-manager",
+      "arn:aws:iam::${format("%012d", 13)}:role/eks-gitops-prod-argocd-manager",
+    ])
+    error_message = "The hub's Argo CD may assume exactly the three spoke argocd-manager roles - nothing else."
+  }
+  assert {
+    condition     = toset(jsondecode(aws_iam_role_policy.argocd_hub[0].policy).Statement[0].Action) == toset(["sts:AssumeRole", "sts:TagSession"]) && length(jsondecode(aws_iam_role_policy.argocd_hub[0].policy).Statement) == 1
+    error_message = "The hub role's only permission is sts:AssumeRole/TagSession on the spoke roles."
+  }
+  assert {
+    condition     = toset([for a in aws_eks_pod_identity_association.argocd_hub : "${a.namespace}/${a.service_account}"]) == toset(["argocd/argocd-application-controller", "argocd/argocd-server"])
+    error_message = "Only Argo CD's application controller and server get the hub role (Pod Identity)."
+  }
+  assert {
+    condition     = length(aws_iam_role.argocd_manager) == 0 && length(local.argocd_access_entry_resolved) == 0
+    error_message = "The hub has no argocd-manager role and no Argo CD access entry of its own."
+  }
+}
+
+run "rejects_spoke_without_hub_account" {
+  command = plan
+  variables {
+    hub_account_id = null
+  }
+  expect_failures = [var.hub_account_id]
+}
+
+run "rejects_hub_without_spoke_accounts" {
+  command = plan
+  variables {
+    environment    = "platform"
+    hub_account_id = null
+  }
+  expect_failures = [var.spoke_account_ids]
+}
+
+run "rejects_malformed_spoke_account" {
+  command = plan
+  variables {
+    environment       = "platform"
+    hub_account_id    = null
+    spoke_account_ids = { dev = "dev", uat = format("%012d", 12), prod = format("%012d", 13) }
+  }
+  expect_failures = [var.spoke_account_ids]
 }
 
 # --- rejections ----------------------------------------------------------------

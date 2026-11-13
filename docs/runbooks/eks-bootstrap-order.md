@@ -30,6 +30,7 @@ running it requires an AWS account and budget that do not exist today.
 |---|---|---|
 | AWS account / credentials | Terraform, out-of-band | Never stored in this repo |
 | `aws_region` | `terraform/envs/{network,eks,identity}` | e.g. `us-east-1` — no default is treated as operative |
+| `hub_account_id` / `spoke_account_ids` | `terraform/envs/eks` | Phase 3.4.4a: a spoke needs the hub (platform) account ID; the hub needs the dev, uat and prod account IDs. Never committed |
 | `admin_principal_arn`, `breakglass_principal_arn` | `terraform/envs/eks` | Real IAM principal ARNs, provided at apply time |
 | `environment` | `terraform/envs/{network,eks,identity}` | Which account the apply targets (ADR-0016): `platform`, `dev`, `uat` or `prod`. `envs/identity` is applied only in `dev`, `uat` and `prod`. Both `envs/eks` and `envs/identity` derive the cluster name `eks-gitops-<environment>`, so it matches without being passed |
 | `vpc_id`, `private_subnet_ids` | `terraform/envs/eks` | Terraform outputs from `terraform/envs/network`, wired explicitly, not assumed |
@@ -48,6 +49,17 @@ running it requires an AWS account and budget that do not exist today.
    `admin_principal_arn`/`breakglass_principal_arn`/`cluster_name`.
    Produces `cluster_name`, `cluster_endpoint` outputs and installs the
    Pod Identity Agent addon.
+2a. **Spoke access for the hub's Argo CD (each spoke account).** With
+   the spoke's admin access, apply `platform/spoke-access/role.yaml`
+   with `SPOKE_NAMESPACE` replaced by the spoke's namespace, plus a
+   RoleBinding of that Role to the Kubernetes group `argocd-manager`.
+   Step 2 already created the spoke's `argocd-manager` IAM role and the
+   STANDARD access entry that maps it to that group (no EKS access
+   policy). This is the EKS counterpart of `make mc-spoke-register`'s
+   spoke-side objects, and the same Role definition. The hub registers
+   the spoke with a cluster Secret whose `awsAuthConfig` names the
+   spoke's cluster and the `argocd_manager_role_arn` output — never a
+   token (Phase 3.4.4b).
 3. **Terraform: identity (each spoke account).** Run `terraform apply`
    in `terraform/envs/identity` with `environment` set to that spoke
    (`dev`, `uat` or `prod`). The namespace, ServiceAccount and secret

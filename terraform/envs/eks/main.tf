@@ -20,6 +20,17 @@ locals {
   karpenter_node_additional_policies = {
     AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
   }
+
+  # Phase 3.4.4a (TAD R-05): hub-to-spoke Argo CD identity. Fixed role
+  # names on both sides, so each side can name the other's role without
+  # reading its state.
+  is_hub                   = var.environment == "platform"
+  argocd_hub_role_name     = "eks-gitops-platform-argocd"
+  argocd_manager_role_name = "eks-gitops-${var.environment}-argocd-manager"
+  argocd_manager_group     = "argocd-manager"
+  argocd_hub_service_accts = ["argocd-application-controller", "argocd-server"]
+  argocd_spoke_role_arns   = local.is_hub ? [for env in sort(keys(var.spoke_account_ids)) : "arn:aws:iam::${var.spoke_account_ids[env]}:role/eks-gitops-${env}-argocd-manager"] : []
+  argocd_hub_role_arn      = local.is_hub ? null : "arn:aws:iam::${var.hub_account_id}:role/${local.argocd_hub_role_name}"
 }
 
 locals {
@@ -158,7 +169,7 @@ module "eks" {
     }
   }
 
-  access_entries = {
+  access_entries = merge(local.argocd_access_entry_resolved, {
     admin = {
       principal_arn = var.admin_principal_arn
       policy_associations = {
@@ -181,7 +192,7 @@ module "eks" {
         }
       }
     }
-  }
+  })
 
   # Phase 3.4.3: see local.eks_managed_node_groups (kept in a local so
   # terraform test can assert the node group configuration directly).
@@ -216,5 +227,85 @@ module "karpenter" {
   node_iam_role_attach_cni_policy   = false
   node_iam_role_additional_policies = local.karpenter_node_additional_policies
 
+  tags = module.tags.tags
+}
+
+# --- Phase 3.4.4a: hub-to-spoke Argo CD identity (TAD R-05) --------------------
+# Hub (platform): Argo CD's application controller and server get one role
+# through Pod Identity; it may only assume the three spoke argocd-manager
+# roles. Spokes: an argocd-manager role with no IAM permissions, assumable
+# only by that hub role, mapped by the access entry above to the
+# argocd-manager Kubernetes group. Argo CD's cluster Secret for a spoke
+# carries awsAuthConfig (clusterName, roleARN) - never a token.
+
+locals {
+  # A spoke maps its argocd-manager role to a Kubernetes group with NO EKS
+  # access policy: its only permissions come from the Role in
+  # platform/spoke-access/role.yaml, bound to that group in the spoke
+  # namespace (AmazonEKSEditPolicy would include Secrets).
+  argocd_access_entry_resolved = local.is_hub ? {} : {
+    argocd = {
+      principal_arn     = aws_iam_role.argocd_manager[0].arn
+      type              = "STANDARD"
+      kubernetes_groups = [local.argocd_manager_group]
+    }
+  }
+}
+
+resource "aws_iam_role" "argocd_hub" {
+  count = local.is_hub ? 1 : 0
+
+  name = local.argocd_hub_role_name
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "pods.eks.amazonaws.com" }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+    }]
+  })
+  tags = module.tags.tags
+}
+
+resource "aws_iam_role_policy" "argocd_hub" {
+  count = local.is_hub ? 1 : 0
+
+  name = "assume-spoke-argocd-manager"
+  role = aws_iam_role.argocd_hub[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "AssumeSpokeArgocdManager"
+      Effect   = "Allow"
+      Action   = ["sts:AssumeRole", "sts:TagSession"]
+      Resource = local.argocd_spoke_role_arns
+    }]
+  })
+}
+
+resource "aws_eks_pod_identity_association" "argocd_hub" {
+  for_each = local.is_hub ? toset(local.argocd_hub_service_accts) : toset([])
+
+  cluster_name    = module.eks.cluster_name
+  namespace       = "argocd"
+  service_account = each.key
+  role_arn        = aws_iam_role.argocd_hub[0].arn
+  tags            = module.tags.tags
+}
+
+resource "aws_iam_role" "argocd_manager" {
+  count = local.is_hub ? 0 : 1
+
+  name = local.argocd_manager_role_name
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "OnlyTheHubArgocdRole"
+      Effect    = "Allow"
+      Principal = { AWS = "arn:aws:iam::${var.hub_account_id}:root" }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+      Condition = { ArnEquals = { "aws:PrincipalArn" = local.argocd_hub_role_arn } }
+    }]
+  })
   tags = module.tags.tags
 }
