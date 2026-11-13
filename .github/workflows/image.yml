@@ -1,10 +1,14 @@
 name: image
 
 # Phase 5.1a: build, scan and SBOM for the first-party image (apps/smoke)
-# on every change that can affect it. Nothing is pushed or signed here
-# (Phase 5.1b adds that, on main only). Every step is the same make
-# target a developer runs locally; the only actions used are GitHub-owned
+# on every change that can affect it. Phase 5.1b: on a push to main only,
+# the publish job pushes a linux/amd64 + linux/arm64 index to GHCR,
+# re-scans every platform, signs it keylessly (cosign, GitHub OIDC),
+# attests a CycloneDX SBOM per platform and SLSA build provenance, then
+# verifies all of it against the exact signer identity. Every step is a
+# make target a developer can run; the only actions used are GitHub-owned
 # and pinned by commit SHA, as the repository's Actions policy requires.
+# Write permissions exist only on the publish job (check-supply-chain).
 on:
   pull_request:
     branches: [main]
@@ -57,6 +61,11 @@ jobs:
       - name: make image-sbom
         run: make image-sbom
 
+      - name: make image-build-multi
+        # Cross-compiled linux/amd64 + linux/arm64 index; proves the
+        # arm64 variant (the kind lab on Apple silicon) builds on every PR.
+        run: make image-build-multi
+
       - name: Upload SBOM
         # actions/upload-artifact v7.0.2.
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -65,3 +74,71 @@ jobs:
           path: .tools/out/image/smoke.cdx.json
           if-no-files-found: error
           retention-days: 30
+
+  publish:
+    name: publish, sign, attest, verify
+    needs: build-scan-sbom
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        # actions/checkout v7.0.1.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: make tools-install
+        run: make tools-install
+
+      - name: Log in to GHCR
+        # The job's own short-lived token, through stdin; never echoed.
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: make image-publish
+        run: make image-publish
+
+      - name: make image-scan-remote
+        run: make image-scan-remote
+
+      - name: make image-sign
+        run: make image-sign
+
+      - name: Read the published digest
+        id: ref
+        run: |
+          ref="$(cat .tools/out/image/published.ref)"
+          echo "name=${ref%@*}" >> "$GITHUB_OUTPUT"
+          echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
+
+      - name: SLSA build provenance
+        # actions/attest-build-provenance v4.2.2.
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ steps.ref.outputs.name }}
+          subject-digest: ${{ steps.ref.outputs.digest }}
+          push-to-registry: true
+
+      - name: make image-verify
+        run: make image-verify
+
+      - name: Summary
+        run: |
+          {
+            echo "### Published image"
+            echo
+            echo "\`$(cat .tools/out/image/published.ref)\`"
+            echo
+            echo "Signed by this workflow on main, CycloneDX SBOM attested per platform, SLSA provenance attached. Promote this digest (Phase 5.1c)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io

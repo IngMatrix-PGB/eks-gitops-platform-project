@@ -559,6 +559,17 @@ EOF
 }
 run_case "id-token: write in a workflow is rejected" reject setup_id_token_write
 
+# Phase 5.1b: the Sigstore exception is image.yml only - a lookalike name
+# is still rejected.
+setup_id_token_write_lookalike() {
+  d="$1"
+  cat > "$d/.github/workflows/image-sign.yml" <<'EOF'
+permissions:
+  id-token: write
+EOF
+}
+run_case "id-token: write in a workflow other than image.yml is rejected" reject setup_id_token_write_lookalike
+
 setup_aws_actions() {
   d="$1"
   cat >> "$d/.github/workflows/validate.yml" <<'EOF'
