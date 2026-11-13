@@ -10,6 +10,11 @@ locals {
   # Phase 3.4.3: prod survives the loss of one AZ's NAT; elsewhere one
   # shared NAT keeps the cost down.
   single_nat_gateway = var.single_nat_gateway != null ? var.single_nat_gateway : var.environment != "prod"
+
+  # Phase 3.4.3b: on spokes Karpenter discovers the private subnets by
+  # this tag. Its value is the cluster name terraform/envs/eks derives
+  # for the same environment (eks-gitops-<environment>).
+  private_subnet_tags = var.environment == "platform" ? {} : { "karpenter.sh/discovery" = "eks-gitops-${var.environment}" }
 }
 
 # VPC/subnets/NAT/S3-Gateway-endpoint. Public subnets are used only for
@@ -34,6 +39,8 @@ module "vpc" {
 
   enable_nat_gateway = true
   single_nat_gateway = local.single_nat_gateway
+
+  private_subnet_tags = local.private_subnet_tags
 
   # VPC endpoints (S3 Gateway, and Interface endpoints for STS/ECR/
   # Secrets Manager in the "closer to production" shape) are

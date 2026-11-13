@@ -9,6 +9,17 @@ module "tags" {
 locals {
   cluster_name  = coalesce(var.cluster_name, "eks-gitops-${var.environment}")
   capacity_type = coalesce(var.capacity_type, var.environment == "prod" ? "ON_DEMAND" : "SPOT")
+
+  # Phase 3.4.3b: workload capacity on the spokes comes from Karpenter.
+  # The hub runs only Argo CD and add-ons on its fixed node group.
+  karpenter_enabled = var.environment != "platform"
+
+  # Karpenter's node role: the module's worker and image-pull policies
+  # plus SSM access. Never the CNI policy - aws-node has its own Pod
+  # Identity role (aws_iam_role.vpc_cni).
+  karpenter_node_additional_policies = {
+    AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  }
 }
 
 locals {
@@ -25,6 +36,16 @@ locals {
 
       # CNI credentials come from aws_iam_role.vpc_cni (Pod Identity).
       iam_role_attach_cni_policy = false
+
+      # On spokes only add-ons and controllers (Karpenter included) run
+      # here; workloads land on Karpenter-provisioned nodes.
+      taints = local.karpenter_enabled ? {
+        critical_addons_only = {
+          key    = "CriticalAddonsOnly"
+          value  = "true"
+          effect = "NO_SCHEDULE"
+        }
+      } : {}
 
       # IMDSv2 enforced - mirrors the EC2.8 hardening pattern already
       # applied elsewhere (canonical plan S9.1).
@@ -165,6 +186,35 @@ module "eks" {
   # Phase 3.4.3: see local.eks_managed_node_groups (kept in a local so
   # terraform test can assert the node group configuration directly).
   eks_managed_node_groups = local.eks_managed_node_groups
+
+  # Phase 3.4.3b: Karpenter discovers the node security group by this tag
+  # (the private subnets carry the same tag, set in terraform/envs/network).
+  node_security_group_tags = local.karpenter_enabled ? { "karpenter.sh/discovery" = local.cluster_name } : {}
+
+  tags = module.tags.tags
+}
+
+# --- Phase 3.4.3b: Karpenter (IaC only) ----------------------------------------
+# Controller identity (Pod Identity on kube-system/karpenter), the
+# interruption queue with managed encryption and its EventBridge rules,
+# the node role and its EKS access entry. The Helm install and the
+# NodePool/EC2NodeClass are delivered through GitOps in Phase 6.4.
+module "karpenter" {
+  source  = "terraform-aws-modules/eks/aws//modules/karpenter"
+  version = "21.25.0"
+  count   = local.karpenter_enabled ? 1 : 0
+
+  cluster_name = module.eks.cluster_name
+
+  create_pod_identity_association = true
+  namespace                       = "kube-system"
+  service_account                 = "karpenter"
+
+  enable_spot_termination   = true
+  queue_managed_sse_enabled = true
+
+  node_iam_role_attach_cni_policy   = false
+  node_iam_role_additional_policies = local.karpenter_node_additional_policies
 
   tags = module.tags.tags
 }

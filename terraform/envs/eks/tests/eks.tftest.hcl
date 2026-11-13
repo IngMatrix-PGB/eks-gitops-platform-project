@@ -47,6 +47,46 @@ mock_provider "aws" {
     }
   }
 
+  override_data {
+    target = module.karpenter[0].data.aws_partition.current[0]
+    values = { partition = "aws", dns_suffix = "amazonaws.com" }
+  }
+
+  override_data {
+    target = module.karpenter[0].data.aws_caller_identity.current[0]
+    values = { account_id = "aws", arn = "arn:aws:iam::aws:root", user_id = "AIDANOTAREALUSERID" }
+  }
+
+  override_data {
+    target = module.karpenter[0].data.aws_region.current[0]
+    values = { region = "us-east-1", name = "us-east-1" }
+  }
+
+  override_data {
+    target = module.karpenter[0].data.aws_service_principal.ec2[0]
+    values = { name = "ec2.amazonaws.com" }
+  }
+
+  override_data {
+    target = module.karpenter[0].data.aws_iam_policy_document.controller_assume_role[0]
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+
+  override_data {
+    target = module.karpenter[0].data.aws_iam_policy_document.node_assume_role[0]
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+
+  override_data {
+    target = module.karpenter[0].data.aws_iam_policy_document.controller[0]
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+
+  override_data {
+    target = module.karpenter[0].data.aws_iam_policy_document.queue[0]
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+
   override_resource {
     target          = aws_iam_role.vpc_cni
     override_during = plan
@@ -158,6 +198,39 @@ run "system_node_group_without_cni_policy" {
   assert {
     condition     = local.eks_managed_node_groups.system.metadata_options.http_tokens == "required" && local.eks_managed_node_groups.system.metadata_options.http_put_response_hop_limit == 1
     error_message = "Nodes require IMDSv2 with a hop limit of 1."
+  }
+}
+
+run "karpenter_on_spokes" {
+  command = plan
+
+  assert {
+    condition     = length(module.karpenter) == 1 && module.karpenter[0].namespace == "kube-system" && module.karpenter[0].service_account == "karpenter"
+    error_message = "A spoke runs Karpenter, with its controller identity on kube-system/karpenter (Pod Identity)."
+  }
+  assert {
+    condition     = local.karpenter_node_additional_policies == { AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" }
+    error_message = "Karpenter's node role adds only SSM access - never the CNI policy."
+  }
+  assert {
+    condition     = local.eks_managed_node_groups.system.taints.critical_addons_only.key == "CriticalAddonsOnly" && local.eks_managed_node_groups.system.taints.critical_addons_only.effect == "NO_SCHEDULE"
+    error_message = "On a spoke the system node group is tainted CriticalAddonsOnly - workloads go to Karpenter nodes."
+  }
+}
+
+run "hub_has_no_karpenter" {
+  command = plan
+  variables {
+    environment = "platform"
+  }
+
+  assert {
+    condition     = length(module.karpenter) == 0 && length(local.eks_managed_node_groups.system.taints) == 0
+    error_message = "The hub runs no Karpenter and its system node group is untainted (Argo CD runs there)."
+  }
+  assert {
+    condition     = local.cluster_name == "eks-gitops-platform"
+    error_message = "The hub cluster is named eks-gitops-platform."
   }
 }
 

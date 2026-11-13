@@ -211,3 +211,23 @@ security-services guardrails exempt.
     types recorded in every region, an S3 account block flag set to
     false, and an SCP that denies the baseline's
     `s3:PutAccountPublicAccessBlock` without the exemption.
+
+## Amendment (Phase 3.4.3b, 2026-11-13): container registry
+
+`terraform/envs/registry` is applied in the `platform` account. It
+creates one ECR repository per workload image:
+
+- `IMMUTABLE` tags, so a release tag never moves to a different image;
+- scan on push (basic scanning; enhanced scanning is evaluated with the
+  image CI in Phase 5.1);
+- KMS encryption;
+- never force-deleted.
+
+A lifecycle policy expires untagged images after 7 days and keeps the
+last 30 `v*` releases. The repository policy lets only the `dev`, `uat`
+and `prod` accounts pull (the three pull actions, the three account
+roots, conditioned on `aws:PrincipalOrgID`), with no `*` principal and
+no push or delete action. Images are pushed only from the platform
+account. `terraform test` runs 8 cases; three mutation checks (a
+mutable repository, `ecr:*`, a `*` principal) are each caught by a
+failing test.

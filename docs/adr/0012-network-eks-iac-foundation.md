@@ -222,3 +222,29 @@ or `prod`.
   `envs/eks` (10 runs). Two mutation checks were run, each caught by a
   failing test: an add-on whose version is resolved by a lookup instead
   of being pinned, and the VPC CNI with NetworkPolicy off.
+
+## Amendment (Phase 3.4.3b, 2026-11-13): Karpenter
+
+Spokes (`dev`, `uat`, `prod`) get Karpenter for workload capacity. The
+hub does not: it runs only Argo CD and add-ons on its fixed `system`
+node group.
+
+- **What this phase builds:** only the AWS side, with
+  `terraform-aws-modules/eks/aws//modules/karpenter` 21.25.0:
+  - the controller identity, as Pod Identity on `kube-system/karpenter`;
+  - the interruption queue with managed encryption, and its EventBridge
+    rules (spot interruption, rebalance, instance state change);
+  - the node role and its `EC2_LINUX` access entry.
+  - The node role carries the module's worker and image-pull policies
+    plus SSM, never the CNI policy.
+- **On the spoke `system` node group:** a `CriticalAddonsOnly`
+  taint, so only add-ons and controllers run there and workloads land on
+  Karpenter-provisioned nodes.
+- **Discovery tags:** the private subnets and the node security group
+  carry `karpenter.sh/discovery = eks-gitops-<environment>`.
+- **Delivered through GitOps in Phase 6.4:** Karpenter's Helm install
+  and its `NodePool`/`EC2NodeClass`. The `karpenter_queue_name` and
+  `karpenter_node_iam_role_name` outputs feed them.
+- **Validation:** `terraform test` in `envs/eks` (12 runs) and
+  `envs/network` (8 runs). A mutation that adds the CNI policy to
+  Karpenter's node role is caught by a failing test.
