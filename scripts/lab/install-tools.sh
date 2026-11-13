@@ -124,6 +124,7 @@ verify_executable() {
     terraform) "$dest" version >/dev/null 2>&1 ;;
     trivy) "$dest" --version >/dev/null 2>&1 ;;
     syft) "$dest" version >/dev/null 2>&1 ;;
+    cosign) "$dest" version >/dev/null 2>&1 ;;
     *) return 1 ;;
   esac
 }

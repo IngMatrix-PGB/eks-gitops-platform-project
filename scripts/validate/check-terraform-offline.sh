@@ -294,14 +294,19 @@ done < <(find terraform -name '*.tftest.hcl' -print0 2>/dev/null)
 
 # --- 8. id-token: write / aws-actions/* / AWS credential variables or
 # secrets never appear in any GitHub Actions workflow. -----------------
+# Phase 5.1b: one narrow exception - .github/workflows/image.yml may hold
+# id-token: write for Sigstore keyless signing (GitHub OIDC to Fulcio,
+# never to AWS). check-supply-chain restricts it further to that file's
+# publish job, on push to main only. Every other workflow, and every AWS
+# rule below, is unchanged.
 workflow_dir=".github/workflows"
 if [ -d "$workflow_dir" ]; then
-  id_token_hits="$(grep -rEn '^[[:space:]]*id-token[[:space:]]*:[[:space:]]*write' "$workflow_dir" 2>/dev/null || true)"
+  id_token_hits="$(grep -rEn '^[[:space:]]*id-token[[:space:]]*:[[:space:]]*write' "$workflow_dir" 2>/dev/null | grep -v "^${workflow_dir}/image\.yml:" || true)"
   if [ -n "$id_token_hits" ]; then
-    bad "id-token: write found in a workflow (not authorized - no OIDC/AWS auth in Phase 2.7.1):"
+    bad "id-token: write found in a workflow other than image.yml (not authorized - no OIDC/AWS auth; Sigstore signing lives only in image.yml):"
     printf '%s\n' "$id_token_hits" >&2
   else
-    ok "no id-token: write in any workflow"
+    ok "no id-token: write in any workflow except image.yml (Sigstore signing, Phase 5.1b)"
   fi
 
   aws_actions_hits="$(grep -rEn 'aws-actions/' "$workflow_dir" 2>/dev/null || true)"

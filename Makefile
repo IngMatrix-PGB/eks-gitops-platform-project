@@ -2,7 +2,7 @@
 
 .PHONY: help validate check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked \
 	check-standard-workload-chart check-spoke-access check-supply-chain check-tool-platforms-regression \
-	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle lab-test-eks-identity-offline eks-test-spoke-secret image-build image-scan image-sbom image-all \
+	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle lab-test-eks-identity-offline eks-test-spoke-secret image-build image-scan image-sbom image-all image-build-multi image-publish image-scan-remote image-sign image-verify image-test-verify \
 	argocd-chart-fetch argocd-render argocd-install argocd-status argocd-uninstall argocd-port-forward \
 	argocd-test-runtime-health argocd-test-lifecycle \
 	gitops-repo-setup gitops-repo-check gitops-repo-remove gitops-render gitops-bootstrap \
@@ -26,7 +26,7 @@ help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-supply-chain check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-supply-chain check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -174,6 +174,24 @@ image-sbom: ## Phase 5.1a: syft - CycloneDX SBOM at .tools/out/image/smoke.cdx.j
 
 image-all: ## Phase 5.1a: image-build + image-scan + image-sbom
 	@sh scripts/image/image.sh all
+
+image-build-multi: ## Phase 5.1b: linux/amd64 + linux/arm64 OCI index (cross-compiled, pinned BuildKit), both platforms required
+	@sh scripts/image/image.sh build-multi
+
+image-publish: ## Phase 5.1b: push the multi-platform index to GHCR (CI on main only; IMAGE_PUBLISH_CONFIRM=yes to override)
+	@sh scripts/image/image.sh publish
+
+image-scan-remote: ## Phase 5.1b: trivy on every platform of IMAGE=<repo>@sha256:... (default: the last published reference)
+	@sh scripts/image/image.sh scan-remote
+
+image-sign: ## Phase 5.1b: cosign keyless signature of the index + CycloneDX SBOM attestation per platform (CI OIDC)
+	@sh scripts/image/image.sh sign
+
+image-verify: ## Phase 5.1b: cosign verify + verify-attestation of IMAGE=<repo>@sha256:... against the exact main-workflow identity
+	@sh scripts/image/image.sh verify
+
+image-test-verify: ## Phase 5.1b: offline - fake cosign/docker pin the exact signer identity, the verified references, fail-closed paths and publish's CI-only guard
+	@sh tests/image/test-image-verify.sh
 
 argocd-chart-fetch: ## Download and checksum-verify the pinned Argo CD chart into .tools/charts/ (the only target allowed to fetch it)
 	@sh lab/argocd/chart-fetch.sh
