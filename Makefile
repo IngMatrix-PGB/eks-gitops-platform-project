@@ -2,7 +2,7 @@
 
 .PHONY: help validate check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked \
 	check-standard-workload-chart check-spoke-access check-supply-chain check-tool-platforms-regression \
-	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle lab-test-eks-identity-offline eks-test-spoke-secret image-build image-scan image-sbom image-all image-build-multi image-publish image-scan-remote image-sign image-verify image-test-verify \
+	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle lab-test-eks-identity-offline eks-test-spoke-secret image-build image-scan image-sbom image-all image-build-multi image-publish image-scan-remote image-sign image-verify image-test-verify promote promotion-verify check-promotion promote-test \
 	argocd-chart-fetch argocd-render argocd-install argocd-status argocd-uninstall argocd-port-forward \
 	argocd-test-runtime-health argocd-test-lifecycle \
 	gitops-repo-setup gitops-repo-check gitops-repo-remove gitops-render gitops-bootstrap \
@@ -26,7 +26,7 @@ help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-supply-chain check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-supply-chain check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -192,6 +192,18 @@ image-verify: ## Phase 5.1b: cosign verify + verify-attestation of IMAGE=<repo>@
 
 image-test-verify: ## Phase 5.1b: offline - fake cosign/docker pin the exact signer identity, the verified references, fail-closed paths and publish's CI-only guard
 	@sh tests/image/test-image-verify.sh
+
+promote: ## Phase 5.1c: promote apps/smoke into ENV=dev (DIGEST=sha256:... from main) | uat (from dev) | prod (from uat); verifies the signature first, edits the two overlays + ledger, never commits
+	@ENV="$(ENV)" DIGEST="$(DIGEST)" sh scripts/promote/promote.sh
+
+promotion-verify: ## Phase 5.1c: online - every overlay image of our repository verifies (signature + SBOM attestations, exact identity)
+	@sh scripts/promote/verify-overlays.sh
+
+check-promotion: ## Phase 5.1c: offline - per-overlay pinned images, local/aws agree, ledger order dev<-main uat<-dev prod<-uat, append-only
+	@bash scripts/validate/check-promotion.sh
+
+promote-test: ## Phase 5.1c: offline - promote.sh + check-promotion end to end in a scratch copy with fake cosign/docker
+	@sh tests/promote/test-promote.sh
 
 argocd-chart-fetch: ## Download and checksum-verify the pinned Argo CD chart into .tools/charts/ (the only target allowed to fetch it)
 	@sh lab/argocd/chart-fetch.sh

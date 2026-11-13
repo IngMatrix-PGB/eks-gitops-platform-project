@@ -21,6 +21,8 @@ fi
 # shellcheck source=../../scripts/lab/_lib.sh
 . scripts/lab/_lib.sh
 require_repo_root
+# shellcheck source=../../scripts/workload/_lib.sh
+. scripts/workload/_lib.sh
 # shellcheck source=../../scripts/argocd/_lib.sh
 . scripts/argocd/_lib.sh
 # shellcheck source=../../scripts/gitops/_lib.sh
@@ -146,9 +148,9 @@ gitops_wait_for_synced_healthy "platform-smoke-dev" 180
 gitops_wait_for_synced_healthy "platform-smoke-uat" 180
 gitops_wait_for_synced_healthy "platform-smoke-prod" 180
 
-# Reachability check via the already-pinned podinfo image's own curl -
-# reused verbatim by the manual two-commit rollout proof this test
-# hands off to. Ephemeral, labeled distinctly from Argo-CD-managed
+# Reachability check from the pinned test client image (Phase 5.1c-1;
+# before that, podinfo's own curl) - reused verbatim by the manual
+# two-commit rollout proof this test hands off to. Ephemeral, labeled distinctly from Argo-CD-managed
 # resources, never AppProject-scoped (applied directly by this script's
 # own kubeconfig, not by Argo CD on behalf of any Application).
 gitops_check_workload_endpoint() {
@@ -174,7 +176,7 @@ spec:
       type: RuntimeDefault
   containers:
     - name: check
-      image: ghcr.io/stefanprodan/podinfo@sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da
+      image: ${TEST_CLIENT_IMAGE}
       command: ["sh", "-c"]
       args:
         - |

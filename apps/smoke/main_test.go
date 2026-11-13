@@ -64,18 +64,21 @@ func TestHandlerEndpoints(t *testing.T) {
 	ready.Store(true)
 	h := newHandler(config{uiMessage: "hello"}, &ready)
 
-	for path, want := range map[string]int{"/healthz": 200, "/readyz": 200, "/": 200, "/nope": 404} {
+	for path, want := range map[string]int{"/healthz": 200, "/readyz": 200, "/": 200, "/api/info": 200, "/nope": 404} {
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
 		if rr.Code != want {
 			t.Errorf("GET %s = %d, want %d", path, rr.Code, want)
 		}
 	}
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
-	var body map[string]string
-	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil || body["message"] != "hello" {
-		t.Errorf("unexpected / body %q (%v)", rr.Body.String(), err)
+	var rr *httptest.ResponseRecorder
+	for _, path := range []string{"/", "/api/info"} {
+		rr = httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		var body map[string]string
+		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil || body["message"] != "hello" {
+			t.Errorf("unexpected %s body %q (%v)", path, rr.Body.String(), err)
+		}
 	}
 
 	ready.Store(false)

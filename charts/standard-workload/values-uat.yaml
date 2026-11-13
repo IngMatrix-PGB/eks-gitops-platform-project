@@ -3,6 +3,13 @@
 # changes only configMap.uiMessage below, to a "final" value, as the
 # GitOps rollout proof (see docs/adr/0008-standard-workload-before-sso.md
 # and the Phase 2.4 plan's rollout-test section).
+# Phase 5.1c-1: this environment's image, changed only by `make promote`
+# (scripts/promote/promote.sh). values-uat.yaml and values-uat-aws.yaml
+# always hold the same reference; check-promotion enforces it.
+image:
+  repository: ghcr.io/stefanprodan/podinfo
+  digest: "sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da"
+
 replicaCount: 1
 
 resources:
