@@ -210,6 +210,20 @@ run_case "well-formed actions/checkout@<40-hex> pin (synthetic SHA)" accept \
         uses: actions/checkout@${SHA1}
 "
 
+run_case "well-formed actions/<repo>@<40-hex> pin (Phase 5.1a)" accept \
+  ".github/workflows/synthetic2.yml" "jobs:
+  x:
+    steps:
+      - uses: actions/upload-artifact@${SHA1}
+"
+
+run_case "lookalike owner actions-org/<repo>@<40-hex>" reject \
+  ".github/workflows/other7.yml" "jobs:
+  x:
+    steps:
+      - uses: actions-org/upload-artifact@${SHA1}
+"
+
 run_case "bare 64-character SHA256-shaped digest" accept \
   "notes.md" "digest ${SHA256} end
 "
@@ -549,6 +563,32 @@ run_case "digest variable not named *_IMAGE_DIGEST" reject \
 run_case "digest value of the wrong length" reject \
   "scripts/component/_lib.sh" \
   "COMPONENT_IMAGE_DIGEST=\"sha256:${CHK_WITH_DIGITS}0\"
+"
+
+# --- Phase 5.1a: apps/<dir>/Dockerfile base-image digest exception:
+# masks ONLY an exact "FROM <ref>@sha256:<64-hex>[ AS <stage>]" line,
+# ONLY at apps/<dir>/Dockerfile. ---------------------------------------
+run_case "FROM digest pin with a 12+ digit run in apps/<dir>/Dockerfile" accept \
+  "apps/component/Dockerfile" \
+  "FROM registry.example/base:1.0@sha256:${CHK_WITH_DIGITS} AS build
+FROM registry.example/runtime@sha256:${CHK_WITH_DIGITS}
+"
+run_case "same FROM line in a Dockerfile outside apps/<dir>/" reject \
+  "docker/Dockerfile" \
+  "FROM registry.example/base@sha256:${CHK_WITH_DIGITS}
+"
+run_case "same FROM line nested deeper (apps/a/b/Dockerfile)" reject \
+  "apps/a/b/Dockerfile" \
+  "FROM registry.example/base@sha256:${CHK_WITH_DIGITS}
+"
+run_case "12-digit run on another line of an eligible Dockerfile" reject \
+  "apps/component/Dockerfile" \
+  "FROM registry.example/base@sha256:${CHK_VALID}
+LABEL owner=\"${AWS12}\"
+"
+run_case "FROM digest line with trailing text" reject \
+  "apps/component/Dockerfile" \
+  "FROM registry.example/base@sha256:${CHK_WITH_DIGITS} # ${AWS12}
 "
 
 echo ""

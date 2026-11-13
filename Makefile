@@ -1,8 +1,8 @@
 .DEFAULT_GOAL := help
 
 .PHONY: help validate check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked \
-	check-standard-workload-chart check-spoke-access check-tool-platforms-regression \
-	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle lab-test-eks-identity-offline eks-test-spoke-secret \
+	check-standard-workload-chart check-spoke-access check-supply-chain check-tool-platforms-regression \
+	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle lab-test-eks-identity-offline eks-test-spoke-secret image-build image-scan image-sbom image-all \
 	argocd-chart-fetch argocd-render argocd-install argocd-status argocd-uninstall argocd-port-forward \
 	argocd-test-runtime-health argocd-test-lifecycle \
 	gitops-repo-setup gitops-repo-check gitops-repo-remove gitops-render gitops-bootstrap \
@@ -26,7 +26,7 @@ help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-supply-chain check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -57,6 +57,9 @@ check-standard-workload-chart: ## Offline lint/render/schema/PSS/dry-run validat
 
 check-spoke-access: ## Phase 3.4.4a: the shared spoke Role (platform/spoke-access/role.yaml) grants exactly the AppProject's namespaced kinds - no ClusterRole, no secrets, no wildcard
 	@bash scripts/validate/check-spoke-access.sh
+
+check-supply-chain: ## Phase 5.1a: SHA-pinned GitHub-owned actions only, no write permissions, digest-pinned non-root Dockerfiles, scan threshold, dated .trivyignore, Dependabot coverage
+	@bash scripts/validate/check-supply-chain.sh
 
 check-tool-platforms-regression: ## Regression-test the darwin-arm64/linux-amd64 platform support in install-tools.sh and check-prerequisites.sh
 	@sh tests/lab/test-tool-platforms.sh
@@ -159,6 +162,18 @@ lab-test-eks-identity-offline: ## Phase 3.3.4b: fully offline positive/negative 
 
 eks-test-spoke-secret: ## Phase 3.4.4b: offline matrix for lab/eks/spoke-cluster-secret.sh (EKS cluster Secret with awsAuthConfig, no token) + its selection contract with the aws-eks profile
 	@sh tests/eks/test-spoke-cluster-secret.sh
+
+image-build: ## Phase 5.1a: docker build of apps/smoke (unit tests in the build stage) + non-root check, saved as .tools/out/image/smoke.tar
+	@sh scripts/image/image.sh build
+
+image-scan: ## Phase 5.1a: trivy - fails on any fixable HIGH/CRITICAL vulnerability or HIGH/CRITICAL Dockerfile misconfiguration
+	@sh scripts/image/image.sh scan
+
+image-sbom: ## Phase 5.1a: syft - CycloneDX SBOM at .tools/out/image/smoke.cdx.json
+	@sh scripts/image/image.sh sbom
+
+image-all: ## Phase 5.1a: image-build + image-scan + image-sbom
+	@sh scripts/image/image.sh all
 
 argocd-chart-fetch: ## Download and checksum-verify the pinned Argo CD chart into .tools/charts/ (the only target allowed to fetch it)
 	@sh lab/argocd/chart-fetch.sh
