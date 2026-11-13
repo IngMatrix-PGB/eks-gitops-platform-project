@@ -781,6 +781,53 @@ EOF
 run_case "a kms:* wildcard action is rejected" \
   reject setup_kms_wildcard_action
 
+# --- Phase 3.4.1: the region SCP's NotAction exemption list -------------
+setup_scp_notaction_exemption_accepted() {
+  d="$1"
+  mkdir -p "$d/terraform/modules/scp"
+  cat > "$d/terraform/modules/scp/main.tf" <<'EOF'
+locals {
+  global_actions = [
+    "iam:*", "kms:*", "sts:*",
+  ]
+  region_guardrail = {
+    Statement = [{ Effect = "Deny", NotAction = local.global_actions, Resource = "*" }]
+  }
+}
+EOF
+}
+run_case "kms:* inside the region SCP's global_actions NotAction list (terraform/modules/scp/main.tf) is accepted" \
+  accept setup_scp_notaction_exemption_accepted
+
+setup_scp_kms_outside_exemption() {
+  d="$1"
+  mkdir -p "$d/terraform/modules/scp"
+  cat > "$d/terraform/modules/scp/main.tf" <<'EOF'
+locals {
+  global_actions = [
+    "iam:*", "sts:*",
+  ]
+  other_actions = ["kms:*"]
+}
+EOF
+}
+run_case "kms:* anywhere else in terraform/modules/scp/main.tf is still rejected" \
+  reject setup_scp_kms_outside_exemption
+
+setup_scp_exemption_shape_elsewhere() {
+  d="$1"
+  write_valid_child_root "$d" "terraform/envs/identity"
+  cat >> "$d/terraform/envs/identity/main.tf" <<'EOF'
+locals {
+  global_actions = [
+    "kms:*",
+  ]
+}
+EOF
+}
+run_case "the same global_actions shape in any other file is still rejected" \
+  reject setup_scp_exemption_shape_elsewhere
+
 setup_bare_star_action() {
   d="$1"
   write_valid_child_root "$d" "terraform/envs/identity"
