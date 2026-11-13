@@ -204,3 +204,15 @@ The local spoke credential of Phase 2.7.3 now has its EKS counterpart
   Secrets, no wildcard).
 - **Not decided here:** which OIDC identity provider people use to sign
   in to Argo CD (ADR-0005). That question remains open.
+
+## Amendment (Phase 3.4.4b, 2026-11-13): EKS spoke registration
+
+The hub registers each EKS spoke with a cluster Secret that has the same
+shape as the lab's (name `spoke-<env>`, `namespaces: <env>`,
+`clusterResources: "false"`) and labels the aws-eks profile selects
+(`platform.environment`, owner `eks-spoke-registration`). Its `config`
+carries `awsAuthConfig` (EKS cluster name, the spoke's `argocd-manager`
+role) and the cluster CA, never a token.
+`lab/eks/spoke-cluster-secret.sh` renders it offline;
+`make eks-test-spoke-secret` checks it, including that its labels match
+the profile's selector.

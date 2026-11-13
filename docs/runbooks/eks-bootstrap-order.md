@@ -59,7 +59,19 @@ running it requires an AWS account and budget that do not exist today.
    spoke-side objects, and the same Role definition. The hub registers
    the spoke with a cluster Secret whose `awsAuthConfig` names the
    spoke's cluster and the `argocd_manager_role_arn` output — never a
-   token (Phase 3.4.4b).
+   token. The spoke bootstrap also creates the namespace `<env>` with
+   the Pod Security labels (`restricted`), because the aws-eks profile
+   syncs with `CreateNamespace=false`. Render the hub's cluster Secret
+   offline (Phase 3.4.4b) from the spoke's `terraform/envs/eks` outputs
+   and apply it on the hub in namespace `argocd`:
+
+   ```bash
+   lab/eks/spoke-cluster-secret.sh --env dev \
+     --cluster-name "$(terraform output -raw cluster_name)" \
+     --endpoint "$(terraform output -raw cluster_endpoint)" \
+     --ca "$(terraform output -raw cluster_certificate_authority_data)" \
+     --role-arn "$(terraform output -raw argocd_manager_role_arn)"
+   ```
 3. **Terraform: identity (each spoke account).** Run `terraform apply`
    in `terraform/envs/identity` with `environment` set to that spoke
    (`dev`, `uat` or `prod`). The namespace, ServiceAccount and secret
@@ -92,14 +104,16 @@ running it requires an AWS account and budget that do not exist today.
 8. **Root Application with the `aws-eks` profile.** Apply a root
    Application manifest (not yet created — this phase deliberately does
    not create `root-application-aws-eks.yaml`) whose `gitops/bootstrap`
-   chart values set `profile: aws-eks`, reconciling the
-   `dev-aws`/`uat-aws`/`prod-aws` environment list from
-   `gitops/bootstrap/values.yaml`.
+   chart values set `profile: aws-eks`. Since Phase 3.4.4b this runs on
+   the hub only: its clusters generator selects the spoke Secrets from
+   step 2a (`awsEks` in `gitops/bootstrap/values.yaml`) and creates one
+   Application per spoke.
 9. **ESO installation** against the same isolated kubeconfig, then
    confirmation that `SecretStore`/`ExternalSecret` resources reconcile
    using Pod Identity (no `auth` block — see ADR-0014).
 10. **Validation.** Confirm the generated Applications
-    (`dev-aws`, `uat-aws`, `prod-aws`) are `Synced`/`Healthy`, and that
+    (`platform-smoke-dev`, `-uat`, `-prod`, one per spoke) are
+    `Synced`/`Healthy`, and that
     each environment's `ExternalSecret` resolves from the Secrets
     Manager secret produced in step 3.
 11. **Abort conditions.** Any of the following aborts the entire
