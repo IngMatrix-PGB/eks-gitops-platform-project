@@ -30,6 +30,14 @@ mock_provider "aws" {
     target = aws_kms_key.org_trail
     values = { arn = "arn:aws:kms:us-east-1:aws:key/example" }
   }
+  override_resource {
+    target = aws_s3_bucket.config
+    values = { arn = "arn:aws:s3:::example-config", bucket = "example-config", id = "example-config" }
+  }
+  override_resource {
+    target = aws_kms_key.config
+    values = { arn = "arn:aws:kms:us-east-1:aws:key/example-config" }
+  }
 }
 
 variables {
@@ -157,6 +165,56 @@ run "config_aggregator_and_access_analyzer" {
     condition     = aws_accessanalyzer_analyzer.organization.type == "ORGANIZATION"
     error_message = "The Access Analyzer must use the organization as its zone of trust."
   }
+}
+
+run "central_config_bucket" {
+  command = apply
+
+  assert {
+    condition = (
+      aws_s3_bucket_public_access_block.config.block_public_acls &&
+      aws_s3_bucket_public_access_block.config.block_public_policy &&
+      aws_s3_bucket_public_access_block.config.ignore_public_acls &&
+      aws_s3_bucket_public_access_block.config.restrict_public_buckets &&
+      aws_s3_bucket.config.force_destroy == false &&
+      aws_s3_bucket_versioning.config.versioning_configuration[0].status == "Enabled"
+    )
+    error_message = "The Config bucket must block public access, be versioned and never be force-destroyed."
+  }
+  assert {
+    condition     = one(one(aws_s3_bucket_server_side_encryption_configuration.config.rule).apply_server_side_encryption_by_default).kms_master_key_id == aws_kms_key.config.arn && aws_kms_key.config.enable_key_rotation
+    error_message = "Config deliveries must be encrypted with the dedicated, rotating key."
+  }
+  assert {
+    condition = alltrue([for s in jsondecode(aws_s3_bucket_policy.config.policy).Statement :
+    s.Effect == "Deny" || (s.Principal.Service == "config.amazonaws.com" && s.Condition.StringEquals["aws:SourceOrgID"] == "o-exampleorg01")])
+    error_message = "Every Allow in the Config bucket policy must be for AWS Config, scoped to this organization."
+  }
+  assert {
+    condition     = one([for s in jsondecode(aws_s3_bucket_policy.config.policy).Statement : s.Resource if s.Sid == "OrganizationConfigDelivery"]) == "arn:aws:s3:::example-config/config/*/AWSLogs/*/Config/*"
+    error_message = "AWS Config may write only under config/<account>/AWSLogs/<id>/Config/."
+  }
+  assert {
+    condition     = anytrue([for s in jsondecode(aws_s3_bucket_policy.config.policy).Statement : s.Sid == "DenyInsecureTransport" && s.Effect == "Deny"])
+    error_message = "The Config bucket policy must deny non-TLS access."
+  }
+  assert {
+    condition = alltrue([for s in jsondecode(aws_kms_key.config.policy).Statement :
+    s.Sid == "SecurityAccountAdministers" || (s.Principal.Service == "config.amazonaws.com" && s.Condition.StringEquals["aws:SourceOrgID"] == "o-exampleorg01" && toset(s.Action) == toset(["kms:GenerateDataKey", "kms:Decrypt"]))])
+    error_message = "AWS Config may only generate data keys and decrypt, and only for this organization."
+  }
+  assert {
+    condition     = one(aws_s3_bucket_lifecycle_configuration.config.rule).expiration[0].days == 730
+    error_message = "Config history must expire after config_log_retention_days (default 730)."
+  }
+}
+
+run "rejects_short_config_retention" {
+  command = plan
+  variables {
+    config_log_retention_days = 90
+  }
+  expect_failures = [var.config_log_retention_days]
 }
 
 # --- rejections ----------------------------------------------------------------

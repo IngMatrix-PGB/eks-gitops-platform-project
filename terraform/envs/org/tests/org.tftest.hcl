@@ -164,6 +164,35 @@ run "service_control_policy_content" {
   }
 }
 
+# Cross-check with terraform/envs/account-baseline (Phase 3.4.2): every
+# write the baseline performs must either be outside every SCP's denied
+# actions, or be denied only in a statement that exempts the account
+# access role the baseline is applied through. A future SCP change that
+# would lock the baseline out fails here.
+run "baseline_actions_not_locked_out" {
+  command = apply
+
+  assert {
+    condition = alltrue(flatten([
+      for doc in [module.scp.member_hardening_json, module.scp.security_services_json] : [
+        for st in jsondecode(doc).Statement : [
+          for a in [
+            "config:PutConfigurationRecorder", "config:PutDeliveryChannel",
+            "config:StartConfigurationRecorder", "config:PutRetentionConfiguration",
+            "ec2:EnableEbsEncryptionByDefault", "ec2:ModifyInstanceMetadataDefaults",
+            "s3:PutAccountPublicAccessBlock", "budgets:ModifyBudget",
+            "iam:CreateServiceLinkedRole",
+          ] :
+          !(st.Effect == "Deny" && (try(contains(st.Action, a), false) || try(st.Action == "*", false))) ||
+          try(contains(st.Condition.ArnNotLike["aws:PrincipalArn"], "arn:aws:iam::*:role/OrganizationAccountAccessRole"), false) ||
+          try(st.Condition.ArnLike["aws:PrincipalArn"] == ["arn:aws:iam::*:root"], false)
+        ]
+      ]
+    ]))
+    error_message = "An SCP denies an action the account baseline needs without exempting the account access role."
+  }
+}
+
 run "delegated_administration_to_security_account" {
   command = apply
 
