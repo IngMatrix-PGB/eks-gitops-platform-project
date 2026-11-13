@@ -202,3 +202,17 @@ byte-identical to its pre-Phase-3.3.4b output; `PROFILE=aws-eks` and
 `kubectl apply`/`helm install`-equivalent call. No `terraform plan`/
 `apply` against real AWS, no real backend, no AWS credential, no real
 account ID/ARN/endpoint/cluster name anywhere in this phase's code.
+
+## Amendment (Phase 3.4.3c, 2026-11-13): cross-validation source
+
+The aws-eks overlays are now cross-validated against
+`terraform/envs/identity/environments.tf`, the single table of
+per-environment namespace, ServiceAccount and secret name, instead of
+nine loose variable defaults. The region regex is still read from
+`variables.tf`. The check first proves that its extractor finds exactly
+`dev`, `uat` and `prod`, one per line, so a layout change can never let
+the comparisons run against empty values.
+
+Mutation checks, each caught by the check: an overlay `secretName`
+that differs from the table, a duplicated secret name in the table, and
+a table entry split across lines.

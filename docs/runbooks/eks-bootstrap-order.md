@@ -31,7 +31,7 @@ running it requires an AWS account and budget that do not exist today.
 | AWS account / credentials | Terraform, out-of-band | Never stored in this repo |
 | `aws_region` | `terraform/envs/{network,eks,identity}` | e.g. `us-east-1` — no default is treated as operative |
 | `admin_principal_arn`, `breakglass_principal_arn` | `terraform/envs/eks` | Real IAM principal ARNs, provided at apply time |
-| `cluster_name` | `terraform/envs/eks`, `terraform/envs/identity` | Must match between both roots |
+| `environment` | `terraform/envs/{network,eks,identity}` | Which account the apply targets (ADR-0016): `platform`, `dev`, `uat` or `prod`. `envs/identity` is applied only in `dev`, `uat` and `prod`. Both `envs/eks` and `envs/identity` derive the cluster name `eks-gitops-<environment>`, so it matches without being passed |
 | `vpc_id`, `private_subnet_ids` | `terraform/envs/eks` | Terraform outputs from `terraform/envs/network`, wired explicitly, not assumed |
 | `EKS_KUBECONFIG` | `lab/gitops/bootstrap.sh` (`aws-eks` profile) | Path to an isolated kubeconfig — never `$HOME/.kube/config`, never `.local/kubeconfig` |
 | `EKS_CONTEXT`, `EKS_CLUSTER_NAME`, `EKS_REGION`, `EKS_ENDPOINT` | `scripts/lab/_lib.sh`'s `check_eks_cluster_identity()` | Must all agree with each other and with the real cluster |
@@ -48,13 +48,13 @@ running it requires an AWS account and budget that do not exist today.
    `admin_principal_arn`/`breakglass_principal_arn`/`cluster_name`.
    Produces `cluster_name`, `cluster_endpoint` outputs and installs the
    Pod Identity Agent addon.
-3. **Terraform: identity.** Run `terraform apply` in
-   `terraform/envs/identity`, wiring the same `cluster_name` and the
-   real `dev_namespace`/`uat_namespace`/`prod_namespace`/
-   `dev_service_account`/`uat_service_account`/`prod_service_account`. Produces
-   per-environment Pod Identity Associations, KMS keys, and Secrets
-   Manager secrets (empty payload — no value is written by Terraform;
-   see the migration runbook below for how a payload is populated).
+3. **Terraform: identity (each spoke account).** Run `terraform apply`
+   in `terraform/envs/identity` with `environment` set to that spoke
+   (`dev`, `uat` or `prod`). The namespace, ServiceAccount and secret
+   name come from `environments.tf`. Produces that spoke's Pod Identity
+   Association, KMS key and Secrets Manager secret (empty payload — no
+   value is written by Terraform; see the migration runbook below for
+   how a payload is populated).
 4. **Isolated kubeconfig creation.** Generate a project-local kubeconfig
    file at a path distinct from both `$HOME/.kube/config` and
    `.local/kubeconfig` (e.g. `.local/kubeconfig-eks`, gitignored),
