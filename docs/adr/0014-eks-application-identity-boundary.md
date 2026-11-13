@@ -216,3 +216,26 @@ the comparisons run against empty values.
 Mutation checks, each caught by the check: an overlay `secretName`
 that differs from the table, a duplicated secret name in the table, and
 a table entry split across lines.
+
+## Amendment (Phase 3.4.4b, 2026-11-13): aws-eks is hub-and-spoke
+
+The single-cluster design above (`dev-aws`/`uat-aws`/`prod-aws`
+Applications in one EKS cluster, in-cluster destinations, list
+generator) is superseded. It contradicted ADR-0015 (the hub pushes to
+spokes) and ADR-0016 (one account per environment).
+
+- **Profile:** `aws-eks` now uses the same clusters-generator branch as
+  `local-multicluster`, with its own contract (`awsEks` in
+  `gitops/bootstrap/values.yaml`): owner label `eks-spoke-registration`
+  (never the lab's), environments dev/uat/prod, overlays
+  `values-<env>-aws.yaml`.
+- **Destinations:** cluster `spoke-<env>`, namespace `<env>`;
+  `CreateNamespace=false` and an empty `clusterResourceWhitelist`. The
+  `*-aws` in-cluster destinations are removed from every profile's
+  AppProject.
+- **Registration:** `lab/eks/spoke-cluster-secret.sh` renders the hub's
+  cluster Secret from the spoke's Terraform outputs, offline, with
+  `awsAuthConfig` and no token, and refuses another environment's role.
+- **Unchanged:** the identity preflight in `lab/gitops/bootstrap.sh`
+  (`check_eks_cluster_identity`) still applies nothing. The overlay file
+  names do not change.

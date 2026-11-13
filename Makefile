@@ -2,7 +2,7 @@
 
 .PHONY: help validate check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked \
 	check-standard-workload-chart check-spoke-access check-tool-platforms-regression \
-	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle lab-test-eks-identity-offline \
+	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle lab-test-eks-identity-offline eks-test-spoke-secret \
 	argocd-chart-fetch argocd-render argocd-install argocd-status argocd-uninstall argocd-port-forward \
 	argocd-test-runtime-health argocd-test-lifecycle \
 	gitops-repo-setup gitops-repo-check gitops-repo-remove gitops-render gitops-bootstrap \
@@ -26,7 +26,7 @@ help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -156,6 +156,9 @@ workload-test-resilience: ## Phase 2.8.1: mutating proof of the chart's resilien
 
 lab-test-eks-identity-offline: ## Phase 3.3.4b: fully offline positive/negative matrix for check_eks_cluster_identity() (fake kubectl/aws, no cluster, no AWS, no network - DESIGNED/NOT DEPLOYED)
 	@sh tests/lab/test-eks-identity-offline.sh
+
+eks-test-spoke-secret: ## Phase 3.4.4b: offline matrix for lab/eks/spoke-cluster-secret.sh (EKS cluster Secret with awsAuthConfig, no token) + its selection contract with the aws-eks profile
+	@sh tests/eks/test-spoke-cluster-secret.sh
 
 argocd-chart-fetch: ## Download and checksum-verify the pinned Argo CD chart into .tools/charts/ (the only target allowed to fetch it)
 	@sh lab/argocd/chart-fetch.sh

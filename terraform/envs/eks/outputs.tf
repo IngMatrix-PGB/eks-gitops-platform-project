@@ -42,3 +42,8 @@ output "argocd_manager_role_arn" {
   value       = one(aws_iam_role.argocd_manager[*].arn)
   description = "Spokes only: the role the hub's Argo CD assumes (cluster Secret awsAuthConfig.roleARN, Phase 3.4.4b)."
 }
+
+output "cluster_certificate_authority_data" {
+  value       = module.eks.cluster_certificate_authority_data
+  description = "Base64 CA of the cluster API (public data, not a credential). Input to lab/eks/spoke-cluster-secret.sh (Phase 3.4.4b)."
+}

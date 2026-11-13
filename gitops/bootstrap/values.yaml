@@ -33,29 +33,31 @@ environments:
 # above exactly, byte-for-byte, since every existing invocation
 # (`make gitops-render`/`make gitops-bootstrap`, no override) omits
 # this key and inherits this default via Helm's normal values merge.
-# "aws-eks" is DESIGNED / NOT DEPLOYED - selects awsEnvironments below
-# instead, never both at once (templates/applicationset.yaml branches
-# on this value; any value other than these two literal strings fails
-# the render closed - see .local/evidence/phase-3.3.4-aws-application-
-# bootstrap-addendum.md Section 9).
+# "local-multicluster" and "aws-eks" (Phase 3.4.4b, DESIGNED / NOT
+# DEPLOYED) switch to the hub-and-spoke clusters generator with the
+# `multicluster` or `awsEks` contract below. Any other value fails the
+# render closed (templates/applicationset.yaml).
 profile: "local-kind"
 
-# aws-eks profile only (NOT DEPLOYED, STATICALLY VALIDATED offline):
-# exactly the 3 spoke environments of ADR-0015 (renamed and extended in
-# Phase 2.7.2), consuming the tracked values-{dev,uat,prod}-aws.yaml
-# overlays via the same env-name convention
-# already used above (valueFiles: ["values-{{.env}}.yaml"]) - no
-# template change needed for that line. Distinct namespaces from the
-# local-kind environments above so both sets could never collide if
-# ever rendered together (they can't be - see the generator's
-# profile-exclusive branching).
-awsEnvironments:
-  - name: dev-aws
-    namespace: dev-aws
-  - name: uat-aws
-    namespace: uat-aws
-  - name: prod-aws
-    namespace: prod-aws
+# Phase 3.4.4b (ADR-0015/0016): profile "aws-eks" is hub-and-spoke - the
+# hub's Argo CD (platform account) deploys to one EKS cluster per
+# environment through the same clusters generator as local-multicluster,
+# never in-cluster. A spoke is selected only by a cluster Secret rendered
+# by lab/eks/spoke-cluster-secret.sh (same labels as below; checked by
+# tests/eks/test-spoke-cluster-secret.sh). The owner label value differs
+# from the lab's, so a lab spoke Secret can never be selected here and
+# vice versa. Namespaces are dev/uat/prod (one cluster per environment, no
+# collision); the overlays stay values-<env>-aws.yaml.
+awsEks:
+  ownerLabelKey: eks-gitops-lab-lite.local/owner
+  ownerLabelValue: eks-spoke-registration
+  environmentLabelKey: platform.environment
+  clusterNamePrefix: spoke-
+  overlaySuffix: "-aws"
+  environments:
+    - dev
+    - uat
+    - prod
 
 # Phase 2.7.4 (ADR-0015): profile "local-multicluster" - the hub's Argo
 # CD deploys to the kind spokes registered by lab/multicluster/spoke-

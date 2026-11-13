@@ -1,9 +1,9 @@
 #!/bin/sh
 # Fully offline Helm render of gitops/bootstrap, plus proof that it
 # renders exactly the authorized shape: one AppProject, one
-# ApplicationSet with exactly three generator elements per list profile
-# (local-kind, aws-eks) or exactly one clusters generator
-# (local-multicluster, Phase 2.7.4), zero Secrets, no
+# ApplicationSet with exactly three list elements (local-kind) or exactly
+# one clusters generator (local-multicluster, Phase 2.7.4; aws-eks,
+# Phase 3.4.4b), zero Secrets, no
 # wildcard permissions, and correct revision propagation. Never touches
 # the cluster. Backs `make gitops-render`. Accepts REVISION=<value>
 # (default main) to prove propagation for a non-default revision too.
@@ -96,118 +96,35 @@ else
 fi
 
 # =============================================================================
-# Phase 3.3.4a: aws-eks profile (DESIGNED / NOT DEPLOYED / STATICALLY
-# VALIDATED offline only). templates/applicationset.yaml's generator is
-# profile-exclusive - exactly one of local-kind/aws-eks ever executes,
-# never both, and any other value fails the render closed (Helm's
-# `fail`). Nothing below ever contacts a cluster or AWS.
+# Phase 3.4.4b: the default (local-kind) render never reaches a spoke or
+# AWS. aws-eks and local-multicluster are both hub-and-spoke and are
+# checked by check_hub_spoke below. Nothing here contacts a cluster or AWS.
 # =============================================================================
-
-# --- positive: the default render (this script's own $render_out
-# above, no --set profile=) never activates aws-eks by omission. Only
-# the ApplicationSet's own generator "- env: " lines matter here - the
-# AppProject's destination whitelist legitimately contains the
-# dev-aws/uat-aws/prod-aws namespace strings always (a static
-# allow-list, never profile-gated - see templates/appproject.yaml's own
-# comment), so checking for those strings anywhere in the render would
-# be a false positive, not a real "AWS activated" signal. ---
-if grep -qE '^\s*- env: (dev-aws|uat-aws|prod-aws)$' "$render_out"; then
-  echo "FAIL: the default render (no profile set) already generates an aws-eks Application - AWS must never activate by omission" >&2
+if grep -qE '^\s*- clusters:$' "$render_out"; then
+  echo "FAIL: the default render contains a clusters generator - a spoke profile must never activate by omission" >&2
   fail=1
 else
-  echo "OK: the default render (profile unset) generates zero aws-eks Applications - AWS cannot activate by omission"
+  echo "OK: the default render (profile unset) has no clusters generator - no spoke profile activates by omission"
 fi
 if grep -qiE '^kind: SecretStore$|^kind: Secret$|auth:|serviceAccountRef|arn:aws:|AKIA[0-9A-Z]{16}' "$render_out"; then
   echo "FAIL: the default render contains a SecretStore/Secret/auth/serviceAccountRef/ARN/credential-shaped string - this chart must never render workload-level resources at all" >&2
   fail=1
 else
-  echo "OK: the default render contains zero SecretStore/Secret/auth/serviceAccountRef/ARN/credential-shaped content (this chart only ever renders AppProject/ApplicationSet, never workload resources, for either profile)"
+  echo "OK: the default render contains zero SecretStore/Secret/auth/serviceAccountRef/ARN/credential-shaped content"
 fi
-
-# --- positive: AppProject's destination whitelist keeps exactly the 3
-# local namespaces (dev, uat, prod), plus exactly the 2 aws-eks
-# namespaces added, never a wildcard - scoped to the AppProject
-# document only (kind: AppProject to the next "kind:" line), since the
-# ApplicationSet's own generator elements further down the same render
-# also contain "namespace: dev"/"namespace: uat"/"namespace: prod" lines that
-# must not be double-counted as AppProject destinations. ---
+# AppProject document only (the ApplicationSet also has namespace: lines).
 appproject_doc="$(awk '/^kind: AppProject$/{f=1} f && /^kind: ApplicationSet$/{exit} f{print}' "$render_out")"
 local_dest_count="$(printf '%s\n' "$appproject_doc" | grep -cE 'namespace: (dev|uat|prod)$' || true)"
-aws_dest_count="$(printf '%s\n' "$appproject_doc" | grep -cE 'namespace: (dev-aws|uat-aws|prod-aws)$' || true)"
-if [ "$local_dest_count" = "3" ] && [ "$aws_dest_count" = "3" ]; then
-  echo "OK: AppProject destinations are exactly the 3 local namespaces (dev, uat, prod) plus exactly the 3 aws-eks namespaces (dev-aws, uat-aws, prod-aws) - none removed, none wildcarded"
+other_dest_count="$(printf '%s\n' "$appproject_doc" | grep -cE '^\s*- name: |namespace: [a-z]+-aws$' || true)"
+if [ "$local_dest_count" = "3" ] && [ "$other_dest_count" = "0" ]; then
+  echo "OK: default AppProject destinations are exactly dev/uat/prod in-cluster - no spoke and no *-aws destination (Phase 3.4.4b removed the always-on aws ones)"
 else
-  echo "FAIL: AppProject destination count unexpected (local=$local_dest_count, expected 3; aws=$aws_dest_count, expected 3)" >&2
+  echo "FAIL: default AppProject destinations unexpected (local=$local_dest_count, expected 3; spoke/aws=$other_dest_count, expected 0)" >&2
   fail=1
 fi
 
-# --- positive: profile=aws-eks renders exactly 3 Applications, named
-# and namespaced exactly as ADR-0015 specifies - never invented ---
-echo "gitops-render: helm lint (profile=aws-eks) ..."
-if ! "$HELM_BIN" lint gitops/bootstrap --set profile=aws-eks; then
-  echo "FAIL: helm lint failed for profile=aws-eks" >&2
-  fail=1
-fi
-aws_render_out="$(mktemp)"
-trap 'rm -f "$render_out" "$aws_render_out"' EXIT INT TERM
-echo "gitops-render: rendering profile=aws-eks ..."
-if ! "$HELM_BIN" template gitops/bootstrap --set profile=aws-eks > "$aws_render_out" 2>&1; then
-  echo "FAIL: helm template failed for profile=aws-eks" >&2
-  cat "$aws_render_out" >&2
-  fail=1
-fi
-if [ "$fail" -ne 0 ]; then
-  echo "gitops-render: FAILED (aws-eks profile render)" >&2
-  exit 1
-fi
-
-aws_generator_elements="$(grep -cE '^\s*- env: ' "$aws_render_out" || true)"
-if [ "$aws_generator_elements" != "3" ]; then
-  echo "FAIL: profile=aws-eks expected exactly 3 generator elements, found $aws_generator_elements" >&2
-  fail=1
-else
-  echo "OK: profile=aws-eks renders exactly 3 generator elements"
-fi
-if grep -qE '^\s*- env: dev-aws$' "$aws_render_out" && grep -qE '^\s*- env: uat-aws$' "$aws_render_out" && grep -qE '^\s*- env: prod-aws$' "$aws_render_out"; then
-  echo "OK: profile=aws-eks generator elements are named exactly 'dev-aws'/'uat-aws'/'prod-aws', per ADR-0015 - not invented"
-else
-  echo "FAIL: profile=aws-eks generator elements do not match ADR-0015's exact names" >&2
-  fail=1
-fi
-if grep -qE '^kind: SecretStore$|^kind: Secret$|auth:|serviceAccountRef|arn:aws:|AKIA[0-9A-Z]{16}' "$aws_render_out"; then
-  echo "FAIL: the aws-eks profile render contains a SecretStore/Secret/auth/serviceAccountRef/ARN/credential-shaped string" >&2
-  fail=1
-else
-  echo "OK: the aws-eks profile render contains zero SecretStore/Secret/auth/serviceAccountRef/ARN/credential-shaped content (this chart only ever emits a valueFiles reference - charts/standard-workload renders those later, offline-validated separately by check-standard-workload-chart.sh)"
-fi
-
-# --- positive: each aws-eks element's implied valueFiles ("values-
-# {{.env}}.yaml", Argo CD's own templating, unresolved at `helm
-# template` time) resolves to a tracked file that actually exists and
-# is the CORRECT one for that environment - never swappable, since
-# both the namespace and the valueFiles path are derived from the same
-# single "env" field on the same generator element. ---
-for env_ns in "dev-aws:dev-aws" "uat-aws:uat-aws" "prod-aws:prod-aws"; do
-  env="${env_ns%%:*}"; expected_ns="${env_ns##*:}"
-  expected_values_file="charts/standard-workload/values-${env}.yaml"
-  if [ ! -f "$expected_values_file" ]; then
-    echo "FAIL: aws-eks environment '$env' has no matching values file at $expected_values_file" >&2
-    fail=1
-    continue
-  fi
-  actual_ns="$(awk -v e="- env: ${env}\$" '$0 ~ e {getline; print; exit}' "$aws_render_out" | sed -n 's/^[[:space:]]*namespace: //p')"
-  if [ "$actual_ns" = "$expected_ns" ]; then
-    echo "OK: aws-eks environment '$env' resolves to $expected_values_file and namespace '$expected_ns' - never swapped with another environment"
-  else
-    echo "FAIL: aws-eks environment '$env' resolved to namespace '$actual_ns', expected '$expected_ns'" >&2
-    fail=1
-  fi
-done
-
-# --- negative: an unrecognized profile value fails the render closed,
-# never silently defaulting to either local-kind or aws-eks ---
+# --- negative: an unrecognized profile value fails the render closed ---
 unknown_profile_out="$(mktemp)"
-trap 'rm -f "$render_out" "$aws_render_out" "$unknown_profile_out"' EXIT INT TERM
 if "$HELM_BIN" template gitops/bootstrap --set profile=azure > "$unknown_profile_out" 2>&1; then
   echo "FAIL: profile=azure (unknown) rendered successfully - must fail closed" >&2
   fail=1
@@ -220,170 +137,97 @@ else
 fi
 rm -f "$unknown_profile_out"
 
-# --- negative: a malformed/extra aws-eks environment entry (self-test
-# of the file-existence/namespace check above, not the schema - "cada
-# fixture debe demostrar la causa exacta del rechazo", Phase 3.3.3's
-# own established idiom) - built as a standalone values override, never
-# editing the tracked values.yaml. ---
-bad_env_values="$(mktemp)"
-cat > "$bad_env_values" <<'BADENVEOF'
-profile: "aws-eks"
-awsEnvironments:
-  - name: dev-aws
-    namespace: dev-aws
-  - name: uat-aws
-    namespace: prod-aws
-  - name: prod-aws
-    namespace: prod-aws
-  - name: qa-aws
-    namespace: qa-aws
-BADENVEOF
-bad_env_out="$(mktemp)"
-trap 'rm -f "$render_out" "$aws_render_out" "$bad_env_values" "$bad_env_out"' EXIT INT TERM
-if ! "$HELM_BIN" template gitops/bootstrap -f "$bad_env_values" > "$bad_env_out" 2>&1; then
-  echo "FAIL: the malformed-environment self-test fixture failed to render at all (expected: renders, but with detectably wrong content)" >&2
-  cat "$bad_env_out" >&2
-  fail=1
-else
-  bad_count="$(grep -cE '^\s*- env: ' "$bad_env_out" || true)"
-  uat_aws_ns="$(awk '/^[[:space:]]*- env: uat-aws$/{getline; print; exit}' "$bad_env_out" | sed -n 's/^[[:space:]]*namespace: //p')"
-  self_test_fail=0
-  if [ "$bad_count" != "4" ]; then
-    echo "FAIL: malformed-environment self-test fixture did not actually inject a fourth element (found $bad_count, expected 4) - fixture is broken" >&2
-    self_test_fail=1
-  fi
-  if [ "$uat_aws_ns" = "prod-aws" ]; then
-    echo "OK: confirmed the namespace-consistency check above would catch a genuine cross-environment swap (uat-aws mapped to prod-aws's namespace resolves to 'prod-aws', not 'uat-aws')"
-  else
-    self_test_fail=1
-  fi
-  if [ ! -f "charts/standard-workload/values-qa-aws.yaml" ]; then
-    echo "OK: confirmed a 4th, unauthorized aws-eks environment ('qa-aws') has no matching values file - the file-existence check above would reject it (more or fewer than exactly 3 aws-eks environments is detectable)"
-  else
-    echo "FAIL: unexpected - charts/standard-workload/values-qa-aws.yaml exists" >&2
-    self_test_fail=1
-  fi
-  [ "$self_test_fail" -ne 0 ] && fail=1
-fi
-rm -f "$bad_env_values" "$bad_env_out"
-
-# --- negative: fewer than 3 aws-eks environments is equally detectable
-# by the same "exactly 3" counting check already applied to the real
-# render above - self-tested here the same way. ---
-short_env_values="$(mktemp)"
-cat > "$short_env_values" <<'SHORTENVEOF'
-profile: "aws-eks"
-awsEnvironments:
-  - name: uat-aws
-    namespace: uat-aws
-SHORTENVEOF
-short_env_out="$(mktemp)"
-trap 'rm -f "$render_out" "$aws_render_out" "$short_env_values" "$short_env_out"' EXIT INT TERM
-if ! "$HELM_BIN" template gitops/bootstrap -f "$short_env_values" > "$short_env_out" 2>&1; then
-  echo "FAIL: the fewer-than-3-environments self-test fixture failed to render at all" >&2
-  fail=1
-else
-  short_count="$(grep -cE '^\s*- env: ' "$short_env_out" || true)"
-  if [ "$short_count" = "1" ]; then
-    echo "OK: confirmed a fixture with only 1 aws-eks environment renders exactly 1 generator element - the 'exactly 3' check above would correctly reject it"
-  else
-    echo "FAIL: fewer-than-3-environments self-test produced $short_count elements, expected 1" >&2
-    fail=1
-  fi
-fi
-rm -f "$short_env_values" "$short_env_out"
-
-# --- Phase 2.8.2: every profile lets an HPA own Deployment spec.replicas
+# --- Phase 2.8.2: local-kind lets an HPA own Deployment spec.replicas
 # (ignoreDifferences on exactly that pointer + RespectIgnoreDifferences) ---
-for prof_render in "$render_out" "$aws_render_out"; do
-  igd="$(awk '/ignoreDifferences:/{f=1} f&&/destination:/{exit} f{print}' "$prof_render")"
-  if printf '%s\n' "$igd" | grep -qE '^\s+- group: apps$' && printf '%s\n' "$igd" | grep -qE '^\s+kind: Deployment$' \
-     && ! printf '%s\n' "$igd" | grep -q 'jsonPointers:' \
-     && [ "$(printf '%s\n' "$igd" | grep -cE "^\s+- 'select")" = "1" ] \
-     && printf '%s\n' "$igd" | grep -qF -- "- 'select(.metadata.annotations[\"eks-gitops-lab-lite.local/replicas-owner\"] == \"hpa\") | .spec.replicas'" \
-     && grep -qE '^\s+- RespectIgnoreDifferences=true$' "$prof_render"; then
-    :
-  else
-    echo "FAIL: $prof_render does not ignore exactly spec.replicas of HPA-owned Deployments (replicas-owner=hpa) with RespectIgnoreDifferences=true" >&2
+igd="$(awk '/ignoreDifferences:/{f=1} f&&/destination:/{exit} f{print}' "$render_out")"
+if printf '%s\n' "$igd" | grep -qE '^\s+- group: apps$' && printf '%s\n' "$igd" | grep -qE '^\s+kind: Deployment$' \
+   && ! printf '%s\n' "$igd" | grep -q 'jsonPointers:' \
+   && [ "$(printf '%s\n' "$igd" | grep -cE "^\s+- 'select")" = "1" ] \
+   && printf '%s\n' "$igd" | grep -qF -- "- 'select(.metadata.annotations[\"eks-gitops-lab-lite.local/replicas-owner\"] == \"hpa\") | .spec.replicas'" \
+   && grep -qE '^\s+- RespectIgnoreDifferences=true$' "$render_out"; then
+  echo "OK: local-kind ignores spec.replicas only on Deployments annotated replicas-owner=hpa, with RespectIgnoreDifferences=true"
+else
+  echo "FAIL: local-kind does not ignore exactly spec.replicas of HPA-owned Deployments (replicas-owner=hpa) with RespectIgnoreDifferences=true" >&2
+  fail=1
+fi
+
+# =============================================================================
+# Hub-and-spoke profiles (Phase 2.7.4 local-multicluster, Phase 3.4.4b
+# aws-eks): hub Argo CD -> spokes through a clusters generator. Offline
+# shape only - which spokes actually get an Application is proven at
+# runtime (tests/multicluster/test-e2e.sh for the lab; Phase 6.4 for EKS).
+#   check_hub_spoke <profile> <owner label value> <other profile's owner> <overlay suffix>
+# =============================================================================
+check_hub_spoke() {
+  local prof="$1" owner="$2" other_owner="$3" suffix="$4" out hs_fail=0
+  echo "gitops-render: helm lint (profile=$prof) ..."
+  if ! "$HELM_BIN" lint gitops/bootstrap --set "profile=$prof" >/dev/null; then
+    echo "FAIL: helm lint failed for profile=$prof" >&2
     fail=1
   fi
-done
-[ "$fail" -eq 0 ] && echo "OK: local-kind and aws-eks ignore spec.replicas only on Deployments annotated replicas-owner=hpa, with RespectIgnoreDifferences=true; static Deployments stay reconciled from Git"
-
-# =============================================================================
-# Phase 2.7.4: local-multicluster profile (hub Argo CD -> registered kind
-# spokes through a clusters generator). Offline shape only - which
-# spokes actually get an Application is proven at runtime by
-# tests/multicluster/test-e2e.sh.
-# =============================================================================
-
-# --- negative: neither default nor aws-eks ever renders a clusters
-# generator (multicluster can never activate by omission) ---
-if grep -qE '^\s*- clusters:$' "$render_out" || grep -qE '^\s*- clusters:$' "$aws_render_out"; then
-  echo "FAIL: a clusters generator appears outside profile=local-multicluster" >&2
-  fail=1
-else
-  echo "OK: default and aws-eks renders contain no clusters generator"
-fi
-
-echo "gitops-render: helm lint (profile=local-multicluster) ..."
-if ! "$HELM_BIN" lint gitops/bootstrap --set profile=local-multicluster >/dev/null; then
-  echo "FAIL: helm lint failed for profile=local-multicluster" >&2
-  fail=1
-fi
-mc_render_out="$(mktemp)"
-trap 'rm -f "$render_out" "$aws_render_out" "$mc_render_out"' EXIT INT TERM
-if ! "$HELM_BIN" template gitops/bootstrap --set profile=local-multicluster --set "gitRevision=${revision}" > "$mc_render_out" 2>&1; then
-  echo "FAIL: helm template failed for profile=local-multicluster" >&2
-  cat "$mc_render_out" >&2
-  fail=1
-else
-  mc_fail=0
-  [ "$(grep -c '^kind: AppProject$' "$mc_render_out")" = "1" ] || { echo "FAIL: local-multicluster: expected exactly 1 AppProject" >&2; mc_fail=1; }
-  [ "$(grep -c '^kind: ApplicationSet$' "$mc_render_out")" = "1" ] || { echo "FAIL: local-multicluster: expected exactly 1 ApplicationSet" >&2; mc_fail=1; }
-  [ "$(grep -c '^kind: Secret$' "$mc_render_out" || true)" = "0" ] || { echo "FAIL: local-multicluster: a Secret was rendered" >&2; mc_fail=1; }
-  [ "$(grep -cE '^\s*- clusters:$' "$mc_render_out")" = "1" ] || { echo "FAIL: local-multicluster: expected exactly 1 clusters generator" >&2; mc_fail=1; }
-  [ "$(grep -cE '^\s*- list:$' "$mc_render_out" || true)" = "0" ] || { echo "FAIL: local-multicluster: a list generator is still rendered" >&2; mc_fail=1; }
-  grep -qE '^\s*eks-gitops-lab-lite\.local/owner: multicluster-registration$' "$mc_render_out" || { echo "FAIL: local-multicluster: selector lacks the registration owner label" >&2; mc_fail=1; }
-  grep -qE '^\s*- key: platform\.environment$' "$mc_render_out" || { echo "FAIL: local-multicluster: selector lacks the platform.environment expression" >&2; mc_fail=1; }
-  sel_values="$(awk '/- key: platform\.environment$/{f=1} f && /^[[:space:]]*- (dev|uat|prod|[a-z-]+)$/{printf "%s ", $2} f && /values:$/ && ++v==2 {exit}' "$mc_render_out")"
-  [ "$sel_values" = "dev uat prod " ] || { echo "FAIL: local-multicluster: selector environments are '$sel_values', expected exactly 'dev uat prod'" >&2; mc_fail=1; }
-  mc_project="$(awk '/^kind: AppProject$/{f=1} f && /^kind: ApplicationSet$/{exit} f{print}' "$mc_render_out")"
-  [ "$(printf '%s\n' "$mc_project" | grep -cE '^\s*- name: spoke-(dev|uat|prod)$')" = "3" ] || { echo "FAIL: local-multicluster: AppProject must allow exactly spoke-dev/spoke-uat/spoke-prod" >&2; mc_fail=1; }
-  if printf '%s\n' "$mc_project" | grep -qE 'server: |name: "?\*"?$|namespace: "?\*"?$'; then
-    echo "FAIL: local-multicluster: AppProject has a server-based or wildcard destination (the hub must be unreachable)" >&2; mc_fail=1
+  out="$(mktemp)"
+  if ! "$HELM_BIN" template gitops/bootstrap --set "profile=$prof" --set "gitRevision=${revision}" > "$out" 2>&1; then
+    echo "FAIL: helm template failed for profile=$prof" >&2
+    cat "$out" >&2
+    rm -f "$out"; fail=1; return
   fi
-  printf '%s\n' "$mc_project" | grep -qE '^\s*clusterResourceWhitelist: \[\]$' || { echo "FAIL: local-multicluster: clusterResourceWhitelist must be empty" >&2; mc_fail=1; }
-  mc_appset="$(awk '/^kind: ApplicationSet$/{f=1} f{print}' "$mc_render_out")"
-  printf '%s\n' "$mc_appset" | grep -qE '^\s*- CreateNamespace=false$' || { echo "FAIL: local-multicluster: CreateNamespace=false missing" >&2; mc_fail=1; }
-  printf '%s\n' "$mc_appset" | grep -qF 'replicas-owner"] == "hpa") | .spec.replicas' && printf '%s\n' "$mc_appset" | grep -qE '^\s+- RespectIgnoreDifferences=true$' || { echo "FAIL: local-multicluster: HPA hand-over settings (ignoreDifferences on replicas-owner=hpa Deployments + RespectIgnoreDifferences) missing" >&2; mc_fail=1; }
-  if printf '%s\n' "$mc_appset" | grep -qE 'CreateNamespace=true|managedNamespaceMetadata:|server: https://kubernetes\.default\.svc'; then
-    echo "FAIL: local-multicluster: template still creates namespaces or targets the hub's in-cluster server" >&2; mc_fail=1
+  [ "$(grep -c '^kind: AppProject$' "$out")" = "1" ] || { echo "FAIL: $prof: expected exactly 1 AppProject" >&2; hs_fail=1; }
+  [ "$(grep -c '^kind: ApplicationSet$' "$out")" = "1" ] || { echo "FAIL: $prof: expected exactly 1 ApplicationSet" >&2; hs_fail=1; }
+  if grep -qiE '^kind: SecretStore$|^kind: Secret$|auth:|serviceAccountRef|arn:aws:|AKIA[0-9A-Z]{16}' "$out"; then
+    echo "FAIL: $prof: render contains a SecretStore/Secret/auth/serviceAccountRef/ARN/credential-shaped string" >&2; hs_fail=1
   fi
-  printf '%s\n' "$mc_appset" | grep -qE '^\s*name: "\{\{\.name\}\}"$' || { echo "FAIL: local-multicluster: destination is not the generated cluster name" >&2; mc_fail=1; }
-  printf '%s\n' "$mc_appset" | grep -q "targetRevision: ${revision}" || { echo "FAIL: local-multicluster: revision '${revision}' not propagated" >&2; mc_fail=1; }
+  [ "$(grep -cE '^\s*- clusters:$' "$out")" = "1" ] || { echo "FAIL: $prof: expected exactly 1 clusters generator" >&2; hs_fail=1; }
+  [ "$(grep -cE '^\s*- list:$' "$out" || true)" = "0" ] || { echo "FAIL: $prof: a list generator is still rendered" >&2; hs_fail=1; }
+  grep -qE "^\s*eks-gitops-lab-lite\.local/owner: ${owner}$" "$out" || { echo "FAIL: $prof: selector lacks owner label value '$owner'" >&2; hs_fail=1; }
+  if grep -qE "owner: ${other_owner}$" "$out"; then
+    echo "FAIL: $prof: selector would also match the other profile's spoke Secrets ('$other_owner')" >&2; hs_fail=1
+  fi
+  grep -qE '^\s*- key: platform\.environment$' "$out" || { echo "FAIL: $prof: selector lacks the platform.environment expression" >&2; hs_fail=1; }
+  local sel_values
+  sel_values="$(awk '/- key: platform\.environment$/{f=1} f && /^[[:space:]]*- (dev|uat|prod|[a-z-]+)$/{printf "%s ", $2} f && /values:$/ && ++v==2 {exit}' "$out")"
+  [ "$sel_values" = "dev uat prod " ] || { echo "FAIL: $prof: selector environments are '$sel_values', expected exactly 'dev uat prod'" >&2; hs_fail=1; }
+  local project appset
+  project="$(awk '/^kind: AppProject$/{f=1} f && /^kind: ApplicationSet$/{exit} f{print}' "$out")"
+  [ "$(printf '%s\n' "$project" | grep -cE '^\s*- name: spoke-(dev|uat|prod)$')" = "3" ] || { echo "FAIL: $prof: AppProject must allow exactly spoke-dev/spoke-uat/spoke-prod" >&2; hs_fail=1; }
   for e in dev uat prod; do
-    [ -f "charts/standard-workload/values-${e}.yaml" ] || { echo "FAIL: local-multicluster: values-${e}.yaml missing" >&2; mc_fail=1; }
+    printf '%s\n' "$project" | grep -A1 -E "^\s*- name: spoke-${e}$" | grep -qE "^\s*namespace: ${e}$" || { echo "FAIL: $prof: AppProject destination spoke-${e} is not bound to namespace ${e}" >&2; hs_fail=1; }
   done
-  if [ "$mc_fail" -eq 0 ]; then
-    echo "OK: profile=local-multicluster renders 1 AppProject (spoke-dev/uat/prod by name only, no cluster-scoped grant) and 1 ApplicationSet with exactly 1 clusters generator (owner label + platform.environment in dev/uat/prod), CreateNamespace=false, destination by cluster name, revision propagated"
+  if printf '%s\n' "$project" | grep -qE 'server: |name: "?\*"?$|namespace: "?\*"?$|namespace: [a-z]+-aws$'; then
+    echo "FAIL: $prof: AppProject has a server-based, wildcard or *-aws destination (the hub must be unreachable)" >&2; hs_fail=1
+  fi
+  printf '%s\n' "$project" | grep -qE '^\s*clusterResourceWhitelist: \[\]$' || { echo "FAIL: $prof: clusterResourceWhitelist must be empty" >&2; hs_fail=1; }
+  appset="$(awk '/^kind: ApplicationSet$/{f=1} f{print}' "$out")"
+  printf '%s\n' "$appset" | grep -qE '^\s*- CreateNamespace=false$' || { echo "FAIL: $prof: CreateNamespace=false missing" >&2; hs_fail=1; }
+  printf '%s\n' "$appset" | grep -qF 'replicas-owner"] == "hpa") | .spec.replicas' && printf '%s\n' "$appset" | grep -qE '^\s+- RespectIgnoreDifferences=true$' || { echo "FAIL: $prof: HPA hand-over settings (ignoreDifferences on replicas-owner=hpa Deployments + RespectIgnoreDifferences) missing" >&2; hs_fail=1; }
+  if printf '%s\n' "$appset" | grep -qE 'CreateNamespace=true|managedNamespaceMetadata:|server: https://kubernetes\.default\.svc'; then
+    echo "FAIL: $prof: template still creates namespaces or targets the hub's in-cluster server" >&2; hs_fail=1
+  fi
+  printf '%s\n' "$appset" | grep -qE '^\s*name: "\{\{\.name\}\}"$' || { echo "FAIL: $prof: destination is not the generated cluster name" >&2; hs_fail=1; }
+  printf '%s\n' "$appset" | grep -qE '^\s*namespace: "\{\{\.values\.env\}\}"$' || { echo "FAIL: $prof: destination namespace is not the spoke's environment" >&2; hs_fail=1; }
+  printf '%s\n' "$appset" | grep -qF -- "- \"values-{{.values.env}}${suffix}.yaml\"" || { echo "FAIL: $prof: valueFiles is not values-{{.values.env}}${suffix}.yaml" >&2; hs_fail=1; }
+  printf '%s\n' "$appset" | grep -q "targetRevision: ${revision}" || { echo "FAIL: $prof: revision '${revision}' not propagated" >&2; hs_fail=1; }
+  for e in dev uat prod; do
+    [ -f "charts/standard-workload/values-${e}${suffix}.yaml" ] || { echo "FAIL: $prof: values-${e}${suffix}.yaml missing" >&2; hs_fail=1; }
+  done
+  # self-test: an extra 'qa' environment in this profile's list is caught
+  local key qa_values qa_sel
+  key="$([ "$prof" = "aws-eks" ] && echo awsEks || echo multicluster)"
+  qa_values="$(mktemp)"
+  printf 'profile: "%s"\n%s:\n  environments: [dev, uat, prod, qa]\n' "$prof" "$key" > "$qa_values"
+  qa_sel="$("$HELM_BIN" template gitops/bootstrap -f "$qa_values" 2>/dev/null | awk '/- key: platform\.environment$/{f=1} f && /^[[:space:]]*- [a-z-]+$/{printf "%s ", $2} f && /values:$/ && ++v==2 {exit}')"
+  rm -f "$qa_values" "$out"
+  if [ "$qa_sel" != "dev uat prod qa " ]; then
+    echo "FAIL: $prof: selector self-test did not render the injected 'qa' environment (got '$qa_sel') - check is broken" >&2; hs_fail=1
+  fi
+  if [ "$hs_fail" -eq 0 ]; then
+    echo "OK: profile=$prof renders 1 AppProject (spoke-dev/uat/prod by name, bound to dev/uat/prod, no cluster-scoped grant) and 1 ApplicationSet with exactly 1 clusters generator (owner=$owner + platform.environment in dev/uat/prod), CreateNamespace=false, destination by cluster name, values-<env>${suffix}.yaml, revision propagated; an extra 'qa' is detectable"
   else
     fail=1
   fi
-fi
+}
 
-# --- negative: an environment outside dev/uat/prod injected into the
-# selector list is detectable by the exact-list check above ---
-qa_values="$(mktemp)"
-printf 'profile: "local-multicluster"\nmulticluster:\n  environments: [dev, uat, prod, qa]\n' > "$qa_values"
-qa_sel="$("$HELM_BIN" template gitops/bootstrap -f "$qa_values" 2>/dev/null | awk '/- key: platform\.environment$/{f=1} f && /^[[:space:]]*- [a-z-]+$/{printf "%s ", $2} f && /values:$/ && ++v==2 {exit}')"
-rm -f "$qa_values"
-if [ "$qa_sel" = "dev uat prod qa " ]; then
-  echo "OK: confirmed the exact-selector check would reject an extra 'qa' environment (self-test)"
-else
-  echo "FAIL: selector self-test did not render the injected 'qa' environment (got '$qa_sel') - check is broken" >&2
-  fail=1
-fi
+check_hub_spoke local-multicluster multicluster-registration eks-spoke-registration ""
+check_hub_spoke aws-eks eks-spoke-registration multicluster-registration "-aws"
 
 if [ "$fail" -ne 0 ]; then
   echo "gitops-render: FAILED"
