@@ -164,3 +164,50 @@ USD 0):
   `make check-terraform-offline-regression`.
 - No real `plan` or `apply`. A real apply needs separate, explicit
   authorization (`AGENTS.md`).
+
+## Amendment (Phase 3.4.2, 2026-11-13): account baseline
+
+`terraform/envs/account-baseline` is applied once in each member account
+(`account_role` is one of security, platform, dev, uat, prod), through
+the account access role, the only principal the hardening and
+security-services guardrails exempt.
+
+- **Regions without provider aliases.** In `hashicorp/aws` 6.x every
+  regional resource takes a `region` argument. The baseline creates its
+  regional controls with `for_each` over `allowed_regions`, so it stays
+  one root and one state per account, and the offline contract still
+  holds.
+- **AWS Config:**
+  - One recorder per allowed region, recording an explicit list of
+    resource types (EKS, EC2 and networking, Auto Scaling, ELBv2, S3,
+    KMS, ECR, Secrets Manager, Lambda, SQS, EventBridge, CloudTrail,
+    Config compliance), never "all supported", since cost scales with
+    what is recorded.
+  - The global IAM types are recorded only in `home_region`, so each is
+    recorded once.
+  - `CONTINUOUS` recording and 7-year retention in `prod`; `DAILY` and
+    365 days everywhere else.
+  - Every account delivers under `config/<account_role>/` to one central
+    bucket in the security account, encrypted with a dedicated key. The
+    bucket and key admit AWS Config only for this organization
+    (`aws:SourceOrgID`).
+- **EC2 defaults per region:** EBS encryption by default, using the
+  AWS-managed `aws/ebs` key, and IMDSv2 required account-wide (hop limit
+  2; node groups and Karpenter set their own launch templates in 3.4.3).
+- **S3** account-level public access block with all four flags.
+- **Monthly budget per account**, with alerts at 80 % and 100 % actual
+  and 100 % forecasted.
+- **Not created per account:** GuardDuty and Security Hub (the
+  organization auto-enables them from `security`) and IAM Access
+  Analyzer (the organization analyzer already covers every member; the
+  unused-access analyzer is billed per role and user).
+- **Validation:**
+  - `terraform test` in `account-baseline` (9 runs) and in `security`
+    (10 runs, including the Config bucket).
+  - A cross-check in `envs/org`'s tests that no service control policy
+    denies an action the baseline needs without exempting the access
+    role.
+  - Three mutation checks were run, each caught by a failing test: IAM
+    types recorded in every region, an S3 account block flag set to
+    false, and an SCP that denies the baseline's
+    `s3:PutAccountPublicAccessBlock` without the exemption.
