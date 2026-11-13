@@ -1,16 +1,11 @@
-# No default for region/cluster name/owner - explicit human decisions,
-# never invented (docs/adr/0012-network-eks-iac-foundation.md). The
-# namespace/ServiceAccount defaults below are a deliberate, narrow
-# exception: they are not a security/cost decision but an already-
-# fixed, already-deployed fact, verified live against the running
-# cluster (.local/evidence/phase-3.2-pod-identity-secrets-manager-iac-
-# plan.md S5) - still fully overridable, never hardcoded inline in a
-# resource block. cluster_name/vpc_id/private_subnet_ids are NOT
-# resolved via a `data "terraform_remote_state"` lookup against
-# terraform/envs/eks's or terraform/envs/network's own state - that
-# mechanism needs a real backend to exist first, deferred to a later,
-# separately authorized phase, exactly matching the precedent already
-# established between envs/network and envs/eks.
+# No default for region/owner - explicit human decisions, never invented
+# (docs/adr/0012-network-eks-iac-foundation.md). Phase 3.4.3c: one apply
+# per spoke account; the per-environment namespace/ServiceAccount/secret
+# name live in environments.tf (one table, also read by
+# check-standard-workload-chart.sh). cluster_name is derived the same way
+# terraform/envs/eks derives it - never read from that root's state,
+# which would need a real backend (deferred, as between envs/network and
+# envs/eks).
 
 variable "aws_region" {
   type        = string
@@ -22,79 +17,36 @@ variable "aws_region" {
   }
 }
 
-variable "cluster_name" {
+variable "environment" {
   type        = string
-  description = "EKS cluster name (terraform/envs/eks's own cluster_name, passed explicitly). No default."
+  description = "Which spoke account this apply targets (Phase 3.4.3c, ADR-0016): dev, uat or prod. One state per account; never applied in the platform (hub) account."
 
   validation {
-    condition     = length(var.cluster_name) > 0 && can(regex("^[a-zA-Z][a-zA-Z0-9-]{0,99}$", var.cluster_name))
-    error_message = "cluster_name must be non-empty and match EKS cluster naming rules."
+    condition     = contains(["dev", "uat", "prod"], var.environment)
+    error_message = "environment must be exactly dev, uat or prod - the hub (platform) gets no ESO workload identity here."
   }
 }
 
-variable "dev_namespace" {
+variable "cluster_name" {
   type        = string
-  description = "Dev ESO controller pod namespace - matches the lab's scoped release namespace (eso-dev)."
-  default     = "eso-dev"
-}
+  description = "EKS cluster the Pod Identity association targets. Null (default) means eks-gitops-<environment>, the same name terraform/envs/eks derives."
+  default     = null
 
-variable "dev_service_account" {
-  type        = string
-  description = "Dev ESO controller ServiceAccount - matches the lab's scoped release ServiceAccount."
-  default     = "eso-dev-external-secrets"
-}
-
-variable "uat_namespace" {
-  type        = string
-  description = "UAT ESO controller pod namespace - matches the lab's scoped release namespace (eso-uat)."
-  default     = "eso-uat"
-}
-
-variable "uat_service_account" {
-  type        = string
-  description = "UAT ESO controller ServiceAccount - matches the lab's scoped release ServiceAccount."
-  default     = "eso-uat-external-secrets"
-}
-
-variable "prod_namespace" {
-  type        = string
-  description = "Prod ESO controller pod namespace - matches the lab's scoped release namespace (eso-prod)."
-  default     = "eso-prod"
-}
-
-variable "prod_service_account" {
-  type        = string
-  description = "Prod ESO controller ServiceAccount - matches the lab's scoped release ServiceAccount."
-  default     = "eso-prod-external-secrets"
-}
-
-variable "dev_secret_name" {
-  type        = string
-  description = "Dev Secrets Manager secret name (a naming-convention decision, not a security/cost value)."
-  default     = "eks-gitops-platform-project/dev/backend"
-}
-
-variable "uat_secret_name" {
-  type        = string
-  description = "UAT Secrets Manager secret name (a naming-convention decision, not a security/cost value)."
-  default     = "eks-gitops-platform-project/uat/backend"
-}
-
-variable "prod_secret_name" {
-  type        = string
-  description = "Prod Secrets Manager secret name (a naming-convention decision, not a security/cost value)."
-  default     = "eks-gitops-platform-project/prod/backend"
+  validation {
+    condition     = var.cluster_name == null || can(regex("^[a-zA-Z][a-zA-Z0-9-]{0,99}$", coalesce(var.cluster_name, "x")))
+    error_message = "cluster_name must match EKS cluster naming rules."
+  }
 }
 
 variable "kms_deletion_window_in_days" {
   type        = number
-  description = "KMS key deletion window in days for both environments. AWS-enforced bounds 7-30."
+  description = "KMS key deletion window in days. AWS-enforced bounds 7-30."
   default     = 30
 }
 
 variable "secret_recovery_window_in_days" {
   type        = number
-  description = "Secrets Manager recovery window in days for both environments. AWS-enforced bounds 7-30."
+  description = "Secrets Manager recovery window in days. AWS-enforced bounds 7-30."
   default     = 30
 }
 

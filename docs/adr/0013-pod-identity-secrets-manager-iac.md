@@ -202,3 +202,37 @@ forbidden-terms-regression` (45 fixtures, unchanged from Phase 3.1); `make
 validate`; the zero-AWS-contact proof above. No `terraform plan`/`apply`
 against real AWS, no real backend, no AWS credential, no real account ID/
 ARN anywhere in this phase's code.
+
+## Amendment (Phase 3.4.3c, 2026-11-13): one spoke per state
+
+Under ADR-0016 each spoke is its own account, so `terraform/envs/identity`
+is now applied once per spoke (`environment` is `dev`, `uat` or `prod`;
+never `platform`), with a single instance of `modules/eso-identity` (the
+module itself is unchanged).
+
+- **One table for the per-environment contract.** The namespace,
+  ServiceAccount and Secrets Manager secret name of each environment
+  live in `terraform/envs/identity/environments.tf`
+  (`environment_identities`). Terraform and
+  `check-standard-workload-chart` both read it.
+- **The cross-environment `check` is kept, over that table:** no two
+  environments may share a secret name or a (namespace,
+  ServiceAccount) pair.
+- **`cluster_name`** is derived as `eks-gitops-<environment>`, the same
+  rule `terraform/envs/eks` uses.
+- **Outputs are generic** (`role_arn`, `association_id`, `secret_arn`,
+  `secret_name`, `kms_key_arn`, …), because a state now holds one
+  environment.
+- **Tests:** rewritten as 19 runs (previously 16) in
+  `tests/identity.tftest.hcl`. Each guarantee of the former
+  three-instance tests is kept:
+  - a run per environment;
+  - the six pairwise rejections and the "shared namespace alone is
+    fine" case, now over the table;
+  - the child module's guards, unchanged;
+  - an isolation run that requires the policy to reference *exactly*
+    this environment's own secret and key, which is stronger than the
+    former non-overlap checks.
+- **Mutation checks** (each caught by a failing test): a duplicated
+  secret name in the table, and `secretsmanager:*` in the module's
+  action list.

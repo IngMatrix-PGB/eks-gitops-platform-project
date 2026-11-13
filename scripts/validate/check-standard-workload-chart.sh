@@ -908,20 +908,28 @@ done
 # (values-{dev,uat,prod}-aws.yaml) and Terraform<->
 # GitOps cross-validation. No Terraform state, no AWS account, no
 # cluster - every fact compared below comes from either this chart's
-# own render or a literal grepped directly out of terraform/envs/
-# identity/variables.tf (never re-typed as a duplicated policy, so a
-# future change to that file cannot silently drift out of sync with
-# this check without also failing it).
+# own render or a literal read directly out of terraform/envs/identity
+# (never re-typed as a duplicated policy, so a future change there
+# cannot silently drift out of sync with this check without also
+# failing it). Phase 3.4.3c: the per-environment namespace/
+# ServiceAccount/secret name live in one table,
+# terraform/envs/identity/environments.tf (variable
+# environment_identities); the aws_region regex stays in variables.tf.
 # =============================================================================
 
 TF_IDENTITY_VARS="terraform/envs/identity/variables.tf"
+TF_IDENTITY_TABLE="terraform/envs/identity/environments.tf"
 
-# tf_default <variable-name> - the exact literal `default = "..."`
-# value for that variable block in $TF_IDENTITY_VARS.
-tf_default() {
-  var="$1"
-  awk -v v="variable \"$var\"" '$0 ~ v {f=1} f {print} f && /^}/{exit}' "$TF_IDENTITY_VARS" \
-    | sed -n 's/^[[:space:]]*default[[:space:]]*=[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p'
+# tf_identity_lines - the one-line-per-environment entries of the
+# environment_identities default table (layout documented in that file).
+tf_identity_lines() {
+  awk '/^variable "environment_identities"/ {f=1} f && /^}/ {exit} f' "$TF_IDENTITY_TABLE" \
+    | grep -E '^[[:space:]]+[a-z]+[[:space:]]+= \{ namespace = "[^"]+", service_account = "[^"]+", secret_name = "[^"]+" \}$'
+}
+
+# tf_identity <env> <field> - one field of one environment's entry.
+tf_identity() {
+  tf_identity_lines | grep -E "^[[:space:]]+$1[[:space:]]+= \{" | sed -n "s/.*$2 = \"\([^\"]*\)\".*/\1/p"
 }
 
 # tf_region_regex - the exact regex string Terraform's own aws_region
@@ -937,11 +945,19 @@ if [ -z "$tf_aws_region_regex" ]; then
   echo "FAIL: could not extract the aws_region validation regex from $TF_IDENTITY_VARS" >&2
   fail=1
 fi
+# Self-test of the extractor itself: it must find exactly the three
+# environments, each on its own line - otherwise the comparisons below
+# would silently run against empty values.
+found_envs="$(tf_identity_lines | sed -n 's/^[[:space:]]*\([a-z]*\)[[:space:]]*=.*/\1/p' | sort | tr '\n' ' ')"
+if [ "$found_envs" != "dev prod uat " ]; then
+  echo "FAIL: expected exactly the dev, uat and prod entries (one per line) in $TF_IDENTITY_TABLE's environment_identities, found '$found_envs' - fix the table layout before cross-validating" >&2
+  fail=1
+fi
 for env_name in $aws_envs; do
   for field in secret_name namespace service_account; do
-    val="$(tf_default "${env_name}_${field}")"
+    val="$(tf_identity "$env_name" "$field")"
     if [ -z "$val" ]; then
-      echo "FAIL: could not extract ${env_name}_${field} from $TF_IDENTITY_VARS - Terraform<->GitOps cross-validation cannot proceed" >&2
+      echo "FAIL: could not extract $env_name.$field from $TF_IDENTITY_TABLE - Terraform<->GitOps cross-validation cannot proceed" >&2
       fail=1
     fi
     eval "tf_${env_name}_${field}=\$val"
@@ -951,7 +967,7 @@ if [ "$fail" -ne 0 ]; then
   echo "check-standard-workload-chart: FAILED (Terraform variable extraction)" >&2
   exit 1
 fi
-echo "OK: extracted dev/uat/prod secret_name, namespace, service_account defaults and the aws_region validation regex directly from $TF_IDENTITY_VARS"
+echo "OK: extracted exactly dev/uat/prod secret_name, namespace and service_account from $TF_IDENTITY_TABLE, and the aws_region validation regex from $TF_IDENTITY_VARS"
 
 # --- positive: the tracked aws-eks overlay fixtures render, and their
 # aws.secretName/aws.region match Terraform's own values exactly ---
@@ -982,9 +998,9 @@ for env_name in $aws_envs; do
   eval "overlay_key=\$${env_name}_overlay_key"
   eval "tf_secret=\$tf_${env_name}_secret_name"
   if [ "$overlay_key" = "$tf_secret" ]; then
-    echo "OK: values-${env_name}-aws.yaml's remoteRef.key matches terraform/envs/identity's ${env_name}_secret_name default exactly ('$tf_secret')"
+    echo "OK: values-${env_name}-aws.yaml's remoteRef.key matches terraform/envs/identity's ${env_name} secret_name exactly ('$tf_secret')"
   else
-    echo "FAIL: values-${env_name}-aws.yaml remoteRef.key ('$overlay_key') does not match Terraform's ${env_name}_secret_name default ('$tf_secret')" >&2
+    echo "FAIL: values-${env_name}-aws.yaml remoteRef.key ('$overlay_key') does not match terraform/envs/identity's ${env_name} secret_name ('$tf_secret')" >&2
     fail=1
   fi
 done
@@ -1021,22 +1037,22 @@ for env_name in $aws_envs; do
   if [ "$tf_ns" = "eso-${env_name}" ] && [ "$tf_sa" = "eso-${env_name}-external-secrets" ]; then
     echo "OK: Terraform's $env_name controller namespace/ServiceAccount defaults match the ESO release naming (eso-${env_name}/eso-${env_name}-external-secrets)"
   else
-    echo "FAIL: Terraform's $env_name controller namespace/ServiceAccount defaults changed (namespace='$tf_ns' service_account='$tf_sa') - re-verify against the ESO release naming before proceeding" >&2
+    echo "FAIL: terraform/envs/identity/environments.tf's $env_name controller namespace/ServiceAccount changed (namespace='$tf_ns' service_account='$tf_sa') - re-verify against the ESO release naming before proceeding" >&2
     fail=1
   fi
 done
 
 # --- positive: dev, uat, and prod remain pairwise distinct across
 # every cross-validated field (same never-shared-identity bar as the
-# kubernetes provider and as Terraform's own iam-policy-isolation
-# tests) ---
+# kubernetes provider and as terraform/envs/identity's own
+# environments_never_share_identity check) ---
 isolation_fail=0
 for pair in "dev:uat" "dev:prod" "uat:prod"; do
   a="${pair%%:*}"; b="${pair##*:}"
   for field in secret_name namespace service_account; do
     eval "a_val=\$tf_${a}_${field}"; eval "b_val=\$tf_${b}_${field}"
     if [ "$a_val" = "$b_val" ]; then
-      echo "FAIL: Terraform's ${a}_${field} and ${b}_${field} defaults are identical" >&2
+      echo "FAIL: terraform/envs/identity/environments.tf gives ${a} and ${b} the same ${field}" >&2
       isolation_fail=1
     fi
   done
@@ -1080,7 +1096,7 @@ fi
 # built as a standalone render (not layered on values-uat.yaml,
 # whose real kubernetes-only fields would trip the aws mutual-exclusion
 # rules for an unrelated reason and mask what this case means to test),
-# using Terraform's OWN prod_secret_name default rather than a
+# using Terraform's OWN prod secret_name (environments.tf) rather than a
 # hand-typed duplicate, so this can never silently stop testing the
 # real swap. ---
 swapped_fixture="$root/swapped-secret-name.yaml"
