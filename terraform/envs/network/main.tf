@@ -2,8 +2,14 @@ module "tags" {
   source = "../../modules/tags"
 
   project     = var.project
-  environment = "shared"
+  environment = var.environment == "platform" ? "shared" : var.environment
   owner       = var.owner
+}
+
+locals {
+  # Phase 3.4.3: prod survives the loss of one AZ's NAT; elsewhere one
+  # shared NAT keeps the cost down.
+  single_nat_gateway = var.single_nat_gateway != null ? var.single_nat_gateway : var.environment != "prod"
 }
 
 # VPC/subnets/NAT/S3-Gateway-endpoint. Public subnets are used only for
@@ -15,7 +21,7 @@ module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = "6.7.2"
 
-  name = "${var.project}-network"
+  name = "${var.project}-${var.environment}"
   cidr = var.vpc_cidr
   azs  = var.availability_zones
 
@@ -27,7 +33,7 @@ module "vpc" {
   ]
 
   enable_nat_gateway = true
-  single_nat_gateway = var.single_nat_gateway
+  single_nat_gateway = local.single_nat_gateway
 
   # VPC endpoints (S3 Gateway, and Interface endpoints for STS/ECR/
   # Secrets Manager in the "closer to production" shape) are

@@ -30,10 +30,20 @@ variable "availability_zones" {
   }
 }
 
+variable "environment" {
+  type        = string
+  description = "Which account this VPC is applied in (Phase 3.4.3, ADR-0016): platform (the hub), dev, uat or prod. One state per account."
+
+  validation {
+    condition     = contains(["platform", "dev", "uat", "prod"], var.environment)
+    error_message = "environment must be exactly platform, dev, uat or prod."
+  }
+}
+
 variable "single_nat_gateway" {
   type        = bool
-  description = "Use a single, shared NAT Gateway (lab-cost default, canonical plan S7.1 estimate A/B) instead of one per AZ (S7.2 estimate C, closer-to-production shape). A sensible starting default, not a security- or cost-invariant value, so it MAY default (unlike region/CIDR/AZs)."
-  default     = true
+  description = "Override the per-environment NAT layout: null (default) means one NAT Gateway per availability zone in prod, and a single shared one elsewhere (lab-cost shape)."
+  default     = null
 }
 
 variable "owner" {

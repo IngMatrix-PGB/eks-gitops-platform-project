@@ -2,8 +2,59 @@ module "tags" {
   source = "../../modules/tags"
 
   project     = var.project
-  environment = "shared"
+  environment = var.environment == "platform" ? "shared" : var.environment
   owner       = var.owner
+}
+
+locals {
+  cluster_name  = coalesce(var.cluster_name, "eks-gitops-${var.environment}")
+  capacity_type = coalesce(var.capacity_type, var.environment == "prod" ? "ON_DEMAND" : "SPOT")
+}
+
+locals {
+  # Phase 3.4.3: a small "system" node group for add-ons and controllers;
+  # workload capacity comes from Karpenter (Phase 3.4.3b).
+  eks_managed_node_groups = {
+    system = {
+      instance_types = var.node_instance_types
+      capacity_type  = local.capacity_type
+
+      min_size     = 2
+      max_size     = 3
+      desired_size = 2
+
+      # CNI credentials come from aws_iam_role.vpc_cni (Pod Identity).
+      iam_role_attach_cni_policy = false
+
+      # IMDSv2 enforced - mirrors the EC2.8 hardening pattern already
+      # applied elsewhere (canonical plan S9.1).
+      metadata_options = {
+        http_tokens                 = "required"
+        http_put_response_hop_limit = 1
+      }
+    }
+  }
+}
+
+# Phase 3.4.3: the VPC CNI gets its own Pod Identity role with only the
+# CNI policy, instead of that policy riding on every node's role (the
+# system node group below sets iam_role_attach_cni_policy = false).
+resource "aws_iam_role" "vpc_cni" {
+  name = "${local.cluster_name}-vpc-cni"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "pods.eks.amazonaws.com" }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+    }]
+  })
+  tags = module.tags.tags
+}
+
+resource "aws_iam_role_policy_attachment" "vpc_cni" {
+  role       = aws_iam_role.vpc_cni.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
 }
 
 # EKS cluster + Access Entries (never aws-auth, canonical plan S9.1) +
@@ -15,7 +66,7 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "21.25.0"
 
-  name               = var.cluster_name
+  name               = local.cluster_name
   kubernetes_version = var.cluster_version
 
   vpc_id     = var.vpc_id
@@ -50,15 +101,39 @@ module "eks" {
   # future, separately authorized deploy time. Created via this
   # Terraform module only - never Helm, never GitOps, never
   # IRSA/OIDC.
+  # Phase 3.4.3: every add-on the cluster runs is managed here, each at an
+  # explicit, validated version - most_recent is always false (the
+  # module's own default is true). vpc-cni and the Pod Identity Agent are
+  # installed before the node group (before_compute), so nodes join with
+  # a working CNI whose credentials come from Pod Identity. The VPC CNI
+  # enforces NetworkPolicy (closes R-14 together with metrics-server).
   addons = {
     eks-pod-identity-agent = {
-      addon_version = var.pod_identity_agent_addon_version
-      # Explicit, never most_recent - most_recent defaults to true on
-      # this module's own addons variable, which this design
-      # deliberately overrides to false since the version is always
-      # the caller-supplied, explicitly pinned value above, never
-      # resolved implicitly by the module/API.
-      most_recent = false
+      addon_version  = var.pod_identity_agent_addon_version
+      most_recent    = false
+      before_compute = true
+    }
+    vpc-cni = {
+      addon_version        = var.vpc_cni_addon_version
+      most_recent          = false
+      before_compute       = true
+      configuration_values = jsonencode({ enableNetworkPolicy = "true" })
+      pod_identity_association = [{
+        role_arn        = aws_iam_role.vpc_cni.arn
+        service_account = "aws-node"
+      }]
+    }
+    coredns = {
+      addon_version = var.coredns_addon_version
+      most_recent   = false
+    }
+    kube-proxy = {
+      addon_version = var.kube_proxy_addon_version
+      most_recent   = false
+    }
+    metrics-server = {
+      addon_version = var.metrics_server_addon_version
+      most_recent   = false
     }
   }
 
@@ -87,23 +162,9 @@ module "eks" {
     }
   }
 
-  eks_managed_node_groups = {
-    default = {
-      instance_types = var.node_instance_types
-      capacity_type  = var.capacity_type
-
-      min_size     = 1
-      max_size     = 3
-      desired_size = 2
-
-      # IMDSv2 enforced - mirrors the EC2.8 hardening pattern already
-      # applied elsewhere (canonical plan S9.1).
-      metadata_options = {
-        http_tokens                 = "required"
-        http_put_response_hop_limit = 1
-      }
-    }
-  }
+  # Phase 3.4.3: see local.eks_managed_node_groups (kept in a local so
+  # terraform test can assert the node group configuration directly).
+  eks_managed_node_groups = local.eks_managed_node_groups
 
   tags = module.tags.tags
 }
