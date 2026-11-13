@@ -27,3 +27,13 @@ output "access_analyzer_arn" {
   description = "Organization-scoped IAM Access Analyzer."
   value       = aws_accessanalyzer_analyzer.organization.arn
 }
+
+output "config_bucket_name" {
+  description = "Central AWS Config bucket - input config_bucket_name of terraform/envs/account-baseline."
+  value       = aws_s3_bucket.config.bucket
+}
+
+output "config_kms_key_arn" {
+  description = "Key encrypting the Config deliveries - input config_kms_key_arn of terraform/envs/account-baseline."
+  value       = aws_kms_key.config.arn
+}
