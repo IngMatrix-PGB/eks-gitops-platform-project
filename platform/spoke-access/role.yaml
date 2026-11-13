@@ -1,0 +1,41 @@
+# Phase 3.4.4a (ADR-0015, TAD R-05): the ONE definition of what the hub's
+# Argo CD may do inside a spoke's workload namespace - the same Role in
+# the local lab and on EKS.
+#   - lab: lab/multicluster/spoke-register.sh binds it to the
+#     argocd-access/argocd-manager ServiceAccount.
+#   - EKS: the spoke bootstrap (docs/runbooks/eks-bootstrap-order.md)
+#     binds it to the Kubernetes group argocd-manager, which the spoke's
+#     EKS access entry for the hub's Argo CD role maps to (STANDARD entry,
+#     no access policy - terraform/envs/eks).
+# SPOKE_NAMESPACE is replaced with the spoke's namespace (dev, uat, prod).
+#
+# Exactly the namespaced kinds the platform AppProject allows
+# (gitops/bootstrap/templates/appproject.yaml namespaceResourceWhitelist),
+# never Secret, never a wildcard, never a ClusterRole -
+# scripts/validate/check-spoke-access.sh enforces all of it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argocd-manager
+  namespace: SPOKE_NAMESPACE
+  labels:
+    eks-gitops-lab-lite.local/owner: multicluster-registration
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "services", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["external-secrets.io"]
+    resources: ["secretstores", "externalsecrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

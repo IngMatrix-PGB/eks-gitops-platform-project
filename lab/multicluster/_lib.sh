@@ -130,3 +130,15 @@ lab_mc_spoke_ready() {
   fi
   return 0
 }
+
+# lab_mc_spoke_role <spoke> - prints platform/spoke-access/role.yaml for
+# that spoke's namespace (Phase 3.4.4a: the one Role definition shared
+# with EKS). Fails closed if the file's name or owner label no longer
+# match this registration's constants, which deregistration relies on.
+lab_mc_spoke_role() {
+  msr_file="platform/spoke-access/role.yaml"
+  grep -qE "^  name: ${LAB_MC_ACCESS_SA}$" "$msr_file" \
+    && grep -qE "^    ${LAB_MC_OWNER_LABEL_KEY}: ${LAB_MC_OWNER_LABEL_VALUE}$" "$msr_file" \
+    || { echo "FAIL: $msr_file name/owner label no longer match the registration constants" >&2; return 1; }
+  sed "s/SPOKE_NAMESPACE/$1/" "$msr_file" | grep -v '^#'
+}

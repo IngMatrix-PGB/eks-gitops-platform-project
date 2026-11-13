@@ -32,3 +32,13 @@ output "karpenter_node_iam_role_name" {
   value       = one(module.karpenter[*].node_iam_role_name)
   description = "Role of Karpenter-provisioned nodes (EC2NodeClass spec.role in Phase 6.4); null on the hub."
 }
+
+output "argocd_hub_role_arn" {
+  value       = one(aws_iam_role.argocd_hub[*].arn)
+  description = "Hub only: the role Argo CD's controller and server use (Pod Identity) to assume the spoke argocd-manager roles."
+}
+
+output "argocd_manager_role_arn" {
+  value       = one(aws_iam_role.argocd_manager[*].arn)
+  description = "Spokes only: the role the hub's Argo CD assumes (cluster Secret awsAuthConfig.roleARN, Phase 3.4.4b)."
+}

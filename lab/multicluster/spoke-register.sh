@@ -10,9 +10,9 @@
 #     permission) - D1.
 #   - namespace argocd-access with ServiceAccount argocd-manager.
 #   - a Role + RoleBinding in <env> granting exactly the kinds the
-#     platform AppProject allows (ConfigMap, Service, ServiceAccount,
-#     Deployment, SecretStore, ExternalSecret). Never Secret, never a
-#     wildcard, never a ClusterRole.
+#     platform AppProject allows. The Role comes from
+#     platform/spoke-access/role.yaml (Phase 3.4.4a), the same Role EKS
+#     spokes use. Never Secret, never a wildcard, never a ClusterRole.
 # On the hub:
 #   - Argo CD cluster Secret spoke-<env> (label platform.environment=<env>)
 #     scoped with namespaces=<env> and clusterResources=false, holding the
@@ -48,6 +48,9 @@ if ! ckubectl "$LAB_MC_HUB" get namespace argocd >/dev/null 2>&1; then
 fi
 
 # --- 1. spoke-side objects ---
+# Rendered first, outside the heredoc, so a failure stops the script
+# (set -e does not see a failing command substitution inside a heredoc).
+spoke_role="$(lab_mc_spoke_role "$spoke")"
 cat <<EOF | ckubectl "$spoke" apply --server-side --field-manager="$LAB_MC_FIELD_MANAGER" -f - >/dev/null
 apiVersion: v1
 kind: Namespace
@@ -78,32 +81,7 @@ metadata:
     ${LAB_MC_OWNER_LABEL_KEY}: ${LAB_MC_OWNER_LABEL_VALUE}
 automountServiceAccountToken: false
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: ${LAB_MC_ACCESS_SA}
-  namespace: ${spoke}
-  labels:
-    ${LAB_MC_OWNER_LABEL_KEY}: ${LAB_MC_OWNER_LABEL_VALUE}
-rules:
-  - apiGroups: [""]
-    resources: ["configmaps", "services", "serviceaccounts"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["external-secrets.io"]
-    resources: ["secretstores", "externalsecrets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["policy"]
-    resources: ["poddisruptionbudgets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["networkpolicies"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["autoscaling"]
-    resources: ["horizontalpodautoscalers"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+${spoke_role}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
