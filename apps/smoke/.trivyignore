@@ -1,0 +1,4 @@
+# Phase 5.1a: vulnerabilities accepted for apps/smoke. Every entry needs
+# a dated justification and an expiry, e.g.
+#   CVE-2099-0001 exp:2099-12-31  # why it does not apply; who decided
+# Empty by design: nothing is accepted today.

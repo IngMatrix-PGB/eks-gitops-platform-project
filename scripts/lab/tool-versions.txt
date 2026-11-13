@@ -25,12 +25,20 @@
 # corresponding official checksum published by the tool's own upstream
 # release (kind's *.sha256sum file, dl.k8s.io's kubectl.sha256 file,
 # get.helm.sh's *.tar.gz.sha256 file, releases.hashicorp.com's
-# terraform_<version>_SHA256SUMS file) before being recorded here.
+# terraform_<version>_SHA256SUMS file, the trivy and syft
+# <tool>_<version>_checksums.txt release assets) before being recorded here.
+# Phase 5.1a: trivy (image vulnerability scan) and syft (SBOM) are used
+# by the image CI only; their versions were at least two weeks old when
+# pinned.
 kind|v0.33.0|darwin-arm64|kind|raw||0c8c7dbe5e23594a198b786c4bc13dacc101fa6196b0cb0b23a1ca44e61f4b4f|0c8c7dbe5e23594a198b786c4bc13dacc101fa6196b0cb0b23a1ca44e61f4b4f|https://kind.sigs.k8s.io/dl/v0.33.0/kind-darwin-arm64
 kubectl|v1.36.4|darwin-arm64|kubectl|raw||c9e4f713d6fee0043a3d835cca13077cda2bc0973840eb9779360df0b5bdfc69|c9e4f713d6fee0043a3d835cca13077cda2bc0973840eb9779360df0b5bdfc69|https://dl.k8s.io/release/v1.36.4/bin/darwin/arm64/kubectl
 helm|v4.2.4|darwin-arm64|helm|tar.gz|darwin-arm64/helm|d747eb4e28bd2727173d15b759fa0a17822291ec09db7ced3d55af290a3661a2|66f6b8881392bfa15c6c1dceef980426a28709c8122d5dc8a7a29697cad7334c|https://get.helm.sh/helm-v4.2.4-darwin-arm64.tar.gz
 terraform|v1.16.1|darwin-arm64|terraform|zip|terraform|e22cba761ddbd4d218939b28715ab3af37aaf8a42efa41f7d75b2c3d73636060|39d08f802c61d133c04b9b22ffcdf2434f1aeec0c4cd5b144698e63441ea57c0|https://releases.hashicorp.com/terraform/1.16.1/terraform_1.16.1_darwin_arm64.zip
+trivy|v0.76.1|darwin-arm64|trivy|tar.gz|trivy|11a9b6cd2752011b54f01ea4bd0dbfa9f0c41dc6538d5a3f9d23955f471bf4e5|5c03401caf9d3cc04d9e0c7f3abd102e97518e8237465cce702162b605535e8d|https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_macOS-ARM64.tar.gz
+syft|v1.55.0|darwin-arm64|syft|tar.gz|syft|1217c258bd5eb91ef3189cf22a82e02f9cac07e4ce934350f428e93aff674625|55a63db797b2a060aa56c7a03991bb11084e01ed4e3863df12370d74e84b4821|https://github.com/anchore/syft/releases/download/v1.55.0/syft_1.55.0_darwin_arm64.tar.gz
 kind|v0.33.0|linux-amd64|kind|raw||aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d|aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d|https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-amd64
 kubectl|v1.36.4|linux-amd64|kubectl|raw||8b8f088da2dab964f853b38464033b1be15ede2839eca751482357c45abdd05a|8b8f088da2dab964f853b38464033b1be15ede2839eca751482357c45abdd05a|https://dl.k8s.io/release/v1.36.4/bin/linux/amd64/kubectl
 helm|v4.2.4|linux-amd64|helm|tar.gz|linux-amd64/helm|c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3|92e191314f44aac173711bb0247c38c727f3ddf65ad16a01c0861d509a63a9e1|https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz
 terraform|v1.16.1|linux-amd64|terraform|zip|terraform|745d33b4b02b7980c62a38ec1beea24ee084ea8caf3f503c200554bd9a0cbe49|0b5a4e400548d9538af88a4c5a2726b97b38751b8f577aa6687ad051ba2070f2|https://releases.hashicorp.com/terraform/1.16.1/terraform_1.16.1_linux_amd64.zip
+trivy|v0.76.1|linux-amd64|trivy|tar.gz|trivy|c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0|d1dfca6ae10a1ad4540bb94e64f0510077c47008920a9b554986b39dca573d83|https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz
+syft|v1.55.0|linux-amd64|syft|tar.gz|syft|bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d|64c9631c3560336c55c549df0de08cd577d02399c9de807ac390960a4ed5c351|https://github.com/anchore/syft/releases/download/v1.55.0/syft_1.55.0_linux_amd64.tar.gz
