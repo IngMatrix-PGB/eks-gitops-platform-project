@@ -31,6 +31,8 @@ require_repo_root
 require_tools
 . scripts/argocd/_lib.sh
 . scripts/gitops/_lib.sh
+# shellcheck source=../../scripts/workload/_lib.sh
+. scripts/workload/_lib.sh
 
 case "${LAB_CLUSTER:-lab-lite}" in
   lab-lite) argo_cluster=lab-lite ;;
@@ -142,7 +144,8 @@ fi
 [ "$(app_sync)" = "Synced/Healthy" ] || { echo "FAIL: step 2 - $app is $(app_sync)" >&2; fail=1; }
 
 # --- 3. scale up under load; 4. Argo CD does not fight ---
-image="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.template.spec.containers[0].image}')"
+# Phase 5.1c-1: the load generators run the pinned test client image,
+# never the workload's own image (which may have no shell).
 for n in 1 2 3 4 5; do
   cat <<EOF | pkubectl apply -f - >/dev/null
 apiVersion: v1
@@ -158,7 +161,7 @@ spec:
   securityContext: { runAsNonRoot: true, runAsUser: 65532, seccompProfile: { type: RuntimeDefault } }
   containers:
     - name: c
-      image: "$image"
+      image: "$TEST_CLIENT_IMAGE"
       command: ["sh", "-c"]
       args:
         - |

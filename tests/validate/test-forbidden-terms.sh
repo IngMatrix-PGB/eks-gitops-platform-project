@@ -599,6 +599,39 @@ run_case "FROM digest line with trailing text" reject \
   "FROM registry.example/base@sha256:${CHK_WITH_DIGITS} # ${AWS12}
 "
 
+# --- Phase 5.1c-1: promotion digests in overlays and the ledger ---------
+run_case "overlay digest line with a 12+ digit run" accept \
+  "charts/standard-workload/values-dev.yaml" \
+  "image:
+  repository: ghcr.io/example/app
+  digest: \"sha256:${CHK_WITH_DIGITS}\"
+"
+run_case "same digest line in another chart's values" reject \
+  "charts/other/values-dev.yaml" \
+  "  digest: \"sha256:${CHK_WITH_DIGITS}\"
+"
+run_case "overlay digest line with trailing text" reject \
+  "charts/standard-workload/values-dev.yaml" \
+  "  digest: \"sha256:${CHK_WITH_DIGITS}\" # ${AWS12}
+"
+run_case "12-digit run on another overlay line" reject \
+  "charts/standard-workload/values-dev.yaml" \
+  "  digest: \"sha256:${CHK_VALID}\"
+owner: \"${AWS12}\"
+"
+run_case "well-formed ledger row with a 12+ digit run" accept \
+  "gitops/promotions/app.tsv" \
+  "$(printf '2026-11-13\tdev\tghcr.io/example/app@sha256:%s\tmain' "${CHK_WITH_DIGITS}")
+"
+run_case "ledger row with an unknown environment" reject \
+  "gitops/promotions/app.tsv" \
+  "$(printf '2026-11-13\tqa\tghcr.io/example/app@sha256:%s\tmain' "${CHK_WITH_DIGITS}")
+"
+run_case "ledger-shaped row in a .tsv elsewhere" reject \
+  "docs/app.tsv" \
+  "$(printf '2026-11-13\tdev\tghcr.io/example/app@sha256:%s\tmain' "${CHK_WITH_DIGITS}")
+"
+
 echo ""
 echo "test-forbidden-terms: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then

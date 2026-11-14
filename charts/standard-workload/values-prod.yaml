@@ -2,6 +2,13 @@
 # is inherited from values.yaml. This file is never touched by the
 # Phase 2.4 rollout-verification commit - its stability across that
 # change is the isolation proof.
+# Phase 5.1c-1: this environment's image, changed only by `make promote`
+# (scripts/promote/promote.sh). values-prod.yaml and values-prod-aws.yaml
+# always hold the same reference; check-promotion enforces it.
+image:
+  repository: ghcr.io/stefanprodan/podinfo
+  digest: "sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da"
+
 replicaCount: 2
 
 resources:

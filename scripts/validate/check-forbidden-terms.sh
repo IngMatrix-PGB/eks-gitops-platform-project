@@ -106,9 +106,33 @@ lib_image_digest_line_pattern='^[A-Z][A-Z0-9_]*_IMAGE_DIGEST="sha256:[0-9a-f]{64
 # the file, and any other path, is scanned normally.
 dockerfile_from_digest_line_pattern='^FROM[[:space:]]+(--platform=\$BUILDPLATFORM[[:space:]]+)?[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}([[:space:]]+AS[[:space:]]+[a-z][a-z0-9-]*)?$'
 
+# Narrow, single-purpose exceptions (Phase 5.1c-1): promotion writes
+# image digests into exactly two places. Each masks ONLY a line of exactly
+# this shape, ONLY in these paths - any other line is scanned normally:
+#   charts/standard-workload/values*.yaml:  `  digest: "sha256:<64 hex>"`
+#   gitops/promotions/<name>.tsv:           `<date>\t<env>\t<ref>@sha256:<64 hex>\t<from>`
+overlay_digest_line_pattern='^  digest: "sha256:[0-9a-f]{64}"$'
+ledger_row_pattern=$'^[0-9]{4}-[0-9]{2}-[0-9]{2}\t(dev|uat|prod)\t[a-z0-9][a-z0-9./_-]*@sha256:[0-9a-f]{64}\t(main|dev|uat)$'
+
 aws_account_hit_in_file() {
   local file="$1"
   local is_terraform_lock_file
+  local masked_pattern=""
+  case "$file" in
+    charts/standard-workload/values*.yaml) masked_pattern="$overlay_digest_line_pattern" ;;
+    gitops/promotions/*/*) : ;;
+    gitops/promotions/*.tsv) masked_pattern="$ledger_row_pattern" ;;
+  esac
+  if [ -n "$masked_pattern" ]; then
+    local line
+    while IFS= read -r line || [ -n "$line" ]; do
+      [[ "$line" =~ $masked_pattern ]] && continue
+      if [[ "$line" =~ $aws_account_pattern ]]; then
+        return 0
+      fi
+    done < "$file"
+    return 1
+  fi
   case "$file" in
     apps/*/Dockerfile)
       case "${file#apps/}" in

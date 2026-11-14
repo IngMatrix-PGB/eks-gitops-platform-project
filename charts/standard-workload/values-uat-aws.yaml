@@ -7,6 +7,13 @@
 #
 # Everything except externalSecret mirrors values-uat.yaml exactly -
 # only the secret backend changes, never the workload itself.
+# Phase 5.1c-1: this environment's image, changed only by `make promote`
+# (scripts/promote/promote.sh). values-uat.yaml and values-uat-aws.yaml
+# always hold the same reference; check-promotion enforces it.
+image:
+  repository: ghcr.io/stefanprodan/podinfo
+  digest: "sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da"
+
 replicaCount: 1
 
 resources:
