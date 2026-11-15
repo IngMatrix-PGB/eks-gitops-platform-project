@@ -4,6 +4,16 @@
 # reads gitops/bootstrap from the remote branch under test, never from
 # an uncommitted local edit. Backs `make gitops-test-lifecycle` only.
 #
+# Precondition: no GitOps object (root Application, AppProject,
+# ApplicationSet, generated Applications) and no workload object inside
+# dev/uat/prod. The namespaces themselves MAY exist: ESO's scoped
+# releases (`make eso-install`) target them, and `make gitops-uninstall`
+# deliberately RETAINS them while such a release is active. On a lab
+# brought up per the runbook, run `make gitops-uninstall` first.
+# If ESO was already installed when the test started, the test leaves
+# it installed and ends with dev/uat/prod retained (as it found them);
+# otherwise it also uninstalls ESO and ends with them absent.
+#
 # Sequence: baseline -> refuse-if-dirty -> bootstrap -> verify
 # AppProject/ApplicationSet/generated Applications/namespaces/
 # ConfigMaps -> bootstrap again (true no-op, resourceVersions
@@ -25,6 +35,8 @@ require_repo_root
 . scripts/workload/_lib.sh
 # shellcheck source=../../scripts/argocd/_lib.sh
 . scripts/argocd/_lib.sh
+# shellcheck source=../../scripts/eso/_lib.sh
+. scripts/eso/_lib.sh
 # shellcheck source=../../scripts/gitops/_lib.sh
 . scripts/gitops/_lib.sh
 
@@ -49,18 +61,50 @@ if ! GITOPS_CHECK_ONLY=1 sh lab/gitops/repo-setup.sh >"$repo_check_out" 2>&1 || 
 fi
 echo "OK: step 1 - cluster, Argo CD, and repository authentication baseline verified"
 
-echo "test-lifecycle(gitops): step 2 - refuse if any Phase 2.3 object already exists"
+echo "test-lifecycle(gitops): step 2 - refuse if any GitOps object or workload object already exists"
 if gitops_root_app_exists || gitops_appproject_exists || gitops_appset_exists \
    || gitops_generated_app_exists "platform-smoke-dev" \
    || gitops_generated_app_exists "platform-smoke-uat" \
-   || gitops_generated_app_exists "platform-smoke-prod" \
-   || pkubectl get namespace dev >/dev/null 2>&1 \
-   || pkubectl get namespace uat >/dev/null 2>&1 \
-   || pkubectl get namespace prod >/dev/null 2>&1; then
-  echo "FAIL: a Phase 2.3 object already exists - refusing to run the lifecycle test against a non-clean state" >&2
+   || gitops_generated_app_exists "platform-smoke-prod"; then
+  echo "FAIL: a GitOps object (root Application/AppProject/ApplicationSet/generated Application) already exists - run 'make gitops-uninstall' first; refusing to run the lifecycle test against a non-clean state" >&2
   exit 1
 fi
-echo "OK: step 2 - no conflicting pre-existing objects"
+# dev/uat/prod may legitimately exist (ESO scoped releases need them and
+# gitops-uninstall retains them while one is active). What must NOT be
+# there is any workload object: only Kubernetes built-ins and objects
+# owned by an ESO scoped Helm release are accepted - the same
+# classification gitops-uninstall's own preflight uses.
+preexisting_namespaces=""
+precheck_class="$(mktemp)"
+for ns in dev uat prod; do
+  if ! pkubectl get namespace "$ns" >/dev/null 2>&1; then
+    continue
+  fi
+  preexisting_namespaces="${preexisting_namespaces} ${ns}"
+  if ! gitops_classify_namespace "$ns" "platform-smoke-${ns}" "$precheck_class"; then
+    rm -f "$precheck_class"
+    echo "FAIL: could not classify the objects in pre-existing namespace '$ns' (discovery error)" >&2
+    exit 1
+  fi
+  if grep -v -e '^kubernetes-builtin ' -e '^helm-eso-scoped ' "$precheck_class" >/dev/null; then
+    echo "FAIL: pre-existing namespace '$ns' still holds workload object(s) - refusing to run against a non-clean state:" >&2
+    grep -v -e '^kubernetes-builtin ' -e '^helm-eso-scoped ' "$precheck_class" | sed 's/^/  /' >&2
+    rm -f "$precheck_class"
+    exit 1
+  fi
+  echo "OK: pre-existing namespace '$ns' holds only Kubernetes built-ins and ESO-release-owned objects"
+done
+rm -f "$precheck_class"
+eso_preinstalled=0
+while IFS='|' read -r env_name eso_ns eso_release wc cc; do
+  [ -z "$env_name" ] && continue
+  if eso_release_exists "$eso_ns" "$eso_release"; then
+    eso_preinstalled=1
+  fi
+done <<EOF
+$(eso_environments)
+EOF
+echo "OK: step 2 - no GitOps or workload objects; pre-existing namespaces:${preexisting_namespaces:- none}; ESO installed before the test: $([ "$eso_preinstalled" -eq 1 ] && echo yes || echo no)"
 
 echo "test-lifecycle(gitops): step 3 - bootstrap root Application from revision '${revision}'"
 REVISION="$revision" sh lab/gitops/bootstrap.sh
@@ -324,7 +368,15 @@ cleanup_fixture() { pkubectl delete configmap "$fixture_name" -n uat --ignore-no
 trap cleanup_fixture EXIT INT TERM
 pkubectl create configmap "$fixture_name" -n uat --from-literal=marker=unknown >/dev/null
 pre_fixture_uid="$(gitops_app_uid "$GITOPS_ROOT_APP_NAME")"
-pre_fixture_generation="$(gitops_app_generation "$GITOPS_ROOT_APP_NAME")"
+# The Application CRD has no status subresource, so Argo CD's own
+# status writes bump metadata.generation on their own (observed: 13 -> 14
+# with nothing but the controller touching it). Zero mutation is proven
+# by the UID, the .spec content hash, and the absence of a
+# deletionTimestamp instead.
+gitops_root_spec_sha() {
+  pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.spec}' 2>/dev/null | shasum -a 256 | awk '{print $1}'
+}
+pre_fixture_spec_sha="$(gitops_root_spec_sha)"
 preflight_out="$(mktemp)"
 if sh lab/gitops/uninstall.sh >"$preflight_out" 2>&1; then
   echo "FAIL: gitops-uninstall should have aborted with the unclassifiable fixture present" >&2
@@ -341,12 +393,13 @@ fi
 rm -f "$preflight_out"
 echo "OK: gitops-uninstall correctly aborted (nonzero exit) with the unclassifiable fixture named in its output"
 post_fixture_uid="$(gitops_app_uid "$GITOPS_ROOT_APP_NAME")"
-post_fixture_generation="$(gitops_app_generation "$GITOPS_ROOT_APP_NAME")"
-if [ "$post_fixture_uid" != "$pre_fixture_uid" ] || [ "$post_fixture_generation" != "$pre_fixture_generation" ]; then
-  echo "FAIL: root Application UID/generation changed despite the preflight abort (uid: $pre_fixture_uid -> $post_fixture_uid; generation: $pre_fixture_generation -> $post_fixture_generation)" >&2
+post_fixture_spec_sha="$(gitops_root_spec_sha)"
+post_fixture_deletion="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null || true)"
+if [ "$post_fixture_uid" != "$pre_fixture_uid" ] || [ "$post_fixture_spec_sha" != "$pre_fixture_spec_sha" ] || [ -n "$post_fixture_deletion" ]; then
+  echo "FAIL: root Application changed despite the preflight abort (uid: $pre_fixture_uid -> $post_fixture_uid; spec sha256: $pre_fixture_spec_sha -> $post_fixture_spec_sha; deletionTimestamp='${post_fixture_deletion}')" >&2
   exit 1
 fi
-echo "OK: root Application UID/generation unchanged - zero mutation before the abort"
+echo "OK: root Application UID and spec unchanged, no deletionTimestamp - zero mutation before the abort"
 dep_avail="$(pkubectl -n uat get deployment platform-smoke-uat-standard-workload -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
 if [ -z "$dep_avail" ] || [ "$dep_avail" -lt 1 ]; then
   echo "FAIL: uat workload was affected by the aborted preflight (availableReplicas='${dep_avail:-<absent>}')" >&2
@@ -400,71 +453,100 @@ if ! argocd_release_exists; then
 fi
 echo "OK: step 15c - gitops-uninstall correctly retained dev/uat/prod and their ESO-owned RBAC while ESO was active; generated Applications still cascaded away; Argo CD untouched"
 
-echo "test-lifecycle(gitops): step 15d (Phase 2.6.3a) - now uninstall ESO too, then re-run gitops-uninstall to reach true absence"
-sh lab/eso/uninstall.sh
-for ns in dev uat prod; do
-  role="eso-${ns}-external-secrets-controller"
-  if pkubectl get role "$role" -n "$ns" >/dev/null 2>&1; then
-    echo "FAIL: ESO scoped Role '$role' in '$ns' still present after 'make eso-uninstall'" >&2
+# Final-state assertion shared by every uninstall below: GitOps objects
+# gone, Argo CD/CRDs/repository Secret/deploy key preserved, and
+# dev/uat/prod either absent (ESO removed) or retained holding only
+# Kubernetes built-ins and ESO-release-owned objects (ESO kept).
+gitops_assert_final_state() {
+  gafs_label="$1"
+  if gitops_root_app_exists || gitops_appproject_exists || gitops_appset_exists; then
+    echo "FAIL: $gafs_label - root Application/AppProject/ApplicationSet still present" >&2
     exit 1
   fi
-done
-echo "OK: ESO scoped RBAC gone from dev/uat/prod after eso-uninstall"
-sh lab/gitops/uninstall.sh
-for ns in dev uat prod; do
-  if pkubectl get namespace "$ns" >/dev/null 2>&1; then
-    echo "FAIL: namespace '$ns' still present after the second gitops-uninstall (ESO is now gone - it should delete cleanly)" >&2
+  for app in $GITOPS_GENERATED_APPS; do
+    if gitops_generated_app_exists "$app"; then
+      echo "FAIL: $gafs_label - generated Application '$app' still present" >&2
+      exit 1
+    fi
+  done
+  gafs_class="$(mktemp)"
+  for ns in dev uat prod; do
+    if [ "$eso_preinstalled" -eq 1 ]; then
+      if ! pkubectl get namespace "$ns" >/dev/null 2>&1; then
+        rm -f "$gafs_class"
+        echo "FAIL: $gafs_label - namespace '$ns' was deleted while ESO (installed before the test) still targets it" >&2
+        exit 1
+      fi
+      if ! gitops_classify_namespace "$ns" "platform-smoke-${ns}" "$gafs_class"; then
+        rm -f "$gafs_class"
+        echo "FAIL: $gafs_label - could not classify namespace '$ns' (discovery error)" >&2
+        exit 1
+      fi
+      if grep -v -e '^kubernetes-builtin ' -e '^helm-eso-scoped ' "$gafs_class" >/dev/null; then
+        echo "FAIL: $gafs_label - retained namespace '$ns' still holds workload object(s):" >&2
+        grep -v -e '^kubernetes-builtin ' -e '^helm-eso-scoped ' "$gafs_class" | sed 's/^/  /' >&2
+        rm -f "$gafs_class"
+        exit 1
+      fi
+    elif pkubectl get namespace "$ns" >/dev/null 2>&1; then
+      rm -f "$gafs_class"
+      echo "FAIL: $gafs_label - namespace '$ns' still present (ESO is gone - it should have been deleted)" >&2
+      exit 1
+    fi
+  done
+  rm -f "$gafs_class"
+  if ! argocd_release_exists; then
+    echo "FAIL: $gafs_label - Argo CD itself was affected by gitops-uninstall" >&2
     exit 1
   fi
-done
-echo "OK: step 15d - dev/uat/prod fully deleted now that ESO no longer depends on them"
+  if ! detect_crd_state || [ "$CRD_STATE" != "retained" ]; then
+    echo "FAIL: $gafs_label - Argo CD CRDs were affected by gitops-uninstall (CRD_STATE=${CRD_STATE:-unknown})" >&2
+    exit 1
+  fi
+  if ! gitops_repo_secret_exists; then
+    echo "FAIL: $gafs_label - repository Secret was removed by gitops-uninstall - it must be preserved" >&2
+    exit 1
+  fi
+  if ! gitops_deploy_key_present_locally; then
+    echo "FAIL: $gafs_label - local deploy key was removed by gitops-uninstall - it must be preserved" >&2
+    exit 1
+  fi
+}
+
+if [ "$eso_preinstalled" -eq 1 ]; then
+  echo "test-lifecycle(gitops): step 15d - SKIPPED: ESO was installed before the test, so it is left installed and dev/uat/prod stay retained (start from a lab without ESO to also cover the eso-uninstall -> full-absence path)"
+  gitops_assert_final_state "step 15d"
+  echo "OK: step 15d - state matches the precondition: no GitOps or workload objects, dev/uat/prod retained with only ESO-owned RBAC, ESO untouched"
+else
+  echo "test-lifecycle(gitops): step 15d (Phase 2.6.3a) - ESO was not installed before the test: uninstall it too, then re-run gitops-uninstall to reach true absence"
+  sh lab/eso/uninstall.sh
+  for ns in dev uat prod; do
+    role="eso-${ns}-external-secrets-controller"
+    if pkubectl get role "$role" -n "$ns" >/dev/null 2>&1; then
+      echo "FAIL: ESO scoped Role '$role' in '$ns' still present after 'make eso-uninstall'" >&2
+      exit 1
+    fi
+  done
+  echo "OK: ESO scoped RBAC gone from dev/uat/prod after eso-uninstall"
+  sh lab/gitops/uninstall.sh
+  for ns in dev uat prod; do
+    if pkubectl get namespace "$ns" >/dev/null 2>&1; then
+      echo "FAIL: namespace '$ns' still present after the second gitops-uninstall (ESO is now gone - it should delete cleanly)" >&2
+      exit 1
+    fi
+  done
+  echo "OK: step 15d - dev/uat/prod fully deleted now that ESO no longer depends on them"
+fi
 
 echo "test-lifecycle(gitops): step 16-19 - uninstall again (true no-op), preserving Argo CD/CRDs/repo Secret/deploy key"
 sh lab/gitops/uninstall.sh
-
-echo "test-lifecycle(gitops): step 17 - verify generated Applications and managed resources disappeared"
-for app in $GITOPS_GENERATED_APPS; do
-  if gitops_generated_app_exists "$app"; then
-    echo "FAIL: generated Application '$app' still present after uninstall" >&2
-    exit 1
-  fi
-done
-for ns in dev uat prod; do
-  if pkubectl get namespace "$ns" >/dev/null 2>&1; then
-    echo "FAIL: namespace '$ns' still present after uninstall" >&2
-    exit 1
-  fi
-done
-echo "OK: step 17-18 - generated Applications and owned namespaces are gone"
-
-if ! argocd_release_exists; then
-  echo "FAIL: Argo CD itself was affected by gitops-uninstall - it must never touch the Argo CD release" >&2
-  exit 1
-fi
-if ! detect_crd_state || [ "$CRD_STATE" != "retained" ]; then
-  echo "FAIL: Argo CD CRDs were affected by gitops-uninstall (CRD_STATE=${CRD_STATE:-unknown})" >&2
-  exit 1
-fi
-if ! gitops_repo_secret_exists; then
-  echo "FAIL: repository Secret was removed by gitops-uninstall - it must be preserved" >&2
-  exit 1
-fi
-if ! gitops_deploy_key_present_locally; then
-  echo "FAIL: local deploy key was removed by gitops-uninstall - it must be preserved" >&2
-  exit 1
-fi
-echo "OK: step 19 - Argo CD, its CRDs, the repository Secret, and the deploy key are all preserved"
+gitops_assert_final_state "step 16-19"
+echo "OK: step 16-19 - generated Applications gone, dev/uat/prod $([ "$eso_preinstalled" -eq 1 ] && echo "retained for ESO" || echo absent); Argo CD, its CRDs, the repository Secret, and the deploy key are all preserved"
 
 echo "test-lifecycle(gitops): step 20 - uninstall again, prove no-op"
 sh lab/gitops/uninstall.sh
 
-echo "test-lifecycle(gitops): step 21 - final state: Phase 2.3 workload resources absent"
-if gitops_root_app_exists || gitops_appproject_exists || gitops_appset_exists \
-   || pkubectl get namespace dev >/dev/null 2>&1 \
-   || pkubectl get namespace uat >/dev/null 2>&1 \
-   || pkubectl get namespace prod >/dev/null 2>&1; then
-  echo "FAIL: a Phase 2.3 workload resource is unexpectedly still present at end of test" >&2
-  exit 1
-fi
+echo "test-lifecycle(gitops): step 21 - final state"
+gitops_assert_final_state "step 21"
 
-echo "test-lifecycle(gitops): OK - bootstrap/no-op/self-heal/isolation/uninstall/no-op lifecycle proven; Argo CD/CRDs/repo Secret/deploy key preserved; Phase 2.3 workload resources absent"
+echo "test-lifecycle(gitops): OK - bootstrap/no-op/self-heal/isolation/uninstall/no-op lifecycle proven; Argo CD/CRDs/repo Secret/deploy key preserved; GitOps and workload objects absent; dev/uat/prod $([ "$eso_preinstalled" -eq 1 ] && echo "retained for the ESO installed before the test" || echo absent)"

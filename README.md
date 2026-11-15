@@ -166,7 +166,7 @@ make gitops-render           # fully offline render; proves exactly 1 AppProject
 make gitops-bootstrap        # fail-closed idempotent apply of the root Application only (REVISION=<value>, default main)
 make gitops-status           # read-only status report
 make gitops-test             # read-only runtime health checks
-make gitops-test-lifecycle   # mutating: proves bootstrap/no-op/self-heal/isolation/uninstall/no-op (REVISION=<pushed branch>)
+make gitops-test-lifecycle   # mutating: proves bootstrap/no-op/self-heal/isolation/uninstall/no-op (REVISION=<pushed branch>); run gitops-uninstall first - dev/uat/prod may stay for ESO
 make gitops-uninstall        # two-phase transactional uninstall (Phase 2.6.3a): read-only preflight classification first, zero mutation on any unclassifiable object; retains a namespace an active ESO scoped release still targets
 make gitops-repo-remove      # remove the repository Secret/deploy key (requires CONFIRM=REMOVE; never run by the lifecycle test)
 ```
