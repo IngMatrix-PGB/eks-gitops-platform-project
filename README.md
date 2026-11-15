@@ -91,7 +91,8 @@ delivery roadmap for what exists versus what is proposed.
 | 3.4.4b | aws-eks GitOps profile in hub-and-spoke form: clusters generator to `spoke-<env>`/`<env>`, offline EKS cluster Secret renderer with `awsAuthConfig` and no token (`lab/eks/spoke-cluster-secret.sh`, `make eks-test-spoke-secret`) | Implemented (offline) |
 | 5.1a | Image CI: first-party `apps/smoke`, build with tests, Trivy scan failing on fixable HIGH/CRITICAL, CycloneDX SBOM (`make image-all`, `make check-supply-chain`, `.github/workflows/image.yml`) | Implemented |
 | 5.1b | Multi-platform image pushed to GHCR from `main` only, cosign keyless signature, SBOM attestation per platform, SLSA provenance, verified against the exact main-workflow identity (`make image-verify`, `docs/runbooks/image-publish.md`) | Implemented as code (first run on `main`) |
-| 5.1c | Promotion `dev` → `uat` → `prod` as PRs that change a digest, with order and signature checks | `PROPOSED` |
+| 5.1c-1 | Promotion tooling: `make promote` (dev ← signed digest from main, uat ← dev, prod ← uat), append-only ledger, `make check-promotion`, `promotion.yml`; lab tests independent of the workload image (`docs/runbooks/image-promotion.md`) | Implemented |
+| 5.1c-2..4 | Promote dev, then uat, then prod to the signed image (one reviewed PR each, with lab regression); then retire podinfo | `PROPOSED` (needs 5.1b on `main`) |
 | 5.2 | Terraform CI: `plan` on every PR, static analysis, `apply` against a local AWS emulator | `PROPOSED` |
 | 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | `PROPOSED` |
 | 6.2 | Backup and restore drill | `PROPOSED` |
@@ -165,7 +166,7 @@ make gitops-render           # fully offline render; proves exactly 1 AppProject
 make gitops-bootstrap        # fail-closed idempotent apply of the root Application only (REVISION=<value>, default main)
 make gitops-status           # read-only status report
 make gitops-test             # read-only runtime health checks
-make gitops-test-lifecycle   # mutating: proves bootstrap/no-op/self-heal/isolation/uninstall/no-op (REVISION=<pushed branch>)
+make gitops-test-lifecycle   # mutating: proves bootstrap/no-op/self-heal/isolation/uninstall/no-op (REVISION=<pushed branch>); run gitops-uninstall first - dev/uat/prod may stay for ESO
 make gitops-uninstall        # two-phase transactional uninstall (Phase 2.6.3a): read-only preflight classification first, zero mutation on any unclassifiable object; retains a namespace an active ESO scoped release still targets
 make gitops-repo-remove      # remove the repository Secret/deploy key (requires CONFIRM=REMOVE; never run by the lifecycle test)
 ```
@@ -316,11 +317,28 @@ is unhealthy:
 make eso-chart-fetch          # download + checksum-verify the pinned external-secrets-2.10.0 chart (only target allowed to fetch it)
 make eso-render                # fully offline render + collision/ownership proof (25 CRDs, no cross-release collision, webhook/cert-controller singleton, zero structural wildcard RBAC, digest-only images)
 make check-eso-chart           # helm lint + the same proof (standalone - requires the network-fetched chart, so not part of `make validate`)
-make eso-install                # fail-closed idempotent install: CRD preflight (no force) + both scoped releases
+make eso-crds-install           # only the 25 CRDs (no release, no webhook) - the step before gitops-bootstrap on a fresh lab-lite
+make eso-install                # fail-closed idempotent install: CRD preflight (no force) + the scoped releases; refuses with zero mutation while a scoped workload namespace is absent
 make eso-status                 # read-only CRD/release/Deployment health report, including the shared-singleton dependency check
 make eso-test-runtime-health   # read-only health checks against an installed bootstrap
 make eso-test-lifecycle        # mutating: proves install/no-op/singleton guards/CRD-conflict fail-closed/uninstall(CRDs retained)/no-op/restore end-to-end
 make eso-uninstall              # uninstall all three scoped releases (prod, dev, then uat; ENV=dev|uat|prod for one at a time); never touches the CRDs; refuses uat while dev or prod exists
+```
+
+On a fresh lab-lite the order matters (R-13): Argo CD cannot sync the
+workload, and so never creates `dev`/`uat`/`prod`, until the ESO CRDs
+exist, while the scoped ESO releases need those namespaces. Apply the
+CRDs alone first; `make gitops-bootstrap` refuses on lab-lite while any
+of them is missing, and `make eso-install` refuses, before applying
+anything, while a namespace is missing:
+
+```bash
+make lab-create argocd-install gitops-repo-setup
+make eso-crds-install
+make gitops-bootstrap REVISION=<branch>   # then wait for dev/uat/prod
+make eso-install
+make eso-provision-source-secret ENV=dev  # and ENV=uat, ENV=prod (value on stdin or prompt)
+make metrics-server-install
 ```
 
 Phase 2.8.2: `prod` runs an HPA, which needs metrics-server on the same

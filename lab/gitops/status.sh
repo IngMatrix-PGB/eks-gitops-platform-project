@@ -67,9 +67,10 @@ if [ "$GITOPS_PROFILE" = "local-multicluster" ]; then
   exit 0
 fi
 for ns in dev uat prod; do
-  if pkubectl -n "$ns" get configmap platform-smoke >/dev/null 2>&1; then
-    pkubectl -n "$ns" get configmap platform-smoke -o jsonpath="namespace=${ns} data={.data}{\"\n\"}"
+  cm="platform-smoke-${ns}-standard-workload-config"
+  if pkubectl -n "$ns" get configmap "$cm" >/dev/null 2>&1; then
+    pkubectl -n "$ns" get configmap "$cm" -o jsonpath="namespace=${ns} configmap=${cm} data={.data}{\"\n\"}"
   else
-    echo "namespace=${ns}: configmap/platform-smoke absent"
+    echo "namespace=${ns}: configmap/${cm} absent"
   fi
 done

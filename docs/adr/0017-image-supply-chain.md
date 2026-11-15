@@ -130,3 +130,36 @@ that changes the image (runbook:
 - **Re-scan:** every platform of the pushed digest is scanned again at
   the same threshold, because the PR scan covers only the runner's
   architecture.
+
+## Amendment (Phase 5.1c-1, 2026-11-13): promotion tooling
+
+Implemented; no environment changes image yet (runbook:
+[image-promotion.md](../runbooks/image-promotion.md)).
+
+- **Per-environment image:** every overlay sets its own `image` block.
+  Both overlays of an environment (local and aws) always hold the same
+  reference. All six still point at podinfo.
+- **`make promote`:** dev ← a digest signed on `main`, uat ← dev,
+  prod ← uat. It verifies the image before editing, changes only the
+  target environment's two overlays, and appends one row to the
+  append-only ledger `gitops/promotions/smoke.tsv`. It never commits or
+  opens a pull request; the promotion PR is the human gate.
+- **Guards:**
+  - `check-promotion` (offline, `make validate`): pinned images per
+    overlay, local/aws agreement, ledger format and order, every running
+    image of our repository recorded, append-only versus `origin/main`.
+  - `promotion.yml` (online, read-only token): `make image-verify` on
+    every overlay image of our repository.
+- **Lab tests without a workload shell:** the lab tests no longer run
+  `sh`/`curl` from the workload's image, which the distroless smoke image
+  lacks. Client and load pods use a pinned `curlimages/curl` image. The
+  NetworkPolicy egress probe runs in an ephemeral container inside the
+  workload pod (`kubectl debug --profile=restricted`), so the policy
+  applies unchanged. `check-supply-chain` rejects any other test pod
+  image.
+- **`apps/smoke`** also serves `GET /api/info` with the same `message`
+  field podinfo exposes, so the tests read both images the same way
+  during the transition.
+- **Forbidden-terms exceptions** cover exactly the overlay `digest:`
+  line and a well-formed ledger row, because a real digest can contain
+  a run of twelve digits.

@@ -9,7 +9,9 @@
 //   - GET /healthz: 200 while the process runs (liveness);
 //   - GET /readyz: 200 until SIGTERM, then 503 (readiness), so the
 //     endpoint leaves the Service while the preStop sleep runs;
-//   - GET /: a short JSON document with UI_MESSAGE and the version;
+//   - GET / and GET /api/info: a short JSON document with UI_MESSAGE and
+//     the version (/api/info keeps the shape the lab tests read from
+//     podinfo, so they work unchanged across the switch, Phase 5.1c-1);
 //   - on SIGTERM: stop accepting new connections and drain in-flight
 //     requests for at most SHUTDOWN_TIMEOUT (default 5s).
 //
@@ -90,13 +92,15 @@ func newHandler(c config, ready *atomic.Bool) http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ready\n"))
 	})
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
+	info := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"message": c.uiMessage,
 			"version": version,
 		})
-	})
+	}
+	mux.HandleFunc("GET /{$}", info)
+	mux.HandleFunc("GET /api/info", info)
 	return mux
 }
 

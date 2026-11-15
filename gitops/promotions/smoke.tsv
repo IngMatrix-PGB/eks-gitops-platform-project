@@ -1,0 +1,6 @@
+# Phase 5.1c: append-only promotion ledger for apps/smoke (ADR-0017).
+# Written only by `make promote` (scripts/promote/promote.sh); checked by
+# `make check-promotion`. One row per promotion, tab-separated:
+#   date (UTC, YYYY-MM-DD)  environment  image reference  promoted from
+# dev is promoted from a digest signed on main ("main"); uat only from
+# dev; prod only from uat. Rows are never edited or removed.

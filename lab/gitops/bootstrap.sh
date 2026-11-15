@@ -40,6 +40,10 @@ require_repo_root
 . scripts/argocd/_lib.sh
 # shellcheck source=../../scripts/gitops/_lib.sh
 . scripts/gitops/_lib.sh
+# eso_crd_names only (the R-13 preflight below); sourcing has no side
+# effect on the hub, whose ESO table is empty.
+# shellcheck source=../../scripts/eso/_lib.sh
+. scripts/eso/_lib.sh
 
 profile="${PROFILE:-$GITOPS_PROFILE}"
 
@@ -73,6 +77,26 @@ require_helm
 if ! argocd_release_exists; then
   echo "FAIL: Argo CD is not installed - run 'make argocd-install' first" >&2
   exit 1
+fi
+
+# R-13 (fresh-cluster ordering), lab-lite only: charts/standard-workload
+# renders a SecretStore and an ExternalSecret, so Argo CD cannot sync it
+# - and never creates dev/uat/prod - until the ESO CRDs exist. Refuse
+# before applying anything rather than leave three OutOfSync/Missing
+# Applications behind. Not needed under local-multicluster: the hub runs
+# no workload and each spoke gets ESO before the hub bootstrap.
+if [ "$profile" = "local-kind" ]; then
+  missing_crds=0
+  for crd in $(eso_crd_names); do
+    if ! pkubectl get customresourcedefinition "$crd" >/dev/null 2>&1; then
+      missing_crds=$((missing_crds + 1))
+    fi
+  done
+  if [ "$missing_crds" -ne 0 ]; then
+    echo "FAIL: $missing_crds of the 25 External Secrets Operator CRDs are absent - Argo CD could not sync the workloads or create dev/uat/prod; run 'make eso-crds-install' first (R-13)" >&2
+    exit 1
+  fi
+  echo "OK: all 25 External Secrets Operator CRDs present"
 fi
 
 repo_check_out="$(mktemp)"

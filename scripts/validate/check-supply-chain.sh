@@ -16,7 +16,10 @@
 #      BuildKit, and its exact signer identity; no regex identity anywhere;
 #   5. every non-comment line of apps/*/.trivyignore has an expiry date
 #      not in the past and a justification;
-#   6. Dependabot watches each app's Dockerfile (docker) and go.mod (gomod).
+#   6. Dependabot watches each app's Dockerfile (docker) and go.mod (gomod);
+#   7. (Phase 5.1c-1) lab tests send traffic only from the pinned test
+#      client image (scripts/workload/_lib.sh), never from the workload's
+#      own image or a hardcoded one.
 set -euo pipefail
 
 fail=0
@@ -111,6 +114,15 @@ grep -qE '^IMAGE_BUILDKIT="moby/buildkit:v[0-9.]+@sha256:[0-9a-f]{64}"$' "$img_s
 grep -qxF 'IMAGE_SIGNER_IDENTITY="https://github.com/IngMatrix-PGB/eks-gitops-platform-project/.github/workflows/image.yml@refs/heads/main"' "$img_sh" \
   || bad "$img_sh: the signer identity must be exactly the image workflow on main"
 grep -qxF 'IMAGE_SIGNER_ISSUER="https://token.actions.githubusercontent.com"' "$img_sh" || bad "$img_sh: the signer issuer must be GitHub OIDC"
+
+# 7 test client image
+wl_lib="scripts/workload/_lib.sh"
+grep -qE '^TEST_CLIENT_IMAGE_DIGEST="sha256:[0-9a-f]{64}"$' "$wl_lib" || bad "$wl_lib: TEST_CLIENT_IMAGE_DIGEST must be a sha256 digest"
+grep -qxF 'TEST_CLIENT_IMAGE="docker.io/curlimages/curl:${TEST_CLIENT_IMAGE_TAG}@${TEST_CLIENT_IMAGE_DIGEST}"' "$wl_lib" \
+  || bad "$wl_lib: TEST_CLIENT_IMAGE must be built from the pinned tag and digest"
+while IFS= read -r hit; do
+  bad "test pod image is not the pinned test client image: $hit"
+done < <(grep -rnE '^[[:space:]]+image:' tests/workload tests/gitops 2>/dev/null | grep -vE 'image: "?\$\{?TEST_CLIENT_IMAGE\}?"?[[:space:]]*$' || true)
 
 if [ "$fail" -ne 0 ]; then echo "check-supply-chain: FAILED"; exit 1; fi
 echo "OK: ${#wfs[@]} workflow(s) use only SHA-pinned GitHub-owned actions, no pull_request_target; writes only on image.yml publish (main push, after the scan)"

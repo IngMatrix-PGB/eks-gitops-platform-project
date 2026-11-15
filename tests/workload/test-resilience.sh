@@ -31,6 +31,8 @@ if [ ! -f "scripts/lab/_lib.sh" ]; then
   exit 1
 fi
 . scripts/lab/_lib.sh
+# shellcheck source=../../scripts/workload/_lib.sh
+. scripts/workload/_lib.sh
 require_repo_root
 require_tools
 
@@ -61,7 +63,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # client_pod <namespace> <name> <shell script> - a Restricted-PSS pod on
-# the workload's own (digest-pinned) image, which ships sh and curl.
+# the pinned test client image (Phase 5.1c-1: never the workload's own
+# image, which may have no shell).
 client_pod() {
   cat <<EOF | pkubectl apply -f - >/dev/null
 apiVersion: v1
@@ -80,7 +83,7 @@ spec:
     seccompProfile: { type: RuntimeDefault }
   containers:
     - name: c
-      image: "$image"
+      image: "$TEST_CLIENT_IMAGE"
       command: ["sh", "-c"]
       args:
         - |
@@ -213,10 +216,17 @@ else
   fail=1
 fi
 wp="$(pkubectl -n "$ns" get pods -l "app.kubernetes.io/instance=${app}" -o jsonpath='{.items[0].metadata.name}')"
-dns="$(pkubectl -n "$ns" exec "$wp" -- sh -c 'nslookup kubernetes.default.svc.cluster.local >/dev/null 2>&1 && echo ok || echo fail' 2>/dev/null || echo fail)"
+# Phase 5.1c-1: probe from an ephemeral container in the workload pod's
+# own network namespace (the workload image may have no shell); the
+# pod's NetworkPolicy applies to it unchanged. One probe, three lines.
 # curl prints 000 itself when it cannot connect; never append a second one.
-api="$(pkubectl -n "$ns" exec "$wp" -- sh -c 'c=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 4 https://kubernetes.default.svc:443/livez); echo "${c:-000}"' 2>/dev/null || echo 000)"
-ext="$(pkubectl -n "$ns" exec "$wp" -- sh -c "c=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 http://${dep}.${ns}.svc.cluster.local:9898/readyz); echo \"\${c:-000}\"" 2>/dev/null || echo 000)"
+egress="$(netns_probe "$ns" "$wp" "egress-probe-$(date +%s)" \
+  "nslookup kubernetes.default.svc.cluster.local >/dev/null 2>&1 && echo dns=ok || echo dns=fail; \
+   c=\$(curl -sk -o /dev/null -w '%{http_code}' --max-time 4 https://kubernetes.default.svc:443/livez); echo api=\${c:-000}; \
+   c=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 http://${dep}.${ns}.svc.cluster.local:9898/readyz); echo ext=\${c:-000}" 90 || true)"
+dns="$(printf '%s\n' "$egress" | sed -n 's/^dns=//p')"; dns="${dns:-fail}"
+api="$(printf '%s\n' "$egress" | sed -n 's/^api=//p')"; api="${api:-unknown}"
+ext="$(printf '%s\n' "$egress" | sed -n 's/^ext=//p')"; ext="${ext:-unknown}"
 if [ "$dns" = "ok" ] && [ "$api" = "000" ] && [ "$ext" = "000" ]; then
   echo "OK: step 3 - workload egress: DNS resolves; the API server and even its own Service are unreachable (egress is DNS-only)"
 else

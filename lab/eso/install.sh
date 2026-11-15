@@ -43,61 +43,37 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# --- 1. CRDs: applied once, owned by no Helm release, never re-applied
-# if already present and correct (kubectl apply is itself idempotent;
-# this additionally verifies the count before touching anything). ---
-echo "eso-install: rendering the 25 pinned CRDs from the chart ..."
-eso_render_crds_source "$workdir/crds-source.yaml"
-eso_extract_crds "$workdir/crds-source.yaml" > "$workdir/crds-only.yaml"
-rendered_crd_count="$(grep -c '^kind: CustomResourceDefinition$' "$workdir/crds-only.yaml" || true)"
-if [ "$rendered_crd_count" -ne 25 ]; then
-  echo "FAIL: expected to render exactly 25 CRDs, got $rendered_crd_count - refusing to apply" >&2
-  exit 1
-fi
-
-# --server-side, not client-side apply: at least two of these CRDs
-# (secretstores, clustersecretstores) have an OpenAPI schema large
-# enough that client-side apply's kubectl.kubernetes.io/last-applied-
-# configuration annotation exceeds the API server's 256KiB annotation
-# limit ("metadata.annotations: Too long") - a real, empirically-hit
-# failure, not a hypothetical. Server-side apply never writes that
-# annotation at all, so the size limit does not apply.
-#
-# Never --force-conflicts. A field-ownership conflict (some other field
-# manager already owns a field this apply would also set) must stop
-# the install with the CRD completely untouched - never silently
-# force-adopted, overwritten, deleted, or recreated. Two-phase,
-# fail-closed:
-#   1. --dry-run=server detects a conflict (or any other server-side-
-#      apply rejection) with zero mutation - proven empirically: a
-#      failed dry-run leaves every field's existing owner exactly as
-#      it was.
-#   2. Only if the dry-run succeeds does the real apply run, under the
-#      same stable, project-specific field manager - so a legitimate
-#      re-apply from this same tool is never its own "conflict" (a
-#      manager cannot conflict with its own prior claims), while a
-#      genuine foreign-manager conflict still stops this script via
-#      `set -eu`, without ever retrying with --force-conflicts.
-echo "eso-install: CRD apply preflight (dry-run=server, field-manager=$ESO_CRD_FIELD_MANAGER) ..."
-if ! pkubectl apply --server-side --field-manager="$ESO_CRD_FIELD_MANAGER" --dry-run=server \
-      -f "$workdir/crds-only.yaml" >"$workdir/crd-preflight.out" 2>&1; then
-  echo "FAIL: CRD apply preflight detected a field-ownership conflict (or other server-side-apply rejection) - refusing to install; no CRD was modified, deleted, recreated, or force-adopted" >&2
-  cat "$workdir/crd-preflight.out" >&2
-  exit 1
-fi
-echo "OK: CRD apply preflight passed - no field-ownership conflict"
-
-echo "eso-install: applying the 25 CRDs (kubectl apply --server-side, field-manager=$ESO_CRD_FIELD_MANAGER, never a Helm release) ..."
-pkubectl apply --server-side --field-manager="$ESO_CRD_FIELD_MANAGER" -f "$workdir/crds-only.yaml"
-
-echo "eso-install: waiting for all 25 CRDs to report Established ..."
-while IFS= read -r crd; do
-  [ -z "$crd" ] && continue
-  pkubectl wait --for=condition=Established "customresourcedefinition/${crd}" --timeout=60s >/dev/null
+# --- 0. preflight, zero mutation: every workload namespace a scoped
+# release targets must already exist. On lab-lite Argo CD creates
+# dev/uat/prod on its first sync (`make eso-crds-install`, then
+# `make gitops-bootstrap`); on a lab-multicluster spoke
+# `make mc-spoke-register` creates it. Checked before anything is
+# applied, so a missing namespace can never leave a half-installed,
+# "failed" Helm release behind (which the reconcile check below would
+# then refuse to touch). ---
+missing_ns=""
+while IFS='|' read -r env_name ns release webhook_create cert_create; do
+  [ -z "$env_name" ] && continue
+  if ! pkubectl get namespace "$env_name" >/dev/null 2>&1; then
+    missing_ns="${missing_ns} ${env_name}"
+  fi
 done <<EOF
-$(eso_crd_names)
+$(eso_environments)
 EOF
-echo "OK: 25 CRDs applied and Established"
+if [ -n "$missing_ns" ]; then
+  echo "FAIL: workload namespace(s)${missing_ns} absent - the scoped ESO releases need them; nothing was applied" >&2
+  case "${LAB_CLUSTER:-lab-lite}" in
+    lab-lite) echo "      run 'make eso-crds-install', then 'make gitops-bootstrap', wait for dev/uat/prod, then 'make eso-install' again (R-13)" >&2 ;;
+    *) echo "      run 'make mc-spoke-register SPOKE=${LAB_CLUSTER}' first" >&2 ;;
+  esac
+  exit 1
+fi
+echo "OK: preflight - every scoped workload namespace exists"
+
+# --- 1. CRDs (lab/eso/install-crds.sh, also `make eso-crds-install`):
+# 25 CRDs applied via kubectl server-side apply, owned by no Helm
+# release. ---
+sh lab/eso/install-crds.sh
 
 # --- 2. three scoped controller releases (eso_environments order) ---
 while IFS='|' read -r env_name ns release webhook_create cert_create; do

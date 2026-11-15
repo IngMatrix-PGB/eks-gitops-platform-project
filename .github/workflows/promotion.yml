@@ -1,0 +1,43 @@
+name: promotion
+
+# Phase 5.1c-1 (ADR-0017): on every PR that changes an environment's
+# image or the promotion ledger, verify online that each image of our
+# repository the overlays point at was signed by the main image workflow
+# and carries a CycloneDX SBOM attestation per platform. The offline
+# rules (order dev <- main, uat <- dev, prod <- uat; local/aws overlays
+# agree; append-only ledger) run in validate.yml through make validate.
+# Read-only token; the only action is GitHub-owned and SHA-pinned.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "charts/standard-workload/values-*.yaml"
+      - "gitops/promotions/**"
+      - "scripts/promote/**"
+      - ".github/workflows/promotion.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promotion-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify promoted images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        # actions/checkout v7.0.1, the same pin as validate.yml.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: make tools-install
+        run: make tools-install
+
+      - name: make promotion-verify
+        run: make promotion-verify

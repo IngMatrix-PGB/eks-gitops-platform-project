@@ -245,19 +245,23 @@ if [ "$after_label" != "conflict-test-hijacked" ]; then
 else
   echo "OK: the CRD was not modified, deleted, recreated, or force-adopted by the failed install attempt"
 fi
-# Checked against install.sh's own SOURCE with comment lines stripped
+# Checked against the installers' own SOURCE with comment lines stripped
 # first, not its runtime output - kubectl's own conflict error always
 # suggests "--force-conflicts" as one way a human could resolve it (see
 # the captured output above), which would make an output-text check a
 # permanent false positive; the script's own explanatory comments about
 # why it never does this would equally trip a naive full-file grep.
 # What actually matters is that no *executable* line passes that flag.
-if grep -v '^[[:space:]]*#' lab/eso/install.sh | grep -q -- "--force-conflicts"; then
-  echo "FAIL: lab/eso/install.sh itself invokes --force-conflicts - it must never retry a CRD conflict with a force flag" >&2
-  fail=1
-else
-  echo "OK: lab/eso/install.sh never invokes --force-conflicts"
-fi
+# The CRD apply itself lives in lab/eso/install-crds.sh (R-13), which
+# install.sh runs as its step 1 - both are checked.
+for installer in lab/eso/install.sh lab/eso/install-crds.sh; do
+  if grep -v '^[[:space:]]*#' "$installer" | grep -q -- "--force-conflicts"; then
+    echo "FAIL: $installer itself invokes --force-conflicts - it must never retry a CRD conflict with a force flag" >&2
+    fail=1
+  else
+    echo "OK: $installer never invokes --force-conflicts"
+  fi
+done
 
 # Explicit, verified release of the foreign manager's claim (not just
 # relying on the exit trap, though it remains armed as the safety net
