@@ -317,11 +317,28 @@ is unhealthy:
 make eso-chart-fetch          # download + checksum-verify the pinned external-secrets-2.10.0 chart (only target allowed to fetch it)
 make eso-render                # fully offline render + collision/ownership proof (25 CRDs, no cross-release collision, webhook/cert-controller singleton, zero structural wildcard RBAC, digest-only images)
 make check-eso-chart           # helm lint + the same proof (standalone - requires the network-fetched chart, so not part of `make validate`)
-make eso-install                # fail-closed idempotent install: CRD preflight (no force) + both scoped releases
+make eso-crds-install           # only the 25 CRDs (no release, no webhook) - the step before gitops-bootstrap on a fresh lab-lite
+make eso-install                # fail-closed idempotent install: CRD preflight (no force) + the scoped releases; refuses with zero mutation while a scoped workload namespace is absent
 make eso-status                 # read-only CRD/release/Deployment health report, including the shared-singleton dependency check
 make eso-test-runtime-health   # read-only health checks against an installed bootstrap
 make eso-test-lifecycle        # mutating: proves install/no-op/singleton guards/CRD-conflict fail-closed/uninstall(CRDs retained)/no-op/restore end-to-end
 make eso-uninstall              # uninstall all three scoped releases (prod, dev, then uat; ENV=dev|uat|prod for one at a time); never touches the CRDs; refuses uat while dev or prod exists
+```
+
+On a fresh lab-lite the order matters (R-13): Argo CD cannot sync the
+workload, and so never creates `dev`/`uat`/`prod`, until the ESO CRDs
+exist, while the scoped ESO releases need those namespaces. Apply the
+CRDs alone first; `make gitops-bootstrap` refuses on lab-lite while any
+of them is missing, and `make eso-install` refuses, before applying
+anything, while a namespace is missing:
+
+```bash
+make lab-create argocd-install gitops-repo-setup
+make eso-crds-install
+make gitops-bootstrap REVISION=<branch>   # then wait for dev/uat/prod
+make eso-install
+make eso-provision-source-secret ENV=dev  # and ENV=uat, ENV=prod (value on stdin or prompt)
+make metrics-server-install
 ```
 
 Phase 2.8.2: `prod` runs an HPA, which needs metrics-server on the same

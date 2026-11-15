@@ -107,8 +107,11 @@ EOF
 echo "OK: step 2 - no GitOps or workload objects; pre-existing namespaces:${preexisting_namespaces:- none}; ESO installed before the test: $([ "$eso_preinstalled" -eq 1 ] && echo yes || echo no)"
 
 echo "test-lifecycle(gitops): step 3 - bootstrap root Application from revision '${revision}'"
+# R-13: the ESO CRDs must exist before the first sync (bootstrap.sh
+# refuses otherwise). Idempotent; a no-op when they are already there.
+sh lab/eso/install-crds.sh >/dev/null
 REVISION="$revision" sh lab/gitops/bootstrap.sh
-echo "OK: step 3 - root Application applied"
+echo "OK: step 3 - ESO CRDs present, root Application applied"
 
 echo "test-lifecycle(gitops): step 4 - wait for root Application Synced/Healthy"
 gitops_wait_for_synced_healthy "$GITOPS_ROOT_APP_NAME" 180
