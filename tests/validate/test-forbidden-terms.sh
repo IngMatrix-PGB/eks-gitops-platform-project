@@ -573,6 +573,14 @@ run_case "FROM digest pin with a 12+ digit run in apps/<dir>/Dockerfile" accept 
   "FROM registry.example/base:1.0@sha256:${CHK_WITH_DIGITS} AS build
 FROM registry.example/runtime@sha256:${CHK_WITH_DIGITS}
 "
+run_case "FROM --platform=\$BUILDPLATFORM digest pin in apps/<dir>/Dockerfile (Phase 5.1b)" accept \
+  "apps/component/Dockerfile" \
+  "FROM --platform=\$BUILDPLATFORM registry.example/base@sha256:${CHK_WITH_DIGITS} AS build
+"
+run_case "FROM with any other --platform value" reject \
+  "apps/component/Dockerfile" \
+  "FROM --platform=linux/${AWS12} registry.example/base@sha256:${CHK_VALID}
+"
 run_case "same FROM line in a Dockerfile outside apps/<dir>/" reject \
   "docker/Dockerfile" \
   "FROM registry.example/base@sha256:${CHK_WITH_DIGITS}

@@ -100,10 +100,11 @@ lib_image_digest_line_pattern='^[A-Z][A-Z0-9_]*_IMAGE_DIGEST="sha256:[0-9a-f]{64
 # Narrow, single-purpose exception (Phase 5.1a): an app's Dockerfile pins
 # each base image by its registry digest, which can contain a 12+ digit
 # run. Masks ONLY a line that is exactly
-#   FROM <image-ref>@sha256:<64 lowercase hex>[ AS <stage>]
+#   FROM [--platform=$BUILDPLATFORM ]<image-ref>@sha256:<64 lowercase hex>[ AS <stage>]
+# (the --platform form is Phase 5.1b's cross-compiling build stage)
 # ONLY in a file at exactly apps/<dir>/Dockerfile. Every other line of
 # the file, and any other path, is scanned normally.
-dockerfile_from_digest_line_pattern='^FROM[[:space:]]+[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}([[:space:]]+AS[[:space:]]+[a-z][a-z0-9-]*)?$'
+dockerfile_from_digest_line_pattern='^FROM[[:space:]]+(--platform=\$BUILDPLATFORM[[:space:]]+)?[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}([[:space:]]+AS[[:space:]]+[a-z][a-z0-9-]*)?$'
 
 aws_account_hit_in_file() {
   local file="$1"

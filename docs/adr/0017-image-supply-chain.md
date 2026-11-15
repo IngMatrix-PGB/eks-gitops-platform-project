@@ -97,3 +97,36 @@ unchanged by this ADR):
   unjustified ignore entry, a missing Dependabot ecosystem.
 - Functional mutations: a failing unit test stops the build; a Go
   toolchain with known stdlib CVEs (1.25.4) fails the scan.
+
+## Amendment (Phase 5.1b, 2026-11-13): push, sign, attest
+
+Implemented as code; the first real run is the first push to `main`
+that changes the image (runbook:
+[image-publish.md](../runbooks/image-publish.md)).
+
+- **Platforms:** a `linux/amd64` + `linux/arm64` index, because the CI
+  runner is amd64 and the kind lab on Apple silicon is arm64. Go
+  cross-compiles (`FROM --platform=$BUILDPLATFORM`), so no emulation and
+  no third-party setup action are needed. BuildKit is pinned by digest.
+  Every PR builds both platforms.
+- **Publish job:** `image.yml` job `publish`, only on push to `main`,
+  only after the PR-time job passes. It is the only place with write
+  permissions (`packages`, `id-token`, `attestations`).
+  `check-supply-chain` enforces that, and `check-terraform-offline`
+  allows `id-token: write` in `image.yml` only (Sigstore, never AWS).
+- **Registry:** `ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke`, tag
+  `sha-<12 hex>`, no `latest`. The package is made public once, by hand,
+  so the lab never needs a pull secret.
+- **Signing:** cosign v3.1.4 (checksum-pinned CLI), keyless through
+  GitHub OIDC, recursive over the index. A CycloneDX SBOM is attested to
+  each platform manifest. SLSA build provenance comes from
+  `actions/attest-build-provenance` (GitHub-owned, SHA-pinned).
+- **Trust:** exactly one identity,
+  `https://github.com/IngMatrix-PGB/eks-gitops-platform-project/.github/workflows/image.yml@refs/heads/main`,
+  issuer `https://token.actions.githubusercontent.com`. Regex
+  identities are rejected everywhere. `make image-verify` checks the
+  index and every platform's attestation, and the publish job runs it
+  on its own output.
+- **Re-scan:** every platform of the pushed digest is scanned again at
+  the same threshold, because the PR scan covers only the runner's
+  architecture.
