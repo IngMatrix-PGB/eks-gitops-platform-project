@@ -38,13 +38,7 @@ resource "aws_kms_key" "org_trail" {
         # kms:* (scripts/validate/check-terraform-offline.sh rule 15):
         # the security account manages the key and decrypts the logs;
         # only the organization trail encrypts with it.
-        Action = [
-          "kms:Create*", "kms:Describe*", "kms:Enable*", "kms:List*",
-          "kms:Put*", "kms:Update*", "kms:Revoke*", "kms:Disable*",
-          "kms:Get*", "kms:Delete*", "kms:TagResource", "kms:UntagResource",
-          "kms:ScheduleKeyDeletion", "kms:CancelKeyDeletion",
-          "kms:Decrypt", "kms:ReEncryptFrom",
-        ]
+        Action   = local.kms_admin_actions
         Resource = "*"
       },
       {
@@ -286,4 +280,143 @@ resource "aws_accessanalyzer_analyzer" "organization" {
   analyzer_name = "${var.project}-organization"
   type          = "ORGANIZATION"
   tags          = module.tags.tags
+}
+
+# --- Phase 3.4.2: central AWS Config delivery bucket --------------------------
+# Every member account's recorders (terraform/envs/account-baseline)
+# deliver here, under config/<account_role>/. Writers are admitted by
+# organization (aws:SourceOrgID), so a new account needs no policy change
+# and nothing outside the organization can write. Evidence lives outside
+# the account it describes.
+locals {
+  config_bucket_name = "${var.project}-config-${local.security_account_id}"
+  kms_admin_actions = [
+    "kms:Create*", "kms:Describe*", "kms:Enable*", "kms:List*",
+    "kms:Put*", "kms:Update*", "kms:Revoke*", "kms:Disable*",
+    "kms:Get*", "kms:Delete*", "kms:TagResource", "kms:UntagResource",
+    "kms:ScheduleKeyDeletion", "kms:CancelKeyDeletion",
+    "kms:Decrypt", "kms:ReEncryptFrom",
+  ]
+}
+
+resource "aws_kms_key" "config" {
+  description             = "Encrypts the organization's AWS Config deliveries."
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "SecurityAccountAdministers"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${local.security_account_id}:root" }
+        Action    = local.kms_admin_actions
+        Resource  = "*"
+      },
+      {
+        Sid       = "OrganizationConfigDelivers"
+        Effect    = "Allow"
+        Principal = { Service = "config.amazonaws.com" }
+        Action    = ["kms:GenerateDataKey", "kms:Decrypt"]
+        Resource  = "*"
+        Condition = { StringEquals = { "aws:SourceOrgID" = var.organization_id } }
+      },
+    ]
+  })
+
+  tags = module.tags.tags
+}
+
+resource "aws_s3_bucket" "config" {
+  bucket        = local.config_bucket_name
+  force_destroy = false
+  tags          = module.tags.tags
+}
+
+resource "aws_s3_bucket_ownership_controls" "config" {
+  bucket = aws_s3_bucket.config.id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "config" {
+  bucket                  = aws_s3_bucket.config.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "config" {
+  bucket = aws_s3_bucket.config.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "config" {
+  bucket = aws_s3_bucket.config.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.config.arn
+    }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "config" {
+  bucket = aws_s3_bucket.config.id
+  rule {
+    id     = "expire-config-history"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = var.config_log_retention_days
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "config" {
+  bucket = aws_s3_bucket.config.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "OrganizationConfigAclCheck"
+        Effect    = "Allow"
+        Principal = { Service = "config.amazonaws.com" }
+        Action    = ["s3:GetBucketAcl", "s3:ListBucket"]
+        Resource  = aws_s3_bucket.config.arn
+        Condition = { StringEquals = { "aws:SourceOrgID" = var.organization_id } }
+      },
+      {
+        Sid       = "OrganizationConfigDelivery"
+        Effect    = "Allow"
+        Principal = { Service = "config.amazonaws.com" }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.config.arn}/config/*/AWSLogs/*/Config/*"
+        Condition = {
+          StringEquals = {
+            "aws:SourceOrgID" = var.organization_id
+            "s3:x-amz-acl"    = "bucket-owner-full-control"
+          }
+        }
+      },
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource  = [aws_s3_bucket.config.arn, "${aws_s3_bucket.config.arn}/*"]
+        Condition = { Bool = { "aws:SecureTransport" = "false" } }
+      },
+    ]
+  })
+  depends_on = [aws_s3_bucket_public_access_block.config]
 }

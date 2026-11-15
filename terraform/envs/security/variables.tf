@@ -80,3 +80,14 @@ variable "trail_log_retention_days" {
     error_message = "trail_log_retention_days must be at least 90."
   }
 }
+
+variable "config_log_retention_days" {
+  type        = number
+  description = "Days AWS Config snapshot and history objects are kept in the central bucket (Phase 3.4.2)."
+  default     = 730
+
+  validation {
+    condition     = var.config_log_retention_days >= 365
+    error_message = "config_log_retention_days must be at least 365."
+  }
+}
