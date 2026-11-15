@@ -1,11 +1,6 @@
 version: 2
 updates:
-  # The only dependency-manifest-shaped, Dependabot-supported ecosystem
-  # actually present in this repository (verified against the tracked
-  # file list: no go.mod, package.json, requirements.txt, Gemfile,
-  # Cargo.toml, Dockerfile, or Terraform anywhere) - the single workflow
-  # at .github/workflows/validate.yml, which pins actions/checkout by
-  # SHA. Dependabot supports SHA-pinned actions directly: it opens a PR
+  # GitHub Actions: every workflow pins its actions by commit SHA. Dependabot supports SHA-pinned actions directly: it opens a PR
   # updating the pinned SHA, never switching to a floating tag. See
   # docs/adr/0009-repository-governance-baseline.md.
   - package-ecosystem: "github-actions"
@@ -21,3 +16,20 @@ updates:
         patterns:
           - "*"
     open-pull-requests-limit: 5
+
+  # Phase 5.1a: the first-party image. Base images are pinned by digest
+  # (check-supply-chain enforces it); Dependabot proposes digest bumps,
+  # each one rebuilt and rescanned by .github/workflows/image.yml.
+  - package-ecosystem: "docker"
+    directory: "/apps/smoke"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+
+  # Phase 5.1a: apps/smoke uses only the standard library today; this
+  # keeps the go directive and any future module current.
+  - package-ecosystem: "gomod"
+    directory: "/apps/smoke"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3

@@ -1,0 +1,67 @@
+name: image
+
+# Phase 5.1a: build, scan and SBOM for the first-party image (apps/smoke)
+# on every change that can affect it. Nothing is pushed or signed here
+# (Phase 5.1b adds that, on main only). Every step is the same make
+# target a developer runs locally; the only actions used are GitHub-owned
+# and pinned by commit SHA, as the repository's Actions policy requires.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "scripts/image/**"
+      - "scripts/lab/tool-versions.txt"
+      - ".github/workflows/image.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "scripts/image/**"
+      - "scripts/lab/tool-versions.txt"
+      - ".github/workflows/image.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-scan-sbom:
+    name: build, scan, SBOM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        # actions/checkout v7.0.1, the same pin as validate.yml.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: make tools-install
+        # Checksum-verified trivy and syft from scripts/lab/tool-versions.txt.
+        run: make tools-install
+
+      - name: make image-build
+        # docker build (unit tests run in the build stage), non-root check.
+        run: make image-build
+
+      - name: make image-scan
+        # Fails on any HIGH/CRITICAL vulnerability with a fix available,
+        # or any HIGH/CRITICAL Dockerfile misconfiguration.
+        run: make image-scan
+
+      - name: make image-sbom
+        run: make image-sbom
+
+      - name: Upload SBOM
+        # actions/upload-artifact v7.0.2.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: smoke-sbom-cyclonedx
+          path: .tools/out/image/smoke.cdx.json
+          if-no-files-found: error
+          retention-days: 30

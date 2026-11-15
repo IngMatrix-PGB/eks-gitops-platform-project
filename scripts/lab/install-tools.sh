@@ -1,7 +1,7 @@
 #!/bin/sh
 # Downloads and verifies the pinned project-local lab toolchain into
 # .tools/bin/. Supports raw-binary downloads (kind, kubectl), tar.gz
-# archives (helm), and zip archives (terraform), with archive
+# archives (helm, trivy, syft), and zip archives (terraform), with archive
 # extraction restricted to exactly one validated, regular-file member.
 # Never installs globally, never uses Homebrew, never uses sudo, never
 # modifies $PATH. Backs `make tools-install` only.
@@ -122,6 +122,8 @@ verify_executable() {
     kubectl) "$dest" version --client >/dev/null 2>&1 ;;
     helm) "$dest" version >/dev/null 2>&1 ;;
     terraform) "$dest" version >/dev/null 2>&1 ;;
+    trivy) "$dest" --version >/dev/null 2>&1 ;;
+    syft) "$dest" version >/dev/null 2>&1 ;;
     *) return 1 ;;
   esac
 }

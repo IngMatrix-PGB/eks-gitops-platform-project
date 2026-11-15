@@ -89,7 +89,9 @@ delivery roadmap for what exists versus what is proposed.
 | 3.4.3c | Per-spoke ESO identity (plan-only): one apply per spoke account, one table of per-environment identities shared with the chart's cross-validation | Implemented (offline) |
 | 3.4.4a | Hub-to-spoke Argo CD identity on EKS (plan-only): hub role via Pod Identity, spoke roles and STANDARD access entries with no EKS access policy, one shared namespaced Role (`platform/spoke-access/role.yaml`, `make check-spoke-access`) | Implemented (offline) |
 | 3.4.4b | aws-eks GitOps profile in hub-and-spoke form: clusters generator to `spoke-<env>`/`<env>`, offline EKS cluster Secret renderer with `awsAuthConfig` and no token (`lab/eks/spoke-cluster-secret.sh`, `make eks-test-spoke-secret`) | Implemented (offline) |
-| 5.1 | Image CI: build, vulnerability scan, SBOM, signing, push; tag-bump promotion `dev` → `uat` → `prod` | `PROPOSED` |
+| 5.1a | Image CI: first-party `apps/smoke`, build with tests, Trivy scan failing on fixable HIGH/CRITICAL, CycloneDX SBOM (`make image-all`, `make check-supply-chain`, `.github/workflows/image.yml`) | Implemented |
+| 5.1b | Push to GHCR from `main`, keyless signature and SBOM attestation | `PROPOSED` |
+| 5.1c | Promotion `dev` → `uat` → `prod` as PRs that change a digest, with order and signature checks | `PROPOSED` |
 | 5.2 | Terraform CI: `plan` on every PR, static analysis, `apply` against a local AWS emulator | `PROPOSED` |
 | 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | `PROPOSED` |
 | 6.2 | Backup and restore drill | `PROPOSED` |

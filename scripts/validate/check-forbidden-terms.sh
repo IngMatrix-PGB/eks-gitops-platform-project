@@ -97,9 +97,34 @@ terraform_lock_block_close_pattern='^[[:space:]]*\}[[:space:]]*$'
 # path. The rest of the file is scanned normally.
 lib_image_digest_line_pattern='^[A-Z][A-Z0-9_]*_IMAGE_DIGEST="sha256:[0-9a-f]{64}"$'
 
+# Narrow, single-purpose exception (Phase 5.1a): an app's Dockerfile pins
+# each base image by its registry digest, which can contain a 12+ digit
+# run. Masks ONLY a line that is exactly
+#   FROM <image-ref>@sha256:<64 lowercase hex>[ AS <stage>]
+# ONLY in a file at exactly apps/<dir>/Dockerfile. Every other line of
+# the file, and any other path, is scanned normally.
+dockerfile_from_digest_line_pattern='^FROM[[:space:]]+[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}([[:space:]]+AS[[:space:]]+[a-z][a-z0-9-]*)?$'
+
 aws_account_hit_in_file() {
   local file="$1"
   local is_terraform_lock_file
+  case "$file" in
+    apps/*/Dockerfile)
+      case "${file#apps/}" in
+        */*/*) : ;;
+        *)
+          local line
+          while IFS= read -r line || [ -n "$line" ]; do
+            [[ "$line" =~ $dockerfile_from_digest_line_pattern ]] && continue
+            if [[ "$line" =~ $aws_account_pattern ]]; then
+              return 0
+            fi
+          done < "$file"
+          return 1
+          ;;
+      esac
+      ;;
+  esac
   case "$file" in
     scripts/*/_lib.sh)
       case "${file#scripts/}" in
@@ -181,11 +206,13 @@ sha1_pattern='(^|[^0-9A-Fa-f])[0-9A-Fa-f]{40}([^0-9A-Fa-f]|$)'   # exact 40-hex 
 # Rather than exclude .github/ from scanning (which would blind the
 # scanner to any other restricted content placed there), this accepts
 # exactly one, fully-anchored line shape and nothing else: the complete,
-# trimmed line must be only "- uses: actions/checkout@<40-hex>" (an
-# optional leading list-item dash, the literal key "uses:", and the
-# literal repository "actions/checkout" - no other action/repository, no
-# inline comment, no trailing version annotation, no other text on the
-# line). It is also scoped to files literally under .github/workflows/
+# trimmed line must be only "- uses: actions/<repo>@<40-hex>" (an
+# optional leading list-item dash, the literal key "uses:", and a
+# repository of the GitHub-owned "actions" organization - the only
+# owner the repository's Actions policy allows; Phase 5.1a widened it
+# from actions/checkout to actions/<repo> for actions/upload-artifact -
+# no other owner, no inline comment, no trailing version annotation, no
+# other text on the line). It is also scoped to files literally under .github/workflows/
 # with a .yml/.yaml extension, so it can never apply anywhere else in the
 # repository.
 is_allowed_checkout_pin() {
@@ -194,7 +221,7 @@ is_allowed_checkout_pin() {
     .github/workflows/*.yml|.github/workflows/*.yaml) : ;;
     *) return 1 ;;
   esac
-  [[ "$line" =~ ^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*actions/checkout@[0-9A-Fa-f]{40}[[:space:]]*$ ]]
+  [[ "$line" =~ ^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*actions/[a-z0-9-]+@[0-9A-Fa-f]{40}[[:space:]]*$ ]]
 }
 
 while IFS= read -r f; do
