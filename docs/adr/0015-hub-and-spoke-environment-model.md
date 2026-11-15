@@ -168,3 +168,12 @@ Adopt an explicit **hub-and-spoke** model with one hub and three spokes:
   once). Deregistering a spoke with a live Application removed its
   workloads without orphans; uninstalling on the hub cascaded to every
   spoke.
+
+## Amendment (2026-11-13)
+
+[ADR-0016](0016-aws-organization-and-guardrails.md) refines the AWS
+section: five member accounts (`security`, `platform`, `dev`, `uat`,
+`prod`) plus the organization's management account, which hosts nothing
+but the organization. The hub (this ADR's `management` environment)
+lives in the `platform` account, and the security services are
+delegated to `security`.

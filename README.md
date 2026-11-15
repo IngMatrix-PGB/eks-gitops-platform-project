@@ -82,7 +82,8 @@ delivery roadmap for what exists versus what is proposed.
 | 2.7.4 | Cluster-generator `ApplicationSet` and one ESO per spoke; `make mc-up` brings the whole profile up | Implemented |
 | 2.8.1 | Workload resilience in the standard chart: PodDisruptionBudget, topology spread, graceful shutdown, NetworkPolicy (`make workload-test-resilience`) | Implemented |
 | 2.8.2 | metrics-server per workload cluster and an HPA in `prod` (`make workload-test-autoscaling`) | Implemented |
-| 3.4 | Multi-account hub-and-spoke Terraform: organization guardrails, threat detection and config recording, budgets, Karpenter, immutable container registry with lifecycle rules (plan-only) | `PROPOSED` |
+| 3.4.1 | AWS organization and guardrails (plan-only): five member accounts, service control policies, organization trail, delegated security administration (GuardDuty, Security Hub, Config, Access Analyzer), consolidated budget | Implemented (offline) |
+| 3.4.2–3.4.4 | Account baseline; per-environment EKS with add-ons, Karpenter and ECR; hub-to-spoke Argo CD identity on EKS (plan-only) | `PROPOSED` |
 | 5.1 | Image CI: build, vulnerability scan, SBOM, signing, push; tag-bump promotion `dev` → `uat` → `prod` | `PROPOSED` |
 | 5.2 | Terraform CI: `plan` on every PR, static analysis, `apply` against a local AWS emulator | `PROPOSED` |
 | 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | `PROPOSED` |

@@ -478,7 +478,28 @@ fi
 
 # --- 15. No literal secretsmanager:*/kms:* action string, and no bare
 # wildcard "*" as a sole IAM action, anywhere in a tracked .tf file. -
-wildcard_action_hits="$(grep_over_tf_files '"(secretsmanager|kms):\*"')"
+#
+# Narrow, single-purpose exception (Phase 3.4.1): the region-restriction
+# service control policy EXEMPTS global services from a Deny through
+# NotAction - its list is AWS's documented set of global services and
+# contains "kms:*" as an exemption, never as a grant. Masked ONLY: in
+# exactly terraform/modules/scp/main.tf, ONLY the lines strictly inside
+# the `global_actions = [ ... ]` local (the module uses that local solely
+# as the NotAction of a Deny - asserted by terraform/envs/org's tests).
+# Any other occurrence in that file, or the same block in any other file,
+# is still rejected.
+scp_global_actions_range() {
+  [ -f terraform/modules/scp/main.tf ] || return 0
+  awk '/^[[:space:]]*global_actions[[:space:]]*=[[:space:]]*\[[[:space:]]*$/ { s = NR; next }
+       s && /^[[:space:]]*\][[:space:]]*$/ { print s + 1 " " NR - 1; exit }' terraform/modules/scp/main.tf
+}
+filter_scp_notaction_exemption() {
+  range="$(scp_global_actions_range)"
+  if [ -z "$range" ]; then cat; return 0; fi
+  lo="${range% *}"; hi="${range#* }"
+  awk -F: -v lo="$lo" -v hi="$hi" '!($1 == "terraform/modules/scp/main.tf" && $2 >= lo && $2 <= hi)'
+}
+wildcard_action_hits="$(grep_over_tf_files '"(secretsmanager|kms):\*"' | filter_scp_notaction_exemption)"
 bare_star_action_hits="$(grep_over_tf_files '^[[:space:]]*actions?[[:space:]]*=[[:space:]]*(\[)?[[:space:]]*"\*"')"
 if [ -n "$wildcard_action_hits" ] || [ -n "$bare_star_action_hits" ]; then
   bad "a wildcard IAM action (secretsmanager:*, kms:*, or a bare \"*\" action) was found:"
