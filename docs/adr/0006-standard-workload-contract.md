@@ -135,3 +135,32 @@ template, a schema entry, and a runtime test
 `HorizontalPodAutoscaler` (it needs metrics-server; Phase 2.8.2),
 `Ingress` (WC-10) and `ServiceMonitor` (WC-11) remain deferred and are
 still asserted absent by `check-standard-workload-chart`.
+
+## Amendment (Phase 2.8.2, 2026-11-11)
+
+`HorizontalPodAutoscaler` is implemented (`autoscaling/v2`, CPU
+utilization), enabled in `prod` only (2–4 replicas, 70 %), backed by
+metrics-server installed per workload cluster by script (pinned chart
+3.14.0, image v0.9.0 by digest; `--kubelet-insecure-tls` in the lab
+only; never on the hub; not through Argo CD, because it creates
+cluster-scoped objects). The requirement that the HPA "does not fight a
+statically declared replica count" is met as follows, each part measured
+by `make workload-test-autoscaling`:
+
+- A Deployment under an HPA is annotated `replicas-owner: hpa` and
+  renders `replicas: minReplicas`. Argo CD ignores `spec.replicas` only
+  on Deployments carrying that annotation (`jqPathExpressions` plus
+  `RespectIgnoreDifferences`), so a static Deployment is still fully
+  reconciled from Git: a manual scale of `dev` is reverted by self-heal.
+- With the HPA above `minReplicas`, the Application stays `Synced` and
+  `spec.replicas` stays at the HPA's value.
+- **Hand-over of an existing Deployment.** With server-side apply, Argo
+  CD stops sending a field it is told to ignore. If it was the field's
+  only manager, the API server removes the field and the default of 1
+  applies: measured, `prod` dropped from 2 to 1 replica on that sync.
+  Rendering `minReplicas` does not prevent it. `make workload-hpa-handover`
+  (run once, before the Git change that enables the HPA) gives the
+  current value a second field manager. Measured with it, `spec.replicas`
+  and Ready never went below 2.
+
+`Ingress` (WC-10) and `ServiceMonitor` (WC-11) remain deferred.

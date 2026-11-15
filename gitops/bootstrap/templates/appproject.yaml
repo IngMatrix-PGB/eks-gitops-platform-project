@@ -19,7 +19,7 @@ spec:
   description: >-
     Phase 2.6.2 platform environments. Exact-scoped: one source repo,
     dev/uat/prod destinations only, one minimal cluster grant
-    (Namespace), exactly the 8 kinds the workload chart renders.
+    (Namespace), exactly the 9 kinds the workload chart renders.
   sourceRepos:
     - {{ .Values.repoURL }}
   destinations:
@@ -94,3 +94,6 @@ spec:
       kind: PodDisruptionBudget
     - group: "networking.k8s.io"
       kind: NetworkPolicy
+    # Phase 2.8.2: the workload chart's optional HPA (prod only today).
+    - group: "autoscaling"
+      kind: HorizontalPodAutoscaler

@@ -1,4 +1,8 @@
 {{- $gs := .Values.gracefulShutdown }}
+{{- $as := .Values.autoscaling }}
+{{- if and $as.enabled (lt (int $as.maxReplicas) (int $as.minReplicas)) }}
+{{- fail (printf "standard-workload: autoscaling.maxReplicas (%d) must be >= minReplicas (%d)" (int $as.maxReplicas) (int $as.minReplicas)) }}
+{{- end }}
 {{- if gt (add $gs.preStopSleepSeconds $gs.serverShutdownTimeoutSeconds 5) (int .Values.terminationGracePeriodSeconds) }}
 {{- fail (printf "standard-workload: gracefulShutdown.preStopSleepSeconds (%d) + serverShutdownTimeoutSeconds (%d) + 5 must not exceed terminationGracePeriodSeconds (%d)" (int $gs.preStopSleepSeconds) (int $gs.serverShutdownTimeoutSeconds) (int .Values.terminationGracePeriodSeconds)) }}
 {{- end }}
@@ -8,8 +12,23 @@ metadata:
   name: {{ include "standard-workload.fullname" . }}
   labels:
     {{- include "standard-workload.labels" . | nindent 4 }}
+  {{- if $as.enabled }}
+  annotations:
+    # Phase 2.8.2: tells Argo CD (gitops/bootstrap ignoreDifferences) that
+    # the HPA, not Git, owns spec.replicas of this Deployment.
+    eks-gitops-lab-lite.local/replicas-owner: hpa
+  {{- end }}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  {{- /*
+  Phase 2.8.2: with an HPA, render its minReplicas instead of omitting
+  the field. Omitting it was measured to drop prod to 1 replica on the
+  hand-over sync: server-side apply removes a field its manager stops
+  sending and the API default (1) applies. Rendering minReplicas keeps
+  Argo CD the field's manager; on every later sync RespectIgnoreDifferences
+  (gitops/bootstrap, Deployments annotated replicas-owner=hpa) replaces
+  it with the live value the HPA chose, so Argo CD never fights the HPA.
+  */}}
+  replicas: {{ ternary .Values.autoscaling.minReplicas .Values.replicaCount .Values.autoscaling.enabled }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
   strategy:
     type: {{ .Values.strategy.type }}

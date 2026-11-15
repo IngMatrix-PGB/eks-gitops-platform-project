@@ -117,6 +117,13 @@ lab_mc_spoke_ready() {
       return 1
     fi
   done
+  # Phase 2.8.2: an HPA without metrics-server reports no metrics and
+  # Argo CD marks its Application Degraded.
+  msr_ms="$(ckubectl "$msr_env" get apiservice v1beta1.metrics.k8s.io -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || true)"
+  if [ "$msr_ms" != "True" ]; then
+    echo "spoke '$msr_env': metrics-server APIService not Available - run 'make mc-spoke-metrics-server SPOKE=${msr_env}'"
+    return 1
+  fi
   if ! ckubectl "$msr_env" -n "eso-source-${msr_env}" get secret "local-backend-${msr_env}" -o name >/dev/null 2>&1; then
     echo "spoke '$msr_env': source Secret eso-source-${msr_env}/local-backend-${msr_env} absent - run 'make mc-spoke-source-secret SPOKE=${msr_env}'"
     return 1

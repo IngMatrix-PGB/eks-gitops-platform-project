@@ -81,7 +81,7 @@ delivery roadmap for what exists versus what is proposed.
 | 2.7.3 | `lab-multicluster`: `management` hub + `dev`/`uat` spokes (`prod` opt-in) in `kind`; spoke registration with a namespace-scoped, rotating credential | Implemented |
 | 2.7.4 | Cluster-generator `ApplicationSet` and one ESO per spoke; `make mc-up` brings the whole profile up | Implemented |
 | 2.8.1 | Workload resilience in the standard chart: PodDisruptionBudget, topology spread, graceful shutdown, NetworkPolicy (`make workload-test-resilience`) | Implemented |
-| 2.8.2 | metrics-server and HPA | `PROPOSED` |
+| 2.8.2 | metrics-server per workload cluster and an HPA in `prod` (`make workload-test-autoscaling`) | Implemented |
 | 3.4 | Multi-account hub-and-spoke Terraform: organization guardrails, threat detection and config recording, budgets, Karpenter, immutable container registry with lifecycle rules (plan-only) | `PROPOSED` |
 | 5.1 | Image CI: build, vulnerability scan, SBOM, signing, push; tag-bump promotion `dev` → `uat` → `prod` | `PROPOSED` |
 | 5.2 | Terraform CI: `plan` on every PR, static analysis, `apply` against a local AWS emulator | `PROPOSED` |
@@ -313,6 +313,18 @@ make eso-status                 # read-only CRD/release/Deployment health report
 make eso-test-runtime-health   # read-only health checks against an installed bootstrap
 make eso-test-lifecycle        # mutating: proves install/no-op/singleton guards/CRD-conflict fail-closed/uninstall(CRDs retained)/no-op/restore end-to-end
 make eso-uninstall              # uninstall all three scoped releases (prod, dev, then uat; ENV=dev|uat|prod for one at a time); never touches the CRDs; refuses uat while dev or prod exists
+```
+
+Phase 2.8.2: `prod` runs an HPA, which needs metrics-server on the same
+cluster before the bootstrap (otherwise `prod` reports Degraded). `make
+mc-up` installs it on every spoke; on lab-lite:
+
+```bash
+make metrics-server-chart-fetch   # download + checksum-verify the pinned chart (3.14.0)
+make metrics-server-install       # fail-closed idempotent install (LAB_CLUSTER=dev|uat|prod for a spoke; never the hub)
+make metrics-server-status        # release, APIService and node metrics
+make workload-hpa-handover NS=prod DEPLOYMENT=platform-smoke-prod-standard-workload   # once, before Git puts an existing Deployment under an HPA
+make workload-test-autoscaling REVISION=<branch> PRE_REVISION=<branch without the HPA>  # mutating HPA proof
 ```
 
 Phase 2.6.2 adds the per-environment `SecretStore`/`ExternalSecret`

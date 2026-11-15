@@ -518,6 +518,39 @@ run_case "a well-shaped zh: line with a digit run appearing after hashes[] has a
 }
 "
 
+# --- Phase 2.8.2: scripts/<dir>/_lib.sh image-digest pin exception:
+# masks ONLY an exact <UPPER_SNAKE>_IMAGE_DIGEST="sha256:<64-hex>" line,
+# ONLY at scripts/<dir>/_lib.sh. ---------------------------------------
+run_case "image digest pin with a 12+ digit run in scripts/<dir>/_lib.sh" accept \
+  "scripts/component/_lib.sh" \
+  "COMPONENT_IMAGE_DIGEST=\"sha256:${CHK_WITH_DIGITS}\"
+"
+run_case "same digest line in a file that is not scripts/<dir>/_lib.sh" reject \
+  "scripts/component/other.sh" \
+  "COMPONENT_IMAGE_DIGEST=\"sha256:${CHK_WITH_DIGITS}\"
+"
+run_case "same digest line nested deeper (scripts/a/b/_lib.sh)" reject \
+  "scripts/a/b/_lib.sh" \
+  "COMPONENT_IMAGE_DIGEST=\"sha256:${CHK_WITH_DIGITS}\"
+"
+run_case "12-digit run on another line of an eligible _lib.sh" reject \
+  "scripts/component/_lib.sh" \
+  "COMPONENT_IMAGE_DIGEST=\"sha256:${CHK_VALID}\"
+OWNER=\"${AWS12}\"
+"
+run_case "digest line with trailing text" reject \
+  "scripts/component/_lib.sh" \
+  "COMPONENT_IMAGE_DIGEST=\"sha256:${CHK_WITH_DIGITS}\" # account ${AWS12}
+"
+run_case "digest variable not named *_IMAGE_DIGEST" reject \
+  "scripts/component/_lib.sh" \
+  "COMPONENT_ACCOUNT=\"sha256:${CHK_WITH_DIGITS}\"
+"
+run_case "digest value of the wrong length" reject \
+  "scripts/component/_lib.sh" \
+  "COMPONENT_IMAGE_DIGEST=\"sha256:${CHK_WITH_DIGITS}0\"
+"
+
 echo ""
 echo "test-forbidden-terms: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then

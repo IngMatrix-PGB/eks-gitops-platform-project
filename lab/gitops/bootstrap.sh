@@ -111,7 +111,7 @@ if [ "$profile" = "local-multicluster" ]; then
       echo "FAIL: $mc_reason" >&2
       exit 1
     fi
-    echo "OK: spoke '$mc_env' registered, running, ESO Available and source Secret present"
+    echo "OK: spoke '$mc_env' registered, running, ESO and metrics-server Available, source Secret present"
   done
 fi
 
