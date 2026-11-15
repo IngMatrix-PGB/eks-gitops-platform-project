@@ -1,0 +1,18 @@
+{{- /*
+Phase 2.8.1: only with two or more replicas - a budget on a single
+replica protects nothing, and maxUnavailable (never minAvailable) keeps
+one voluntary eviction always possible.
+*/ -}}
+{{- if ge (int .Values.replicaCount) 2 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "standard-workload.fullname" . }}
+  labels:
+    {{- include "standard-workload.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "standard-workload.selectorLabels" . | nindent 6 }}
+{{- end }}

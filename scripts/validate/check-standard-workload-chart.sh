@@ -85,16 +85,22 @@ fi
 # ExternalSecret, SecretStore, Service, ServiceAccount (as of Phase
 # 2.6.2 - two ServiceAccount objects render: the workload's own and the
 # SecretStore's dedicated auth identity) ---
+# Phase 2.8.1: plus NetworkPolicy everywhere, and PodDisruptionBudget only
+# where replicaCount >= 2 (prod).
 for render in "$render_dev" "$render_uat" "$render_prod"; do
   kinds="$(grep -E '^kind: ' "$render" | sort -u)"
-  expected="$(printf 'kind: ConfigMap\nkind: Deployment\nkind: ExternalSecret\nkind: SecretStore\nkind: Service\nkind: ServiceAccount')"
+  if [ "$render" = "$render_prod" ]; then
+    expected="$(printf 'kind: ConfigMap\nkind: Deployment\nkind: ExternalSecret\nkind: NetworkPolicy\nkind: PodDisruptionBudget\nkind: SecretStore\nkind: Service\nkind: ServiceAccount')"
+  else
+    expected="$(printf 'kind: ConfigMap\nkind: Deployment\nkind: ExternalSecret\nkind: NetworkPolicy\nkind: SecretStore\nkind: Service\nkind: ServiceAccount')"
+  fi
   if [ "$kinds" != "$expected" ]; then
     echo "FAIL: $render rendered an unexpected kind set:" >&2
     echo "$kinds" >&2
     fail=1
   fi
 done
-[ "$fail" -eq 0 ] && echo "OK: rendered-kind allowlist matches exactly (ConfigMap, Deployment, ExternalSecret, SecretStore, Service, ServiceAccount) in all three environments"
+[ "$fail" -eq 0 ] && echo "OK: rendered-kind allowlist matches exactly (ConfigMap, Deployment, ExternalSecret, NetworkPolicy, SecretStore, Service, ServiceAccount; plus PodDisruptionBudget in prod) in all three environments"
 
 # --- no Secret renders ---
 for render in "$render_dev" "$render_uat" "$render_prod"; do
@@ -106,7 +112,9 @@ done
 [ "$fail" -eq 0 ] && echo "OK: no Secret rendered in any environment"
 
 # --- deferred optional resources: must not render and must not be schema-exposed ---
-for kind in Ingress HorizontalPodAutoscaler PodDisruptionBudget NetworkPolicy ServiceMonitor; do
+# Phase 2.8.1 implemented PodDisruptionBudget and NetworkPolicy; these
+# three stay deferred (ADR-0006 amendment).
+for kind in Ingress HorizontalPodAutoscaler ServiceMonitor; do
   for render in "$render_dev" "$render_uat" "$render_prod"; do
     if grep -q "^kind: ${kind}$" "$render"; then
       echo "FAIL: $render rendered $kind - deferred capability must not render in Phase 2.4" >&2
@@ -114,7 +122,7 @@ for kind in Ingress HorizontalPodAutoscaler PodDisruptionBudget NetworkPolicy Se
     fi
   done
 done
-for key in ingress autoscaling podDisruptionBudget networkPolicy serviceMonitor; do
+for key in ingress autoscaling serviceMonitor; do
   if grep -qE "\"${key}\"" "$CHART/values.schema.json"; then
     echo "FAIL: values.schema.json exposes deferred key '$key' - dead configuration is not authorized" >&2
     fail=1
@@ -213,7 +221,7 @@ if ! "$HELM" template default-render "$CHART" --namespace default > "$default_re
   fail=1
 else
   default_kinds="$(grep -E '^kind: ' "$default_render" | sort -u)"
-  default_expected="$(printf 'kind: ConfigMap\nkind: Deployment\nkind: Service\nkind: ServiceAccount')"
+  default_expected="$(printf 'kind: ConfigMap\nkind: Deployment\nkind: NetworkPolicy\nkind: Service\nkind: ServiceAccount')"
   if [ "$default_kinds" != "$default_expected" ]; then
     echo "FAIL: default render (externalSecret.enabled: false) rendered an unexpected kind set:" >&2
     echo "$default_kinds" >&2
@@ -222,7 +230,7 @@ else
     echo "FAIL: default render (externalSecret.enabled: false) still renders a 'secret' volume/mount" >&2
     fail=1
   else
-    echo "OK: default render (externalSecret.enabled: false) is exactly the pre-Phase-2.6.2 4-kind shape, no secret volume/mount"
+    echo "OK: default render (externalSecret.enabled: false) is exactly the pre-Phase-2.6.2 4-kind shape plus the Phase 2.8.1 NetworkPolicy, no secret volume/mount"
   fi
 fi
 
@@ -604,6 +612,9 @@ service:
   port: 9898
 configMap:
   uiMessage: "aws provider fixture (${env_name})"
+networkPolicy:
+  enabled: false
+  ingressFromNamespaces: []
 externalSecret:
   enabled: true
   provider: "aws"
@@ -1129,6 +1140,95 @@ run_negative_case_aws "aws provider remote key is an ARN, not a logical name" 'e
   aws:
     region: "us-east-1"
     secretName: "arn:aws:secretsmanager:us-east-1:aws:secret:eks-gitops-platform-project/uat/backend"'
+
+# =============================================================================
+# Phase 2.8.1: workload resilience (ADR-0006 amendment) - graceful
+# shutdown, PodDisruptionBudget, topology spread, NetworkPolicy.
+# =============================================================================
+# yaml_doc <file> <kind> - prints the one document of that kind
+yaml_doc() { awk -v k="kind: $2" 'BEGIN{RS="---\n"} index($0, "\n" k "\n") {print; exit}' "$1"; }
+
+ov_dev="$root/overlay-dev-aws.yaml"; ov_uat="$root/overlay-uat-aws.yaml"; ov_prod="$root/overlay-prod-aws.yaml"
+for render in "$render_dev" "$render_uat" "$render_prod" "$ov_dev" "$ov_uat" "$ov_prod"; do
+  dep="$(yaml_doc "$render" Deployment)"
+  printf '%s\n' "$dep" | grep -qE '^\s+sleep:$' && printf '%s\n' "$dep" | grep -qE '^\s+seconds: 5$' \
+    || { echo "FAIL: $render Deployment lacks the native preStop sleep (5s)" >&2; fail=1; }
+  printf '%s\n' "$dep" | grep -A1 'name: PODINFO_SERVER_SHUTDOWN_TIMEOUT' | grep -q 'value: "5s"' \
+    || { echo "FAIL: $render Deployment lacks PODINFO_SERVER_SHUTDOWN_TIMEOUT=5s" >&2; fail=1; }
+  if printf '%s\n' "$dep" | grep -qE 'command:|- (sh|/bin/sh|bash)$'; then
+    echo "FAIL: $render uses an exec/shell lifecycle hook - only the native sleep action is allowed" >&2; fail=1
+  fi
+  [ "$(printf '%s\n' "$dep" | grep -cE 'topologyKey: (kubernetes\.io/hostname|topology\.kubernetes\.io/zone)$')" = "2" ] \
+    || { echo "FAIL: $render Deployment does not carry exactly the hostname + zone spread constraints" >&2; fail=1; }
+  zone_mode="$(printf '%s\n' "$dep" | grep -A1 'topologyKey: topology.kubernetes.io/zone' | sed -n 's/.*whenUnsatisfiable: //p')"
+  if [ "$render" = "$ov_prod" ]; then want_zone=DoNotSchedule; else want_zone=ScheduleAnyway; fi
+  [ "$zone_mode" = "$want_zone" ] || { echo "FAIL: $render zone spread is '$zone_mode', expected '$want_zone'" >&2; fail=1; }
+done
+[ "$fail" -eq 0 ] && echo "OK: every environment (local and aws) has the native preStop sleep, a 5s server shutdown timeout, and hostname + zone spread (zone DoNotSchedule only in prod-aws)"
+
+# PDB and NetworkPolicy select exactly the Deployment's own pods
+dep_selector() { yaml_doc "$1" Deployment | awk '/^  selector:/{f=1;next} f&&/^  [a-z]/{exit} f&&/app.kubernetes.io/{gsub(/^ +/,"");print}' | sort | tr '\n' ' '; }
+for ov in "$ov_dev" "$ov_uat" "$ov_prod"; do
+  if grep -q '^kind: NetworkPolicy$' "$ov"; then echo "FAIL: $ov renders a NetworkPolicy - aws overlays keep it off until the EKS VPC CNI enforces it (TAD R-14)" >&2; fail=1; fi
+done
+[ "$(grep -c '^kind: PodDisruptionBudget$' "$ov_prod")" = "1" ] && [ "$(cat "$ov_dev" "$ov_uat" | grep -c '^kind: PodDisruptionBudget$' || true)" = "0" ] \
+  || { echo "FAIL: aws overlays: PodDisruptionBudget must render for prod-aws (2 replicas) only" >&2; fail=1; }
+for render in "$render_prod" "$ov_prod"; do
+  pdb="$(yaml_doc "$render" PodDisruptionBudget)"
+  pdb_sel="$(printf '%s\n' "$pdb" | awk '/matchLabels:/{f=1;next} f&&/app.kubernetes.io/{gsub(/^ +/,"");print}' | sort | tr '\n' ' ')"
+  if printf '%s\n' "$pdb" | grep -qE '^  maxUnavailable: 1$' && ! printf '%s\n' "$pdb" | grep -q 'minAvailable' && [ "$pdb_sel" = "$(dep_selector "$render")" ]; then
+    :
+  else
+    echo "FAIL: $render PodDisruptionBudget is not maxUnavailable: 1 over exactly the Deployment's selector" >&2; fail=1
+  fi
+done
+for render in "$render_dev" "$render_uat" "$render_prod"; do
+  np="$(yaml_doc "$render" NetworkPolicy)"
+  np_sel="$(printf '%s\n' "$np" | awk '/^  podSelector:/{f=1;next} f&&/^  [a-z]/{exit} f&&/app.kubernetes.io/{gsub(/^ +/,"");print}' | sort | tr '\n' ' ')"
+  ok=1
+  [ "$np_sel" = "$(dep_selector "$render")" ] || ok=0
+  printf '%s\n' "$np" | grep -qE '^    - Ingress$' && printf '%s\n' "$np" | grep -qE '^    - Egress$' || ok=0
+  [ "$(printf '%s\n' "$np" | grep -cE '^\s+- port: 53$')" = "2" ] || ok=0
+  [ "$(printf '%s\n' "$np" | grep -cE '^\s+- port: ')" = "3" ] || ok=0
+  printf '%s\n' "$np" | grep -qE 'namespaceSelector: \{\}|ipBlock:|0\.0\.0\.0/0' && ok=0
+  [ "$ok" -eq 1 ] || { echo "FAIL: $render NetworkPolicy is not exactly: own pods, Ingress+Egress, http from this namespace, DNS-only egress" >&2; fail=1; }
+done
+[ "$fail" -eq 0 ] && echo "OK: prod PodDisruptionBudgets are maxUnavailable: 1 over the Deployment's own selector; every NetworkPolicy selects only its own pods, allows http from its namespace, DNS-only egress, no ipBlock or any-namespace rule"
+
+# PDB appears only with >= 2 replicas; ingressFromNamespaces adds one selector each
+pdb1="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" | grep -c '^kind: PodDisruptionBudget$' || true)"
+pdb2="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" --set replicaCount=2 | grep -c '^kind: PodDisruptionBudget$' || true)"
+[ "$pdb1" = "0" ] && [ "$pdb2" = "1" ] || { echo "FAIL: PodDisruptionBudget must render only with replicaCount >= 2 (1 replica: $pdb1, 2 replicas: $pdb2)" >&2; fail=1; }
+extra_ns="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" --set 'networkPolicy.ingressFromNamespaces={monitoring}' | grep -c 'kubernetes.io/metadata.name: monitoring' || true)"
+[ "$extra_ns" = "1" ] || { echo "FAIL: networkPolicy.ingressFromNamespaces=[monitoring] did not add exactly one namespaceSelector (got $extra_ns)" >&2; fail=1; }
+np_off="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" --set networkPolicy.enabled=false | grep -c '^kind: NetworkPolicy$' || true)"
+[ "$np_off" = "0" ] || { echo "FAIL: networkPolicy.enabled=false still renders a NetworkPolicy" >&2; fail=1; }
+[ "$fail" -eq 0 ] && echo "OK: PodDisruptionBudget renders only with replicaCount >= 2; ingressFromNamespaces adds exactly one selector per namespace; networkPolicy.enabled=false renders none"
+
+# the shutdown budget is enforced by the template itself
+grace_out="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" --set gracefulShutdown.preStopSleepSeconds=25 2>&1 || true)"
+if printf '%s' "$grace_out" | grep -q 'must not exceed terminationGracePeriodSeconds'; then
+  echo "OK: preStop + shutdown + 5s above terminationGracePeriodSeconds fails the render"
+else
+  echo "FAIL: a preStop + shutdown budget above the grace period rendered" >&2; fail=1
+fi
+
+run_negative_case "topologySpread.zone outside the enum" 'topologySpread:
+  maxSkew: 1
+  hostname: ScheduleAnyway
+  zone: Sometimes'
+run_negative_case "podDisruptionBudget.maxUnavailable 0 (would block every eviction)" 'podDisruptionBudget:
+  maxUnavailable: 0'
+run_negative_case "networkPolicy.ingressFromNamespaces with an invalid namespace name" 'networkPolicy:
+  enabled: true
+  ingressFromNamespaces: ["Not_A_Namespace"]'
+run_negative_case "gracefulShutdown.preStopSleepSeconds negative" 'gracefulShutdown:
+  preStopSleepSeconds: -1
+  serverShutdownTimeoutSeconds: 5'
+run_negative_case "unknown key under networkPolicy" 'networkPolicy:
+  enabled: true
+  ingressFromNamespaces: []
+  egressAllowAll: true'
 
 if [ "$fail" -ne 0 ]; then
   echo "check-standard-workload-chart: FAILED"

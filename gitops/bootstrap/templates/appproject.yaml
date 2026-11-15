@@ -19,7 +19,7 @@ spec:
   description: >-
     Phase 2.6.2 platform environments. Exact-scoped: one source repo,
     dev/uat/prod destinations only, one minimal cluster grant
-    (Namespace), exactly the 6 kinds the workload chart renders.
+    (Namespace), exactly the 8 kinds the workload chart renders.
   sourceRepos:
     - {{ .Values.repoURL }}
   destinations:
@@ -88,3 +88,9 @@ spec:
       kind: SecretStore
     - group: "external-secrets.io"
       kind: ExternalSecret
+    # Phase 2.8.1: exactly the two resilience kinds the workload chart
+    # now renders (PodDisruptionBudget only where replicaCount >= 2).
+    - group: "policy"
+      kind: PodDisruptionBudget
+    - group: "networking.k8s.io"
+      kind: NetworkPolicy

@@ -16,7 +16,8 @@
 	check-terraform-offline check-terraform-offline-regression \
 	lab-mc-create lab-mc-destroy lab-mc-status mc-spoke-register mc-spoke-deregister \
 	lab-mc-test-lifecycle mc-test-registration \
-	mc-spoke-eso-install mc-spoke-source-secret mc-bootstrap mc-up mc-test-e2e
+	mc-spoke-eso-install mc-spoke-source-secret mc-bootstrap mc-up mc-test-e2e \
+	workload-test-resilience
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
@@ -116,6 +117,9 @@ mc-up: ## Phase 2.7.4: idempotent end-to-end bring-up - clusters, hub Argo CD + 
 
 mc-test-e2e: ## Phase 2.7.4: mutating end-to-end proof - generator selection, per-spoke ESO/rotation/self-heal isolation, safe deregistration, hub uninstall (requires REVISION=<pushed branch>)
 	@sh tests/multicluster/test-e2e.sh
+
+workload-test-resilience: ## Phase 2.8.1: mutating proof of the chart's resilience contract on the prod workload (zero-error rollout, PDB eviction, NetworkPolicy, spread, self-heal); lab-lite by default or LAB_CLUSTER=prod; RESILIENCE_BASELINE=1 adds an informational run without preStop
+	@sh tests/workload/test-resilience.sh
 
 lab-test-eks-identity-offline: ## Phase 3.3.4b: fully offline positive/negative matrix for check_eks_cluster_identity() (fake kubectl/aws, no cluster, no AWS, no network - DESIGNED/NOT DEPLOYED)
 	@sh tests/lab/test-eks-identity-offline.sh
