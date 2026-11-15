@@ -180,7 +180,7 @@ sign() {
   echo "image: cosign sign (keyless, recursive) $ref ..."
   "$COSIGN_BIN" sign --yes --recursive "$ref"
   platform_digests "$ref" > "$IMAGE_OUT/platforms.txt"
-  [ "$(wc -l < "$IMAGE_OUT/platforms.txt" | tr -d ' ')" = "$(printf '%s' "$IMAGE_PLATFORMS" | tr ',' '\n' | wc -l | tr -d ' ')" ] \
+  [ "$(wc -l < "$IMAGE_OUT/platforms.txt" | tr -d ' ')" = "$(printf '%s\n' "$IMAGE_PLATFORMS" | tr ',' '\n' | wc -l | tr -d ' ')" ] \
     || { echo "FAIL: $ref does not hold exactly $IMAGE_PLATFORMS" >&2; exit 1; }
   while read -r plat pdigest; do
     sbom_file="$IMAGE_OUT/smoke-$(printf '%s' "$plat" | tr '/' '-').cdx.json"
