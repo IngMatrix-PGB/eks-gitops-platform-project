@@ -177,3 +177,30 @@ section: five member accounts (`security`, `platform`, `dev`, `uat`,
 but the organization. The hub (this ADR's `management` environment)
 lives in the `platform` account, and the security services are
 delegated to `security`.
+
+## Amendment (Phase 3.4.4a, 2026-11-13): hub-to-spoke identity on EKS
+
+The local spoke credential of Phase 2.7.3 now has its EKS counterpart
+(`terraform/envs/eks`), closing TAD R-05 as code.
+
+- **Hub (`platform`):** Argo CD's application controller and server get
+  one IAM role through Pod Identity. Its only permission is
+  `sts:AssumeRole`/`sts:TagSession` on exactly the three spoke
+  `argocd-manager` roles.
+- **Each spoke:**
+  - An `argocd-manager` role with no IAM permissions, whose trust admits
+    only that hub role (`aws:PrincipalArn`).
+  - A STANDARD EKS access entry that maps the role to the Kubernetes
+    group `argocd-manager`, with **no** EKS access policy.
+    `AmazonEKSEditPolicy` would include Secrets, which the lab design
+    forbids.
+  - Its permissions come only from `platform/spoke-access/role.yaml`, the
+    one Role definition the lab's `spoke-register.sh` now also uses,
+    bound to that group in the spoke namespace.
+- **Cluster Secret:** the hub's Argo CD cluster Secret for a spoke
+  carries `awsAuthConfig` (cluster name and role ARN), never a token.
+- **Offline check:** `check-spoke-access` asserts the Role grants
+  exactly the AppProject's namespaced kinds (no ClusterRole, no
+  Secrets, no wildcard).
+- **Not decided here:** which OIDC identity provider people use to sign
+  in to Argo CD (ADR-0005). That question remains open.

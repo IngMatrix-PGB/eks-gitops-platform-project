@@ -142,3 +142,34 @@ variable "metrics_server_addon_version" {
     error_message = "metrics_server_addon_version must match the EKS add-on version shape (e.g. v1.2.3-eksbuild.1) - a static format check only."
   }
 }
+
+# --- Phase 3.4.4a: hub-to-spoke Argo CD identity (TAD R-05) ------------------
+variable "hub_account_id" {
+  type        = string
+  description = "Spokes only: the platform (hub) account ID - the only account whose Argo CD role may assume this spoke's argocd-manager role. Never committed; supplied at apply time."
+  default     = null
+
+  validation {
+    condition     = var.hub_account_id == null || can(regex("^[0-9]{12}$", coalesce(var.hub_account_id, "x")))
+    error_message = "hub_account_id must be a 12-digit AWS account ID."
+  }
+  validation {
+    condition     = var.environment == "platform" || var.hub_account_id != null
+    error_message = "A spoke (dev, uat, prod) needs hub_account_id so the hub's Argo CD can reach it."
+  }
+}
+
+variable "spoke_account_ids" {
+  type        = map(string)
+  description = "Hub only: the dev, uat and prod account IDs whose argocd-manager roles the hub's Argo CD may assume. Never committed; supplied at apply time."
+  default     = null
+
+  validation {
+    condition     = var.spoke_account_ids == null || try(toset(keys(var.spoke_account_ids)) == toset(["dev", "uat", "prod"]) && alltrue([for id in values(var.spoke_account_ids) : can(regex("^[0-9]{12}$", id))]), false)
+    error_message = "spoke_account_ids must have exactly the keys dev, uat and prod, each a 12-digit AWS account ID."
+  }
+  validation {
+    condition     = var.environment != "platform" || var.spoke_account_ids != null
+    error_message = "The hub (platform) needs spoke_account_ids to know which spoke roles its Argo CD may assume."
+  }
+}
