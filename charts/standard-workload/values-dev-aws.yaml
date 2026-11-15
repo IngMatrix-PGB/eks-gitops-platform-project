@@ -21,9 +21,10 @@ configMap:
   uiMessage: "podinfo dev — aws-eks profile (not deployed)"
 
 # aws.region/aws.secretName below are cross-validated (scripts/validate/
-# check-standard-workload-chart.sh) against terraform/envs/identity/
-# variables.tf's own aws_region validation shape and dev_secret_name
-# default - never hand-invented, never an ARN, never an account ID.
+# check-standard-workload-chart.sh) against terraform/envs/identity:
+# variables.tf's aws_region validation shape and environments.tf's dev
+# secret_name (Phase 3.4.3c) - never hand-invented, never an ARN, never
+# an account ID.
 # sourceNamespace/sourceSecretName/sourceProperty/authServiceAccountName
 # are deliberately absent here (not "set to empty") - they inherit their
 # harmless kubernetes-only default from the chart's own values.yaml,

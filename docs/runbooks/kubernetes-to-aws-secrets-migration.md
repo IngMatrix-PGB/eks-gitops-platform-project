@@ -25,12 +25,12 @@ Kubernetes `Secret` — the workload never changes.
 
 1. **Activate in dev first, never uat or prod first.** Confirm
    dev's Pod Identity Association
-   (`terraform/envs/identity`'s `dev_association_id` output) and
-   Secrets Manager secret (`dev_secret_arn`) exist and are
+   (`terraform/envs/identity`'s `association_id` output, in the dev
+   account) and Secrets Manager secret (`secret_arn`) exist and are
    `Active`, per Terraform apply already run in
    [eks-bootstrap-order.md](eks-bootstrap-order.md) step 3.
 2. **Populate the secret payload out-of-band.** Write the actual secret
-   value into the Secrets Manager secret at `dev_secret_name`
+   value into the Secrets Manager secret at `secret_name`
    (`eks-gitops-platform-project/dev/backend`) using an operator's
    own AWS access — never Terraform, never Git, per ADR-0013's ownership
    boundary (Secret payload = "Out-of-band operation, never Terraform,

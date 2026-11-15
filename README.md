@@ -86,7 +86,8 @@ delivery roadmap for what exists versus what is proposed.
 | 3.4.2 | Per-account baseline (plan-only): Config recorders in every allowed region delivering to a central bucket, EBS encryption and IMDSv2 defaults, S3 account public access block, per-account budgets | Implemented (offline) |
 | 3.4.3a | Per-environment network and EKS (plan-only): system node group, five managed add-ons at explicit versions (VPC CNI with NetworkPolicy and its own Pod Identity, metrics-server); closes R-14, so the aws overlays turn NetworkPolicy and the prod HPA on | Implemented (offline) |
 | 3.4.3b | Karpenter on the spokes (IaC) and the container registry: immutable, scanned repositories, pull-only for the spoke accounts (plan-only) | Implemented (offline) |
-| 3.4.3c–3.4.4 | Per-spoke ESO identity; hub-to-spoke Argo CD identity on EKS (plan-only) | `PROPOSED` |
+| 3.4.3c | Per-spoke ESO identity (plan-only): one apply per spoke account, one table of per-environment identities shared with the chart's cross-validation | Implemented (offline) |
+| 3.4.4 | Hub-to-spoke Argo CD identity on EKS (plan-only) | `PROPOSED` |
 | 5.1 | Image CI: build, vulnerability scan, SBOM, signing, push; tag-bump promotion `dev` → `uat` → `prod` | `PROPOSED` |
 | 5.2 | Terraform CI: `plan` on every PR, static analysis, `apply` against a local AWS emulator | `PROPOSED` |
 | 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | `PROPOSED` |

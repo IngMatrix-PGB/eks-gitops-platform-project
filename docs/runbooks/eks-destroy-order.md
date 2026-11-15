@@ -28,9 +28,9 @@ separately authorized destroy operation.
    the isolated `aws-eks` kubeconfig only — never touch the `local-kind`
    lab's own Argo CD/ESO installation, which has an entirely separate
    kubeconfig, release, and lifecycle.
-5. **Delete Pod Identity Associations.** Remove the
-   `dev_association_id`/`uat_association_id`/`prod_association_id` associations
-   (`terraform/envs/identity`) before deleting the roles or the cluster
+5. **Delete Pod Identity Associations.** In each spoke account, remove
+   the association (`terraform/envs/identity`'s `association_id` output)
+   before deleting the roles or the cluster
    itself, so no association is left pointing at a deleted principal.
 6. **Schedule or delete Secrets Manager secrets per separate
    authorization.** Secrets Manager secrets support a recovery window

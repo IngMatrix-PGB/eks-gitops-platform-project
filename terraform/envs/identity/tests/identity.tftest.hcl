@@ -1,389 +1,286 @@
-# Structural correctness only - mock_provider "aws" proves this
-# configuration's own internal logic (right count, right names, right
-# references, right rejections) against fabricated values. It proves
-# NOTHING about whether a real `apply` would succeed against actual
-# AWS (quota, propagation delay, real IAM policy simulation) - that
-# gap is real and unclosed by this file, by design
-# (.local/evidence/phase-3.2-pod-identity-secrets-manager-iac-plan.md
-# S14). `command = apply` below is a simulated terraform-test run
-# against the mocked provider, never a real `terraform apply` against
-# AWS - see scripts/validate/check-terraform-offline.sh's own header
-# comment for why this distinction is structural, not just described.
+# Structural correctness only (Phase 3.2, rewritten for one spoke per
+# state in Phase 3.4.3c). mock_provider "aws" proves this configuration's
+# own logic - the right per-environment identity, a policy scoped to this
+# environment's own secret and key, the cross-environment uniqueness of
+# the contract table, and the child module's guards - against fabricated
+# values. It proves NOTHING about a real apply (quota, propagation, real
+# IAM simulation), which this repository never runs. `command = apply` is
+# a simulated terraform-test run against the mocked provider.
+#
+# data "aws_iam_policy_document" renders client-side even under a real
+# provider, but mock_provider replaces its .json with a placeholder that
+# is not valid JSON; every such data source is overridden with a minimal
+# valid document. That is why isolation is asserted on the module's
+# plain-value outputs (actions, resource refs), never on policy JSON.
+#
+# Guarantees carried over from the three-instance tests (Phase 3.2):
+#   distinct role/secret/key/alias/association per environment
+#     -> each environment run asserts its own names, and the
+#        environment_identities check forbids shared secret names or
+#        (namespace, ServiceAccount) pairs;
+#   the six pairwise rejections and "shared namespace alone is fine"
+#     -> rejects_* / accepts_* runs over the table;
+#   no wildcard action, exact action lists, no Resource "*", no reference
+#   to another environment's secret or key
+#     -> isolation_* runs: the policy references EXACTLY this
+#        environment's own secret and key (stronger than non-overlap);
+#   child-module guards (environment, webhook/cert-controller SA, ARN as
+#   secret name), region shape, empty owner -> kept unchanged.
 
-# data "aws_iam_policy_document" normally renders its own JSON entirely
-# client-side (it never calls AWS even under a real, unmocked
-# provider) - but mock_provider "aws" still replaces its low-fidelity
-# default computed value with a generic placeholder that is not valid
-# JSON, which then fails downstream (assume_role_policy/kms
-# policy/secret policy all require a real JSON object). Every such
-# data source is therefore explicitly overridden below with a minimal,
-# syntactically valid policy document - this is a structural-shape
-# fixture, never the real rendered policy, exactly like every other
-# override_data value in this codebase.
 mock_provider "aws" {
   override_data {
-    target = module.eso_dev.data.aws_caller_identity.current
-    values = {
-      account_id = "aws-id"
-    }
+    target = module.eso.data.aws_caller_identity.current
+    values = { account_id = "aws-id" }
   }
-
   override_data {
-    target = module.eso_uat.data.aws_caller_identity.current
-    values = {
-      account_id = "aws-id"
-    }
-  }
-
-  override_data {
-    target = module.eso_prod.data.aws_caller_identity.current
-    values = {
-      account_id = "aws-id"
-    }
-  }
-
-  override_data {
-    target = module.eso_dev.data.aws_iam_policy_document.eso_trust
+    target = module.eso.data.aws_iam_policy_document.eso_trust
     values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
   }
   override_data {
-    target = module.eso_dev.data.aws_iam_policy_document.eso_permissions
+    target = module.eso.data.aws_iam_policy_document.eso_permissions
     values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
   }
   override_data {
-    target = module.eso_dev.data.aws_iam_policy_document.kms_key_policy
+    target = module.eso.data.aws_iam_policy_document.kms_key_policy
     values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
   }
   override_data {
-    target = module.eso_dev.data.aws_iam_policy_document.secret_resource_policy
+    target = module.eso.data.aws_iam_policy_document.secret_resource_policy
     values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
   }
 
-  override_data {
-    target = module.eso_uat.data.aws_iam_policy_document.eso_trust
-    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
-  }
-  override_data {
-    target = module.eso_uat.data.aws_iam_policy_document.eso_permissions
-    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
-  }
-  override_data {
-    target = module.eso_uat.data.aws_iam_policy_document.kms_key_policy
-    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
-  }
-  override_data {
-    target = module.eso_uat.data.aws_iam_policy_document.secret_resource_policy
-    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
-  }
-
-  override_data {
-    target = module.eso_prod.data.aws_iam_policy_document.eso_trust
-    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
-  }
-  override_data {
-    target = module.eso_prod.data.aws_iam_policy_document.eso_permissions
-    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
-  }
-  override_data {
-    target = module.eso_prod.data.aws_iam_policy_document.kms_key_policy
-    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
-  }
-  override_data {
-    target = module.eso_prod.data.aws_iam_policy_document.secret_resource_policy
-    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
-  }
-
-  # mock_provider's default fake computed ARN values (short random
-  # strings) are not shaped like a real ARN, and the AWS provider's own
-  # schema-level ARN validator rejects them the moment another mocked
-  # resource consumes one as an input (e.g. role_arn on the Pod
-  # Identity Association) - overridden below with syntactically valid,
-  # obviously-fake ARNs, never a real or 12-digit-account-id-shaped
-  # value.
   override_resource {
-    target = module.eso_dev.aws_iam_role.eso
-    values = {
-      arn  = "arn:aws:iam::aws:role/eso-identity-dev-fixture"
-      name = "eso-identity-dev-fixture"
-    }
+    target = module.eso.aws_iam_role.eso
+    values = { arn = "arn:aws:iam::aws:role/eso-identity-fixture" }
   }
   override_resource {
-    target = module.eso_uat.aws_iam_role.eso
-    values = {
-      arn  = "arn:aws:iam::aws:role/eso-identity-uat-fixture"
-      name = "eso-identity-uat-fixture"
-    }
+    target = module.eso.aws_secretsmanager_secret.this
+    values = { arn = "arn:aws:secretsmanager:us-east-1:aws:secret:eso-fixture" }
   }
   override_resource {
-    target = module.eso_prod.aws_iam_role.eso
-    values = {
-      arn  = "arn:aws:iam::aws:role/eso-identity-prod-fixture"
-      name = "eso-identity-prod-fixture"
-    }
-  }
-
-  override_resource {
-    target = module.eso_dev.aws_secretsmanager_secret.this
-    values = {
-      arn = "arn:aws:secretsmanager:us-east-1:aws:secret:eks-gitops-platform-project/dev/backend-fixture"
-    }
-  }
-  override_resource {
-    target = module.eso_uat.aws_secretsmanager_secret.this
-    values = {
-      arn = "arn:aws:secretsmanager:us-east-1:aws:secret:eks-gitops-platform-project/uat/backend-fixture"
-    }
-  }
-  override_resource {
-    target = module.eso_prod.aws_secretsmanager_secret.this
-    values = {
-      arn = "arn:aws:secretsmanager:us-east-1:aws:secret:eks-gitops-platform-project/prod/backend-fixture"
-    }
-  }
-
-  override_resource {
-    target = module.eso_dev.aws_kms_key.this
-    values = {
-      arn = "arn:aws:kms:us-east-1:aws:key/dev-fixture"
-    }
-  }
-  override_resource {
-    target = module.eso_uat.aws_kms_key.this
-    values = {
-      arn = "arn:aws:kms:us-east-1:aws:key/uat-fixture"
-    }
-  }
-  override_resource {
-    target = module.eso_prod.aws_kms_key.this
-    values = {
-      arn = "arn:aws:kms:us-east-1:aws:key/prod-fixture"
-    }
+    target = module.eso.aws_kms_key.this
+    values = { arn = "arn:aws:kms:us-east-1:aws:key/eso-fixture" }
   }
 }
 
 variables {
-  aws_region   = "us-east-1"
-  cluster_name = "eks-gitops-platform"
-  owner        = "IngMatrix-PGB"
+  aws_region  = "us-east-1"
+  owner       = "IngMatrix-PGB"
+  environment = "dev"
 }
 
-run "plan_creates_distinct_roles_per_environment" {
-  # command = apply, not plan: mock_provider only resolves fake
-  # computed values (like an ARN) during apply by default - a plan-
-  # phase comparison of not-yet-known ARNs cannot be evaluated.
-  # This is still a fully simulated terraform-test run against the
-  # mocked provider, never a real terraform apply against AWS.
+run "dev_identity" {
   command = apply
-
-  assert {
-    condition     = module.eso_dev.role_arn != module.eso_uat.role_arn
-    error_message = "dev and uat must have distinct IAM role ARNs"
+  variables {
+    environment = "dev"
   }
 
   assert {
-    condition     = module.eso_dev.role_name != module.eso_uat.role_name
-    error_message = "dev and uat must have distinct IAM role names"
+    condition     = output.cluster_name == "eks-gitops-dev"
+    error_message = "The association must target the cluster terraform/envs/eks derives for dev."
   }
-
   assert {
-    condition     = module.eso_dev.role_arn != module.eso_prod.role_arn
-    error_message = "dev and prod must have distinct IAM role ARNs"
+    condition     = module.eso.secret_name == "eks-gitops-platform-project/dev/backend"
+    error_message = "dev must use its own secret name from environment_identities."
   }
-
   assert {
-    condition     = module.eso_dev.role_name != module.eso_prod.role_name
-    error_message = "dev and prod must have distinct IAM role names"
+    condition     = strcontains(module.eso.role_name, "dev") && strcontains(module.eso.kms_alias, "dev")
+    error_message = "dev's role and key alias must be named for dev."
   }
-
   assert {
-    condition     = module.eso_uat.role_arn != module.eso_prod.role_arn
-    error_message = "uat and prod must have distinct IAM role ARNs"
-  }
-
-  assert {
-    condition     = module.eso_uat.role_name != module.eso_prod.role_name
-    error_message = "uat and prod must have distinct IAM role names"
+    condition     = local.identity.namespace == "eso-dev" && local.identity.service_account == "eso-dev-external-secrets"
+    error_message = "dev's Pod Identity association must target eso-dev/eso-dev-external-secrets."
   }
 }
 
-run "apply_creates_distinct_secret_kms_and_association_per_environment" {
+run "uat_identity" {
+  command = apply
+  variables {
+    environment = "uat"
+  }
+
+  assert {
+    condition     = output.cluster_name == "eks-gitops-uat"
+    error_message = "The association must target the cluster terraform/envs/eks derives for uat."
+  }
+  assert {
+    condition     = module.eso.secret_name == "eks-gitops-platform-project/uat/backend"
+    error_message = "uat must use its own secret name from environment_identities."
+  }
+  assert {
+    condition     = strcontains(module.eso.role_name, "uat") && strcontains(module.eso.kms_alias, "uat")
+    error_message = "uat's role and key alias must be named for uat."
+  }
+  assert {
+    condition     = local.identity.namespace == "eso-uat" && local.identity.service_account == "eso-uat-external-secrets"
+    error_message = "uat's Pod Identity association must target eso-uat/eso-uat-external-secrets."
+  }
+}
+
+run "prod_identity" {
+  command = apply
+  variables {
+    environment = "prod"
+  }
+
+  assert {
+    condition     = output.cluster_name == "eks-gitops-prod"
+    error_message = "The association must target the cluster terraform/envs/eks derives for prod."
+  }
+  assert {
+    condition     = module.eso.secret_name == "eks-gitops-platform-project/prod/backend"
+    error_message = "prod must use its own secret name from environment_identities."
+  }
+  assert {
+    condition     = strcontains(module.eso.role_name, "prod") && strcontains(module.eso.kms_alias, "prod")
+    error_message = "prod's role and key alias must be named for prod."
+  }
+  assert {
+    condition     = local.identity.namespace == "eso-prod" && local.identity.service_account == "eso-prod-external-secrets"
+    error_message = "prod's Pod Identity association must target eso-prod/eso-prod-external-secrets."
+  }
+}
+
+run "isolation_exact_actions_and_resources" {
   command = apply
 
   assert {
-    condition     = module.eso_dev.secret_name != module.eso_uat.secret_name
-    error_message = "dev and uat must have distinct secret names"
+    condition     = toset(module.eso.secretsmanager_actions) == toset(["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret", "secretsmanager:GetResourcePolicy", "secretsmanager:ListSecretVersionIds"])
+    error_message = "Secrets Manager actions must be exactly ESO's documented minimum - never secretsmanager:*."
   }
-
   assert {
-    condition     = module.eso_dev.secret_arn != module.eso_uat.secret_arn
-    error_message = "dev and uat must have distinct secret ARNs"
+    condition     = toset(module.eso.kms_actions) == toset(["kms:Decrypt"])
+    error_message = "KMS actions must be exactly kms:Decrypt - never kms:*."
   }
-
   assert {
-    condition     = module.eso_dev.kms_key_arn != module.eso_uat.kms_key_arn
-    error_message = "dev and uat must have distinct KMS keys"
+    condition     = toset(module.eso.permissions_resource_refs) == toset([module.eso.secret_arn, module.eso.kms_key_arn])
+    error_message = "The policy must reference exactly this environment's own secret and key - never \"*\", never another environment's."
   }
-
   assert {
-    condition     = module.eso_dev.kms_alias != module.eso_uat.kms_alias
-    error_message = "dev and uat must have distinct KMS aliases"
+    condition     = !contains(module.eso.permissions_resource_refs, "*")
+    error_message = "The permissions policy must never reference Resource: \"*\"."
   }
+}
 
-  assert {
-    condition     = module.eso_dev.association_id != module.eso_uat.association_id
-    error_message = "dev and uat must have distinct Pod Identity Associations"
+run "rejects_platform_environment" {
+  command = plan
+  variables {
+    environment = "platform"
   }
-
-  assert {
-    condition     = module.eso_dev.secret_name != module.eso_prod.secret_name
-    error_message = "dev and prod must have distinct secret names"
-  }
-
-  assert {
-    condition     = module.eso_dev.secret_arn != module.eso_prod.secret_arn
-    error_message = "dev and prod must have distinct secret ARNs"
-  }
-
-  assert {
-    condition     = module.eso_dev.kms_key_arn != module.eso_prod.kms_key_arn
-    error_message = "dev and prod must have distinct KMS keys"
-  }
-
-  assert {
-    condition     = module.eso_dev.kms_alias != module.eso_prod.kms_alias
-    error_message = "dev and prod must have distinct KMS aliases"
-  }
-
-  assert {
-    condition     = module.eso_dev.association_id != module.eso_prod.association_id
-    error_message = "dev and prod must have distinct Pod Identity Associations"
-  }
-
-  assert {
-    condition     = module.eso_uat.secret_name != module.eso_prod.secret_name
-    error_message = "uat and prod must have distinct secret names"
-  }
-
-  assert {
-    condition     = module.eso_uat.secret_arn != module.eso_prod.secret_arn
-    error_message = "uat and prod must have distinct secret ARNs"
-  }
-
-  assert {
-    condition     = module.eso_uat.kms_key_arn != module.eso_prod.kms_key_arn
-    error_message = "uat and prod must have distinct KMS keys"
-  }
-
-  assert {
-    condition     = module.eso_uat.kms_alias != module.eso_prod.kms_alias
-    error_message = "uat and prod must have distinct KMS aliases"
-  }
-
-  assert {
-    condition     = module.eso_uat.association_id != module.eso_prod.association_id
-    error_message = "uat and prod must have distinct Pod Identity Associations"
-  }
+  expect_failures = [var.environment]
 }
 
 run "accepts_shared_namespace_alone_when_service_account_still_differs" {
   command = plan
-
-  # Only the namespace matches between environments - the
-  # ServiceAccount still differs, so the full (namespace,
-  # service_account) pair is not identical and the check must NOT
-  # fire. Proves the check requires the FULL pair, not either field
-  # alone - no expect_failures means this plan must succeed cleanly.
   variables {
-    dev_namespace  = "eso-shared"
-    uat_namespace  = "eso-shared"
-    prod_namespace = "eso-shared"
+    environment_identities = {
+      dev  = { namespace = "eso-shared", service_account = "eso-dev-external-secrets", secret_name = "p/dev/backend" }
+      uat  = { namespace = "eso-shared", service_account = "eso-uat-external-secrets", secret_name = "p/uat/backend" }
+      prod = { namespace = "eso-shared", service_account = "eso-prod-external-secrets", secret_name = "p/prod/backend" }
+    }
   }
 }
 
 run "rejects_dev_and_uat_sharing_the_full_identity_pair" {
   command = plan
-
   variables {
-    dev_namespace       = "eso-shared"
-    dev_service_account = "shared-controller"
-    uat_namespace       = "eso-shared"
-    uat_service_account = "shared-controller"
+    environment_identities = {
+      dev  = { namespace = "eso-shared", service_account = "shared-controller", secret_name = "p/dev/backend" }
+      uat  = { namespace = "eso-shared", service_account = "shared-controller", secret_name = "p/uat/backend" }
+      prod = { namespace = "eso-prod", service_account = "eso-prod-external-secrets", secret_name = "p/prod/backend" }
+    }
   }
-
-  expect_failures = [
-    check.environments_never_share_identity,
-  ]
+  expect_failures = [check.environments_never_share_identity]
 }
 
 run "rejects_dev_and_uat_sharing_the_same_secret_name" {
   command = plan
-
   variables {
-    dev_secret_name = "eks-gitops-platform-project/shared/backend"
-    uat_secret_name = "eks-gitops-platform-project/shared/backend"
+    environment_identities = {
+      dev  = { namespace = "eso-dev", service_account = "eso-dev-external-secrets", secret_name = "p/shared/backend" }
+      uat  = { namespace = "eso-uat", service_account = "eso-uat-external-secrets", secret_name = "p/shared/backend" }
+      prod = { namespace = "eso-prod", service_account = "eso-prod-external-secrets", secret_name = "p/prod/backend" }
+    }
   }
-
-  expect_failures = [
-    check.environments_never_share_identity,
-  ]
+  expect_failures = [check.environments_never_share_identity]
 }
 
 run "rejects_dev_and_prod_sharing_the_full_identity_pair" {
   command = plan
-
   variables {
-    dev_namespace        = "eso-shared"
-    dev_service_account  = "shared-controller"
-    prod_namespace       = "eso-shared"
-    prod_service_account = "shared-controller"
+    environment_identities = {
+      dev  = { namespace = "eso-shared", service_account = "shared-controller", secret_name = "p/dev/backend" }
+      uat  = { namespace = "eso-uat", service_account = "eso-uat-external-secrets", secret_name = "p/uat/backend" }
+      prod = { namespace = "eso-shared", service_account = "shared-controller", secret_name = "p/prod/backend" }
+    }
   }
-
-  expect_failures = [
-    check.environments_never_share_identity,
-  ]
+  expect_failures = [check.environments_never_share_identity]
 }
 
 run "rejects_dev_and_prod_sharing_the_same_secret_name" {
   command = plan
-
   variables {
-    dev_secret_name  = "eks-gitops-platform-project/shared/backend"
-    prod_secret_name = "eks-gitops-platform-project/shared/backend"
+    environment_identities = {
+      dev  = { namespace = "eso-dev", service_account = "eso-dev-external-secrets", secret_name = "p/shared/backend" }
+      uat  = { namespace = "eso-uat", service_account = "eso-uat-external-secrets", secret_name = "p/uat/backend" }
+      prod = { namespace = "eso-prod", service_account = "eso-prod-external-secrets", secret_name = "p/shared/backend" }
+    }
   }
-
-  expect_failures = [
-    check.environments_never_share_identity,
-  ]
+  expect_failures = [check.environments_never_share_identity]
 }
 
 run "rejects_uat_and_prod_sharing_the_full_identity_pair" {
   command = plan
-
   variables {
-    uat_namespace        = "eso-shared"
-    uat_service_account  = "shared-controller"
-    prod_namespace       = "eso-shared"
-    prod_service_account = "shared-controller"
+    environment_identities = {
+      dev  = { namespace = "eso-dev", service_account = "eso-dev-external-secrets", secret_name = "p/dev/backend" }
+      uat  = { namespace = "eso-shared", service_account = "shared-controller", secret_name = "p/uat/backend" }
+      prod = { namespace = "eso-shared", service_account = "shared-controller", secret_name = "p/prod/backend" }
+    }
   }
-
-  expect_failures = [
-    check.environments_never_share_identity,
-  ]
+  expect_failures = [check.environments_never_share_identity]
 }
 
 run "rejects_uat_and_prod_sharing_the_same_secret_name" {
   command = plan
-
   variables {
-    uat_secret_name  = "eks-gitops-platform-project/shared/backend"
-    prod_secret_name = "eks-gitops-platform-project/shared/backend"
+    environment_identities = {
+      dev  = { namespace = "eso-dev", service_account = "eso-dev-external-secrets", secret_name = "p/dev/backend" }
+      uat  = { namespace = "eso-uat", service_account = "eso-uat-external-secrets", secret_name = "p/shared/backend" }
+      prod = { namespace = "eso-prod", service_account = "eso-prod-external-secrets", secret_name = "p/shared/backend" }
+    }
   }
-
-  expect_failures = [
-    check.environments_never_share_identity,
-  ]
+  expect_failures = [check.environments_never_share_identity]
 }
 
+run "rejects_table_missing_an_environment" {
+  command = plan
+  variables {
+    environment_identities = {
+      dev = { namespace = "eso-dev", service_account = "eso-dev-external-secrets", secret_name = "p/dev/backend" }
+      uat = { namespace = "eso-uat", service_account = "eso-uat-external-secrets", secret_name = "p/uat/backend" }
+    }
+  }
+  expect_failures = [var.environment_identities]
+}
+
+run "rejects_invalid_region_shape" {
+  command = plan
+  variables {
+    aws_region = "not-a-region"
+  }
+  expect_failures = [var.aws_region]
+}
+
+run "rejects_empty_owner" {
+  command = plan
+  variables {
+    owner = ""
+  }
+  expect_failures = [var.owner]
+}
+
+# --- child-module guards, run against terraform/modules/eso-identity directly ---
 run "rejects_invalid_environment_value_in_child_module" {
   command = plan
 
@@ -416,7 +313,7 @@ run "rejects_invalid_environment_value_in_child_module" {
   variables {
     environment     = "not-a-real-environment"
     aws_region      = "us-east-1"
-    cluster_name    = "eks-gitops-platform"
+    cluster_name    = "eks-gitops-uat"
     namespace       = "eso-uat"
     service_account = "eso-uat-external-secrets"
     secret_name     = "eks-gitops-platform-project/uat/backend"
@@ -455,7 +352,7 @@ run "rejects_webhook_service_account_in_child_module" {
   variables {
     environment     = "uat"
     aws_region      = "us-east-1"
-    cluster_name    = "eks-gitops-platform"
+    cluster_name    = "eks-gitops-uat"
     namespace       = "eso-uat"
     service_account = "external-secrets-webhook"
     secret_name     = "eks-gitops-platform-project/uat/backend"
@@ -494,7 +391,7 @@ run "rejects_cert_controller_service_account_in_child_module" {
   variables {
     environment     = "uat"
     aws_region      = "us-east-1"
-    cluster_name    = "eks-gitops-platform"
+    cluster_name    = "eks-gitops-uat"
     namespace       = "eso-uat"
     service_account = "external-secrets-cert-controller"
     secret_name     = "eks-gitops-platform-project/uat/backend"
@@ -503,30 +400,6 @@ run "rejects_cert_controller_service_account_in_child_module" {
 
   expect_failures = [
     var.service_account,
-  ]
-}
-
-run "rejects_invalid_region_shape" {
-  command = plan
-
-  variables {
-    aws_region = "not-a-region"
-  }
-
-  expect_failures = [
-    var.aws_region,
-  ]
-}
-
-run "rejects_empty_owner" {
-  command = plan
-
-  variables {
-    owner = ""
-  }
-
-  expect_failures = [
-    var.owner,
   ]
 }
 
@@ -557,7 +430,7 @@ run "rejects_secret_name_that_is_actually_an_arn" {
   variables {
     environment     = "uat"
     aws_region      = "us-east-1"
-    cluster_name    = "eks-gitops-platform"
+    cluster_name    = "eks-gitops-uat"
     namespace       = "eso-uat"
     service_account = "eso-uat-external-secrets"
     secret_name     = "arn:aws:secretsmanager:us-east-1:aws:secret:example"

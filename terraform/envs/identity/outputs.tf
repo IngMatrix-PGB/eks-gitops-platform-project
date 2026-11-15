@@ -1,137 +1,58 @@
 # Structural identifiers only - future/not-yet-deployed. Never a
-# credential, never a secret payload.
+# credential, never a secret payload. Phase 3.4.3c: one environment per
+# state, so the outputs are no longer prefixed by environment.
 
-output "dev_role_arn" {
-  value       = module.eso_dev.role_arn
-  description = "Dev ESO controller IAM role ARN."
+output "environment" {
+  value       = var.environment
+  description = "The spoke this state belongs to."
 }
 
-output "dev_association_id" {
-  value       = module.eso_dev.association_id
-  description = "Dev Pod Identity Association ID."
+output "cluster_name" {
+  value       = local.cluster_name
+  description = "Cluster the Pod Identity association targets."
 }
 
-output "dev_secret_arn" {
-  value       = module.eso_dev.secret_arn
-  description = "Dev Secrets Manager secret ARN (metadata only - no payload)."
+output "role_arn" {
+  value       = module.eso.role_arn
+  description = "ESO controller IAM role ARN."
 }
 
-output "dev_secret_name" {
-  value       = module.eso_dev.secret_name
-  description = "Dev Secrets Manager secret name."
+output "association_id" {
+  value       = module.eso.association_id
+  description = "Pod Identity Association ID."
 }
 
-output "dev_kms_key_arn" {
-  value       = module.eso_dev.kms_key_arn
-  description = "Dev KMS key ARN."
+output "secret_arn" {
+  value       = module.eso.secret_arn
+  description = "Secrets Manager secret ARN (metadata only - no payload)."
 }
 
-output "dev_kms_alias" {
-  value       = module.eso_dev.kms_alias
-  description = "Dev KMS key alias."
+output "secret_name" {
+  value       = module.eso.secret_name
+  description = "Secrets Manager secret name."
 }
 
-output "dev_secretsmanager_actions" {
-  value       = module.eso_dev.secretsmanager_actions
-  description = "Dev's exact Secrets Manager IAM actions - never secretsmanager:*."
+output "kms_key_arn" {
+  value       = module.eso.kms_key_arn
+  description = "KMS key ARN."
 }
 
-output "dev_kms_actions" {
-  value       = module.eso_dev.kms_actions
-  description = "Dev's exact KMS IAM actions - never kms:*."
+output "kms_alias" {
+  value       = module.eso.kms_alias
+  description = "KMS key alias."
 }
 
-output "dev_permissions_resource_refs" {
-  value       = module.eso_dev.permissions_resource_refs
-  description = "Dev's exact policy resource ARNs - never a wildcard, never another environment's."
+output "secretsmanager_actions" {
+  value       = module.eso.secretsmanager_actions
+  description = "The exact Secrets Manager IAM actions granted - never secretsmanager:*."
 }
 
-output "uat_role_arn" {
-  value       = module.eso_uat.role_arn
-  description = "UAT ESO controller IAM role ARN."
+output "kms_actions" {
+  value       = module.eso.kms_actions
+  description = "The exact KMS IAM actions granted - never kms:*."
 }
 
-output "uat_association_id" {
-  value       = module.eso_uat.association_id
-  description = "UAT Pod Identity Association ID."
-}
-
-output "uat_secret_arn" {
-  value       = module.eso_uat.secret_arn
-  description = "UAT Secrets Manager secret ARN (metadata only - no payload)."
-}
-
-output "uat_secret_name" {
-  value       = module.eso_uat.secret_name
-  description = "UAT Secrets Manager secret name."
-}
-
-output "uat_kms_key_arn" {
-  value       = module.eso_uat.kms_key_arn
-  description = "UAT KMS key ARN."
-}
-
-output "uat_kms_alias" {
-  value       = module.eso_uat.kms_alias
-  description = "UAT KMS key alias."
-}
-
-output "uat_secretsmanager_actions" {
-  value       = module.eso_uat.secretsmanager_actions
-  description = "UAT's exact Secrets Manager IAM actions - never secretsmanager:*."
-}
-
-output "uat_kms_actions" {
-  value       = module.eso_uat.kms_actions
-  description = "UAT's exact KMS IAM actions - never kms:*."
-}
-
-output "uat_permissions_resource_refs" {
-  value       = module.eso_uat.permissions_resource_refs
-  description = "UAT's exact policy resource ARNs - never a wildcard, never another environment's."
-}
-
-output "prod_role_arn" {
-  value       = module.eso_prod.role_arn
-  description = "Prod ESO controller IAM role ARN."
-}
-
-output "prod_association_id" {
-  value       = module.eso_prod.association_id
-  description = "Prod Pod Identity Association ID."
-}
-
-output "prod_secret_arn" {
-  value       = module.eso_prod.secret_arn
-  description = "Prod Secrets Manager secret ARN (metadata only - no payload)."
-}
-
-output "prod_secret_name" {
-  value       = module.eso_prod.secret_name
-  description = "Prod Secrets Manager secret name."
-}
-
-output "prod_kms_key_arn" {
-  value       = module.eso_prod.kms_key_arn
-  description = "Prod KMS key ARN."
-}
-
-output "prod_kms_alias" {
-  value       = module.eso_prod.kms_alias
-  description = "Prod KMS key alias."
-}
-
-output "prod_secretsmanager_actions" {
-  value       = module.eso_prod.secretsmanager_actions
-  description = "Prod's exact Secrets Manager IAM actions - never secretsmanager:*."
-}
-
-output "prod_kms_actions" {
-  value       = module.eso_prod.kms_actions
-  description = "Prod's exact KMS IAM actions - never kms:*."
-}
-
-output "prod_permissions_resource_refs" {
-  value       = module.eso_prod.permissions_resource_refs
-  description = "Prod's exact policy resource ARNs - never a wildcard, never another environment's."
+output "permissions_resource_refs" {
+  value       = module.eso.permissions_resource_refs
+  description = "The exact resource ARNs the permissions policy is scoped to - this environment's own secret and key only."
 }
