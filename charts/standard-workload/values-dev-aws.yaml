@@ -36,7 +36,7 @@ externalSecret:
     region: "us-east-1"
     secretName: "eks-gitops-platform-project/dev/backend"
 
-# Phase 2.8.1: off until the EKS VPC CNI enforces network policy (TAD
-# R-14) - a NetworkPolicy without enforcement would be dead config.
+# Phase 3.4.3a closes TAD R-14: terraform/envs/eks runs the VPC CNI add-on
+# with enableNetworkPolicy, so the policy is enforced on EKS too.
 networkPolicy:
-  enabled: false
+  enabled: true

@@ -13,10 +13,25 @@ variable "aws_region" {
   description = "AWS region. No default - must be explicitly supplied."
 }
 
+variable "environment" {
+  type        = string
+  description = "Which account this cluster is applied in (Phase 3.4.3, ADR-0016): platform (the hub), dev, uat or prod. One state per account."
+
+  validation {
+    condition     = contains(["platform", "dev", "uat", "prod"], var.environment)
+    error_message = "environment must be exactly platform, dev, uat or prod."
+  }
+}
+
 variable "cluster_name" {
   type        = string
-  description = "EKS cluster name. Kept short and distinct from var.project - the module's own internal IAM role naming appends a fixed \"-cluster-\" suffix, and IAM role names are capped at 38 characters for the name_prefix portion."
-  default     = "eks-gitops-platform"
+  description = "Override of the cluster name; null (default) means eks-gitops-<environment>. Kept short - the module's IAM role naming appends a fixed \"-cluster-\" suffix and name prefixes are capped at 38 characters."
+  default     = null
+
+  validation {
+    condition     = var.cluster_name == null || can(regex("^[a-zA-Z][a-zA-Z0-9-]{0,24}$", var.cluster_name))
+    error_message = "cluster_name must start with a letter and be at most 25 characters (letters, digits, hyphens)."
+  }
 }
 
 variable "cluster_version" {
@@ -58,12 +73,12 @@ variable "node_instance_types" {
 
 variable "capacity_type" {
   type        = string
-  description = "Managed node group capacity type - SPOT for the lab shape, ON_DEMAND for anything meant to stay up unattended (canonical plan S8.1)."
-  default     = "SPOT"
+  description = "System node group capacity type; null (default) means ON_DEMAND in prod and SPOT elsewhere (canonical plan S8.1)."
+  default     = null
 
   validation {
-    condition     = contains(["SPOT", "ON_DEMAND"], var.capacity_type)
-    error_message = "capacity_type must be exactly \"SPOT\" or \"ON_DEMAND\"."
+    condition     = var.capacity_type == null || contains(["SPOT", "ON_DEMAND"], coalesce(var.capacity_type, "SPOT"))
+    error_message = "capacity_type must be exactly \"SPOT\" or \"ON_DEMAND\" (or null for the per-environment default)."
   }
 }
 
@@ -86,4 +101,44 @@ variable "project" {
   type        = string
   description = "Project name, passed through to modules/tags and used as the cluster name prefix."
   default     = "eks-gitops-platform-project"
+}
+
+variable "vpc_cni_addon_version" {
+  type        = string
+  description = "Exact Amazon VPC CNI add-on version (e.g. \"v1.2.3-eksbuild.1\"). Query `aws eks describe-addon-versions --addon-name vpc-cni --kubernetes-version <cluster_version>` at real, separately authorized deploy time. No default - never most_recent, never a guess."
+
+  validation {
+    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+-eksbuild\\.[0-9]+$", var.vpc_cni_addon_version))
+    error_message = "vpc_cni_addon_version must match the EKS add-on version shape (e.g. v1.2.3-eksbuild.1) - a static format check only."
+  }
+}
+
+variable "coredns_addon_version" {
+  type        = string
+  description = "Exact CoreDNS add-on version (e.g. \"v1.2.3-eksbuild.1\"). Query `aws eks describe-addon-versions --addon-name coredns --kubernetes-version <cluster_version>` at real, separately authorized deploy time. No default - never most_recent, never a guess."
+
+  validation {
+    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+-eksbuild\\.[0-9]+$", var.coredns_addon_version))
+    error_message = "coredns_addon_version must match the EKS add-on version shape (e.g. v1.2.3-eksbuild.1) - a static format check only."
+  }
+}
+
+variable "kube_proxy_addon_version" {
+  type        = string
+  description = "Exact kube-proxy add-on version (e.g. \"v1.2.3-eksbuild.1\"). Query `aws eks describe-addon-versions --addon-name kube-proxy --kubernetes-version <cluster_version>` at real, separately authorized deploy time. No default - never most_recent, never a guess."
+
+  validation {
+    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+-eksbuild\\.[0-9]+$", var.kube_proxy_addon_version))
+    error_message = "kube_proxy_addon_version must match the EKS add-on version shape (e.g. v1.2.3-eksbuild.1) - a static format check only."
+  }
+}
+
+variable "metrics_server_addon_version" {
+  type        = string
+  description = "Exact metrics-server (EKS community add-on) add-on version (e.g. \"v1.2.3-eksbuild.1\"). Query `aws eks describe-addon-versions --addon-name metrics-server --kubernetes-version <cluster_version>` at real, separately authorized deploy time. No default - never most_recent, never a guess."
+
+  validation {
+    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+-eksbuild\\.[0-9]+$", var.metrics_server_addon_version))
+    error_message = "metrics_server_addon_version must match the EKS add-on version shape (e.g. v1.2.3-eksbuild.1) - a static format check only."
+  }
 }

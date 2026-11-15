@@ -191,3 +191,34 @@ discovered and enforced" case) and `make check-forbidden-terms-regression`
 (45 fixtures, including three new nested-lock-file-path cases) - all
 passing offline, with the zero-AWS-contact proof re-run across all four
 root modules.
+
+## Amendment (Phase 3.4.3a, 2026-11-13): per-environment network and EKS
+
+Under ADR-0016 each account applies these roots with its own state, so
+both take an `environment` variable: `platform` (the hub), `dev`, `uat`
+or `prod`.
+
+- **Network:** the VPC is named after its environment. `prod` gets one
+  NAT Gateway per availability zone; every other environment shares one
+  (the lab-cost shape).
+- **Cluster:**
+  - Named `eks-gitops-<environment>` unless overridden.
+  - A small `system` managed node group (2–3 nodes, ON_DEMAND in `prod`
+    and SPOT elsewhere, IMDSv2 with hop limit 1) for add-ons and
+    controllers. Workload capacity comes from Karpenter in Phase 3.4.3b.
+- **Add-ons:** every add-on the cluster runs is now managed here. Before
+  this change only the Pod Identity Agent was, despite a comment naming
+  four. The five are `eks-pod-identity-agent`, `vpc-cni`, `coredns`,
+  `kube-proxy` and `metrics-server`.
+  - Each runs at an explicit version from a validated variable, with
+    `most_recent = false`.
+  - `vpc-cni` and the Pod Identity Agent install before the node group.
+- **VPC CNI:**
+  - It enforces NetworkPolicy (`enableNetworkPolicy`).
+  - It gets its credentials from its own Pod Identity role, which carries
+    only `AmazonEKS_CNI_Policy`. The node role no longer carries the CNI
+    policy (`iam_role_attach_cni_policy = false`).
+- **Validation:** `terraform test` in `envs/network` (6 runs) and
+  `envs/eks` (10 runs). Two mutation checks were run, each caught by a
+  failing test: an add-on whose version is resolved by a lookup instead
+  of being pinned, and the VPC CNI with NetworkPolicy off.

@@ -164,3 +164,15 @@ by `make workload-test-autoscaling`:
   and Ready never went below 2.
 
 `Ingress` (WC-10) and `ServiceMonitor` (WC-11) remain deferred.
+
+## Amendment (Phase 3.4.3a, 2026-11-13): R-14 closed for the aws overlays
+
+`terraform/envs/eks` now runs the VPC CNI with NetworkPolicy enforcement
+and the metrics-server add-on. The aws overlays therefore turn both
+features on: every `values-*-aws.yaml` renders the workload's
+NetworkPolicy, and `values-prod-aws.yaml` renders the HPA (2–4 replicas,
+70 % CPU, 300 s scale-down window). A first deploy creates the
+Deployment, so no replicas hand-over is needed. `check-standard-workload-chart`'s
+former R-14 guards are inverted: an aws overlay must now render the
+policy with the same exact shape as the local ones, and prod-aws must
+render the HPA.
