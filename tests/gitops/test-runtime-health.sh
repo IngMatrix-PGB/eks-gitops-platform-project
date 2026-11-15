@@ -1,7 +1,8 @@
 #!/bin/sh
 # Read-only runtime health checks against an already-bootstrapped Phase
-# 2.3 GitOps state: root Application, AppProject, ApplicationSet, all three
-# generated Applications, all three namespaces, and their ConfigMaps. Never
+# 2.3/2.4 GitOps state: root Application, AppProject, ApplicationSet, all
+# three generated Applications, and each environment's standard-workload
+# ConfigMap (per-environment ui-message). Never
 # mutates anything. Backs `make gitops-test` only.
 set -eu
 
@@ -69,14 +70,52 @@ EOF
   fi
 done
 
+# Phase 2.4+: the workload is charts/standard-workload, whose only
+# ConfigMap is "<release>-standard-workload-config" with a single key,
+# ui-message (consumed by the Deployment as PODINFO_UI_MESSAGE). The
+# Phase 2.3 smoke chart's configmap/platform-smoke (data.environment) no
+# longer exists. "Synced" above already proves live == Git at the
+# tracked revision; these checks prove the per-environment contract:
+# each environment's ConfigMap exists, carries an override (never the
+# chart default), is the one its own Deployment reads, and differs from
+# the other two environments'.
+chart_default_message="$(sed -n 's/^  uiMessage: "\(.*\)"$/\1/p' charts/standard-workload/values.yaml)"
+if [ -z "$chart_default_message" ]; then
+  echo "FAIL: could not read configMap.uiMessage from charts/standard-workload/values.yaml" >&2
+  exit 1
+fi
+seen_messages=""
 for ns in dev uat prod; do
-  actual="$(pkubectl -n "$ns" get configmap platform-smoke -o jsonpath='{.data.environment}' 2>/dev/null || true)"
-  if [ "$actual" = "$ns" ]; then
-    echo "OK: namespace '$ns' configmap/platform-smoke data.environment='$actual'"
-  else
-    echo "FAIL: namespace '$ns' configmap/platform-smoke data.environment='${actual:-<absent>}', expected '$ns'" >&2
+  dep="platform-smoke-${ns}-standard-workload"
+  cm="${dep}-config"
+  if ! pkubectl -n "$ns" get configmap "$cm" >/dev/null 2>&1; then
+    echo "FAIL: namespace '$ns' configmap/$cm absent" >&2
+    fail=1
+    continue
+  fi
+  actual="$(pkubectl -n "$ns" get configmap "$cm" -o jsonpath='{.data.ui-message}' 2>/dev/null || true)"
+  if [ -z "$actual" ]; then
+    echo "FAIL: namespace '$ns' configmap/$cm data.ui-message is empty or absent" >&2
+    fail=1
+    continue
+  fi
+  if [ "$actual" = "$chart_default_message" ]; then
+    echo "FAIL: namespace '$ns' configmap/$cm data.ui-message is the chart default ('$actual') - the per-environment values file was not applied" >&2
     fail=1
   fi
+  ref="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="PODINFO_UI_MESSAGE")].valueFrom.configMapKeyRef.name}' 2>/dev/null || true)"
+  if [ "$ref" != "$cm" ]; then
+    echo "FAIL: namespace '$ns' deployment/$dep PODINFO_UI_MESSAGE reads configmap '${ref:-<none>}', expected '$cm'" >&2
+    fail=1
+  fi
+  case "$seen_messages" in
+    *"|${actual}|"*)
+      echo "FAIL: namespace '$ns' configmap/$cm data.ui-message='$actual' is identical to another environment's - environments are not isolated" >&2
+      fail=1
+      ;;
+  esac
+  seen_messages="${seen_messages}|${actual}|"
+  echo "OK: namespace '$ns' configmap/$cm data.ui-message='$actual' (per-environment override, read by deployment/$dep)"
 done
 
 if [ "$fail" -ne 0 ]; then
