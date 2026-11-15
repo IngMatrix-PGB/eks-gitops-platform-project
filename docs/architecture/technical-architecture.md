@@ -5,9 +5,9 @@
 | Field | Value |
 |---|---|
 | Document | eks-gitops-platform-project Technical Architecture |
-| Version | 0.14.0 |
+| Version | 0.15.0 |
 | Status | Implementation in progress |
-| Phase | Phase 2.7 implemented (hub-and-spoke `lab-multicluster`, runtime-tested in `kind`); Phase 2.8 implemented (workload resilience and HPA, runtime-tested in `kind`); Phase 3.4.1–3.4.4a implemented as offline-tested code (AWS organization, guardrails, account baseline, per-environment EKS, Karpenter, ECR, per-spoke ESO identity, hub-to-spoke Argo CD identity); Phase 3.1–3.3.5 implemented as offline-validated code; roadmap realigned to the hub-and-spoke model (ADR-0015) |
+| Phase | Phase 2.7 implemented (hub-and-spoke `lab-multicluster`, runtime-tested in `kind`); Phase 2.8 implemented (workload resilience and HPA, runtime-tested in `kind`); Phase 3.4.1–3.4.4b implemented as offline-tested code (AWS organization, guardrails, account baseline, per-environment EKS, Karpenter, ECR, per-spoke ESO identity, hub-to-spoke Argo CD identity, aws-eks GitOps profile in hub-and-spoke form); Phase 3.1–3.3.5 implemented as offline-validated code; roadmap realigned to the hub-and-spoke model (ADR-0015) |
 | Last updated | 2026-11-13 |
 
 This document is the **single, authoritative source of truth** for the
@@ -615,13 +615,13 @@ flowchart LR
     Repo["Git repository<br/>(this repo)"] --> Root["root Application<br/>platform-bootstrap"]
     Root -->|helm chart| Boot["gitops/bootstrap chart"]
     Boot -->|profile: local-kind<br/>(default)| ASetLocal["ApplicationSet<br/>generator: environments"]
-    Boot -->|profile: aws-eks<br/>(explicit only)| ASetAWS["ApplicationSet<br/>generator: awsEnvironments"]
+    Boot -->|profile: aws-eks<br/>(explicit only, hub)| ASetAWS["ApplicationSet<br/>generator: clusters<br/>owner=eks-spoke-registration"]
     ASetLocal --> AppD["Application: dev"]
     ASetLocal --> AppS["Application: uat"]
     ASetLocal --> AppP["Application: prod"]
-    ASetAWS --> AppDAWS["Application: dev-aws"]
-    ASetAWS --> AppSAWS["Application: uat-aws"]
-    ASetAWS --> AppPAWS["Application: prod-aws"]
+    ASetAWS --> AppDAWS["Application: dev<br/>→ spoke-dev / ns dev"]
+    ASetAWS --> AppSAWS["Application: uat<br/>→ spoke-uat / ns uat"]
+    ASetAWS --> AppPAWS["Application: prod<br/>→ spoke-prod / ns prod"]
     AppD -->|values-dev.yaml| Chart["charts/standard-workload"]
     AppS -->|values-uat.yaml| Chart
     AppP -->|values-prod.yaml| Chart
@@ -633,7 +633,13 @@ flowchart LR
 Both `ApplicationSet` branches are mutually exclusive by construction
 (Phase 3.3.4a) — a single render never produces both sets, and an
 unrecognized `profile` value fails the render closed rather than
-defaulting to either one. See ADR-0014 for the identity boundary that
+defaulting to either one. Since Phase 3.4.4b `aws-eks` is hub-and-spoke:
+the hub's Argo CD selects one EKS spoke per environment through a
+clusters generator (the same branch as `local-multicluster`, different
+owner label) and deploys to cluster `spoke-<env>`, namespace `<env>`,
+never in-cluster. Each spoke is registered by a cluster Secret rendered
+offline by `lab/eks/spoke-cluster-secret.sh` from that spoke's Terraform
+outputs, with `awsAuthConfig` and no token. See ADR-0014 for the identity boundary that
 would need to be satisfied before a real `aws-eks` bootstrap could
 proceed past its own preflight step, and
 `docs/runbooks/eks-bootstrap-order.md` for the full future activation
@@ -764,7 +770,7 @@ Implementation Status" below.
 | Local lab renamed to `dev`/`uat`/`prod` with `dev` added (Phase 2.7.1): three environments, three ESO scoped releases (`eso-uat` singleton owner; `eso-dev`/`eso-prod` dependents) | `PARTIALLY VERIFIED` at commit time — offline proof verified pre-merge (`make validate`: chart lint/render and pairwise isolation for all three environments, `gitops-render` exactly 3 generator elements and 3 local destinations; `make check-eso-chart`: three releases, pairwise collision-free, singleton exactly once); the runtime lifecycle suites re-run against this phase's feature branch, with results recorded in that PR's description rather than asserted here in advance | `make validate`, `make check-eso-chart`, and the runtime suites listed in the PR |
 | aws-eks profile and Terraform renamed to `dev`/`uat`/`prod` with `dev` added (Phase 2.7.2) | `CODE-CONFIRMED`, offline only - never applied against AWS | `make validate` (chart aws fixtures and Terraform-default cross-check for all three, pairwise isolation), `make gitops-render` (aws-eks exactly 3 generator elements and 3 destinations, swap and fourth-environment negatives), `make terraform-validate-offline` (identity: 16 tftest runs, including every-pair identity and IAM-isolation checks) |
 | Hub-and-spoke workloads: cluster-generator `ApplicationSet`, one ESO per spoke (Phase 2.7.4, ADR-0015) | `PARTIALLY VERIFIED` at commit time — results of this phase's runs recorded in its PR description rather than asserted here in advance | `make gitops-render` and `make check-eso-chart` (offline: `local-multicluster` shape, unchanged `local-kind`/`aws-eks` renders, single-release spoke ESO); `make mc-test-e2e` with `dev`/`uat` and again with `prod` (`mc-up` from nothing and as a no-op, one Application per registered spoke and none for the hub, a `qa` or unlabelled cluster Secret, ESO-synced Secret per spoke, rotation and self-heal isolation, deregistration without orphans, hub uninstall cascading to the spokes); a one-off manual check that a `values-dev.yaml` change reaches `dev` only |
-| Multi-account AWS layout with organization guardrails (ADR-0015, ADR-0016) | `CODE-CONFIRMED`, offline only (Phase 3.4.1: organization, accounts, service control policies, organization trail, delegated security administration, GuardDuty, Security Hub, Config aggregator, Access Analyzer, consolidated budget; Phase 3.4.2: per-account baseline - Config recorders in every allowed region delivering to a central bucket, EBS encryption and IMDSv2 defaults, S3 account public access block, per-account budgets); never applied against AWS. Phase 3.4.3a: per-environment network and EKS with the five add-ons managed at explicit versions. Phase 3.4.3b: Karpenter on the spokes and the container registry. Phase 3.4.3c: per-spoke ESO identity. Phase 3.4.4a: hub-to-spoke Argo CD identity (hub role, spoke roles and access entries). The aws-eks GitOps profile in hub-and-spoke form is Phase 3.4.4b | `terraform test` in `terraform/envs/org` (12 runs, including an SCP/baseline cross-check), `terraform/envs/security` (10 runs) and `terraform/envs/account-baseline` (9 runs), `terraform/envs/network` (8 runs), `terraform/envs/eks` (12 runs) and `terraform/envs/registry` (8 runs) and `terraform/envs/identity` (19 runs) with `mock_provider "aws"`, including the exact SCP content (`terraform/envs/eks` now 17 runs); `check-spoke-access`; twenty-one mutation checks caught; `make terraform-validate-offline`, `check-terraform-offline`, `check-terraform-offline-regression`. Emulator `apply` is Phase 5.2 |
+| Multi-account AWS layout with organization guardrails (ADR-0015, ADR-0016) | `CODE-CONFIRMED`, offline only (Phase 3.4.1: organization, accounts, service control policies, organization trail, delegated security administration, GuardDuty, Security Hub, Config aggregator, Access Analyzer, consolidated budget; Phase 3.4.2: per-account baseline - Config recorders in every allowed region delivering to a central bucket, EBS encryption and IMDSv2 defaults, S3 account public access block, per-account budgets); never applied against AWS. Phase 3.4.3a: per-environment network and EKS with the five add-ons managed at explicit versions. Phase 3.4.3b: Karpenter on the spokes and the container registry. Phase 3.4.3c: per-spoke ESO identity. Phase 3.4.4a: hub-to-spoke Argo CD identity (hub role, spoke roles and access entries). The aws-eks GitOps profile in hub-and-spoke form is Phase 3.4.4b | `terraform test` in `terraform/envs/org` (12 runs, including an SCP/baseline cross-check), `terraform/envs/security` (10 runs) and `terraform/envs/account-baseline` (9 runs), `terraform/envs/network` (8 runs), `terraform/envs/eks` (12 runs) and `terraform/envs/registry` (8 runs) and `terraform/envs/identity` (19 runs) with `mock_provider "aws"`, including the exact SCP content (`terraform/envs/eks` now 17 runs); `check-spoke-access`; twenty-seven mutation checks caught; `make eks-test-spoke-secret`; `make terraform-validate-offline`, `check-terraform-offline`, `check-terraform-offline-regression`. Emulator `apply` is Phase 5.2 |
 | Argo CD's production AWS identity provider | `UNKNOWN` | Explicitly undecided pending Phase 3/4 (ADR-0005) |
 | Crossplane-based self-service infrastructure | `OUT OF SCOPE` | Deferred past the MVP (ADR-0001) |
 | Progressive Delivery as primary production gate | `OUT OF SCOPE` | Not the design (see "Application Delivery and Promotion") |
@@ -829,7 +835,10 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
       - `terraform/envs/eks`: on the hub, an Argo CD role (Pod Identity for the application controller and server) that may only assume the three spoke `argocd-manager` roles; on each spoke, an `argocd-manager` role with no IAM permissions, trusted only by that hub role, and a STANDARD access entry mapping it to the `argocd-manager` Kubernetes group with no EKS access policy.
       - `platform/spoke-access/role.yaml`: the one namespaced Role, shared with the lab's `spoke-register.sh` and checked by `check-spoke-access` against the AppProject.
       - Closes R-05 as code for EKS. ADR-0005's human IdP question stays open.
-    - **3.4.4b — aws-eks profile in hub-and-spoke form:** not started. A clusters generator for the aws-eks profile and an offline renderer of the EKS cluster Secret with `awsAuthConfig`.
+    - **3.4.4b — aws-eks profile in hub-and-spoke form:** implemented, offline only.
+      - `gitops/bootstrap`: aws-eks shares the clusters-generator branch with local-multicluster (`awsEks` values: owner label `eks-spoke-registration`, environments dev/uat/prod, overlays `values-<env>-aws.yaml`). AppProject destinations are exactly `spoke-<env>`/`<env>` with no cluster-scoped grant; the `*-aws` in-cluster destinations are gone from every profile.
+      - `lab/eks/spoke-cluster-secret.sh`: renders, never applies, the hub's cluster Secret for an EKS spoke from its Terraform outputs (new output `cluster_certificate_authority_data`), with `awsAuthConfig` and no token. `make eks-test-spoke-secret` checks it offline and checks its labels against the aws-eks selector.
+      - Not in the repo yet: the Argo CD install on the EKS hub (its `resource.inclusions` and Pod Identity service accounts). Real registration is Phase 6.4.
   - **5.1 — Image CI and promotion:** not started. Build, vulnerability scan with a failing threshold, SBOM, signature, and push to the registry; promotion `dev` → `uat` → `prod` as PRs that bump an immutable image reference.
   - **5.2 — Terraform CI:** not started. `terraform plan` and static analysis on every PR; `apply` of the supported resource types against a local AWS emulator in CI, so infrastructure changes are applied — not only validated — before any real account is involved.
   - **5.3 — Branch protection:** not started. Apply the ADR-0009 ruleset, now available because the repository is public (requires explicit authorization).

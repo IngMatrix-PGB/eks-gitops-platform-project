@@ -15,10 +15,23 @@ on a spoke, by spoke-register.sh's contract). These Helm variables hold
 the literal ApplicationSet expressions; for local-kind/aws-eks they
 produce exactly the same strings as before.
 */ -}}
+{{- /*
+Phase 3.4.4b: aws-eks is hub-and-spoke too (ADR-0015/0016) - it shares
+the clusters-generator branch with local-multicluster. $hs holds the
+active profile's spoke contract (selector labels, environments, cluster
+name prefix, overlay suffix); the two profiles differ only in data.
+*/ -}}
+{{- if not (has .Values.profile (list "local-kind" "local-multicluster" "aws-eks")) }}
+{{- fail (printf "gitops/bootstrap: unknown profile %q - must be exactly \"local-kind\", \"aws-eks\" or \"local-multicluster\"" .Values.profile) }}
+{{- end }}
 {{- $envRef := printf "%s.env%s" "{{" "}}" }}
 {{- $nsRef := printf "%s.namespace%s" "{{" "}}" }}
-{{- $multicluster := eq .Values.profile "local-multicluster" }}
+{{- $multicluster := has .Values.profile (list "local-multicluster" "aws-eks") }}
+{{- $hs := dict }}
+{{- $overlaySuffix := "" }}
 {{- if $multicluster }}
+{{- $hs = ternary .Values.awsEks .Values.multicluster (eq .Values.profile "aws-eks") }}
+{{- $overlaySuffix = $hs.overlaySuffix | default "" }}
 {{- $envRef = printf "%s.values.env%s" "{{" "}}" }}
 {{- $nsRef = $envRef }}
 {{- end }}
@@ -65,41 +78,28 @@ spec:
     - clusters:
         selector:
           matchLabels:
-            {{ .Values.multicluster.ownerLabelKey }}: {{ .Values.multicluster.ownerLabelValue }}
+            {{ $hs.ownerLabelKey }}: {{ $hs.ownerLabelValue }}
           matchExpressions:
-            - key: {{ .Values.multicluster.environmentLabelKey }}
+            - key: {{ $hs.environmentLabelKey }}
               operator: In
               values:
-                {{- range .Values.multicluster.environments }}
+                {{- range $hs.environments }}
                 - {{ . }}
                 {{- end }}
         values:
-          env: '{{ "{{" }}index .metadata.labels "{{ .Values.multicluster.environmentLabelKey }}"{{ "}}" }}'
+          env: '{{ "{{" }}index .metadata.labels "{{ $hs.environmentLabelKey }}"{{ "}}" }}'
     {{- else }}
     - list:
         elements:
           {{- /*
-          Phase 3.3.4a: profile-exclusive - exactly one of these two
-          ranges ever executes for a given render, never both, so this
-          ApplicationSet can never generate local-kind and aws-eks
-          Applications simultaneously. An unrecognized profile value
-          fails the render closed (Helm's `fail` aborts `helm
-          template`/`helm lint`/an Argo CD sync alike) - never a
-          silent fallback to either profile. See .local/evidence/
-          phase-3.3.4-aws-application-bootstrap-addendum.md Section 9.
+          local-kind only (Phase 3.4.4b): aws-eks moved to the clusters
+          generator above. The profile is validated at the top of this
+          file - an unknown value fails the render closed, never a
+          silent fallback.
           */}}
-          {{- if eq .Values.profile "local-kind" }}
           {{- range .Values.environments }}
           - env: {{ .name }}
             namespace: {{ .namespace }}
-          {{- end }}
-          {{- else if eq .Values.profile "aws-eks" }}
-          {{- range .Values.awsEnvironments }}
-          - env: {{ .name }}
-            namespace: {{ .namespace }}
-          {{- end }}
-          {{- else }}
-          {{ fail (printf "gitops/bootstrap: unknown profile %q - must be exactly \"local-kind\", \"aws-eks\" or \"local-multicluster\"" .Values.profile) }}
           {{- end }}
     {{- end }}
   template:
@@ -121,7 +121,7 @@ spec:
         path: {{ .Values.workloadChartPath }}
         helm:
           valueFiles:
-            - "values-{{ $envRef }}.yaml"
+            - "values-{{ $envRef }}{{ $overlaySuffix }}.yaml"
       # Phase 2.8.2: an HPA owns spec.replicas of a Deployment the workload
       # chart annotates replicas-owner=hpa (the chart renders minReplicas
       # there). Only those: a static Deployment stays fully reconciled

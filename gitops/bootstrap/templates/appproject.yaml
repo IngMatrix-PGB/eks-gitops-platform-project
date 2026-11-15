@@ -23,33 +23,21 @@ spec:
   sourceRepos:
     - {{ .Values.repoURL }}
   destinations:
-    {{- if eq .Values.profile "local-multicluster" }}
+    {{- if has .Values.profile (list "local-multicluster" "aws-eks") }}
     {{- /*
-    Phase 2.7.4: spokes only, by cluster name - never the hub's
+    Phase 2.7.4 / 3.4.4b: spokes only, by cluster name - never the hub's
     in-cluster server, so not even a hand-made Application in this
-    project can land on the hub.
+    project can land on the hub. aws-eks uses the same names
+    (spoke-<env>); the real EKS cluster name lives only in the cluster
+    Secret's awsAuthConfig.clusterName (lab/eks/spoke-cluster-secret.sh).
     */}}
-    {{- range .Values.multicluster.environments }}
-    - name: {{ $.Values.multicluster.clusterNamePrefix }}{{ . }}
+    {{- $hs := ternary .Values.awsEks .Values.multicluster (eq .Values.profile "aws-eks") }}
+    {{- range $hs.environments }}
+    - name: {{ $hs.clusterNamePrefix }}{{ . }}
       namespace: {{ . }}
     {{- end }}
     {{- else }}
     {{- range .Values.environments }}
-    - server: https://kubernetes.default.svc
-      namespace: {{ .namespace }}
-    {{- end }}
-    {{- /*
-    Phase 3.3.4a: always whitelisted, even though templates/
-    applicationset.yaml's generator only ever emits one profile's
-    Applications at a time (never both) - an AppProject destination
-    whitelist is a static allow-list, not a profile-gated one, and
-    listing these here does not by itself create the dev-aws/uat-aws/
-    prod-aws namespaces (CreateNamespace=true only fires for an
-    Application the ApplicationSet actually generates). DESIGNED / NOT
-    DEPLOYED - see .local/evidence/phase-3.3.4-aws-application-
-    bootstrap-addendum.md.
-    */}}
-    {{- range .Values.awsEnvironments }}
     - server: https://kubernetes.default.svc
       namespace: {{ .namespace }}
     {{- end }}
@@ -62,7 +50,8 @@ spec:
   # not a permission-check-exempt controller step. This is the single
   # minimum grant that makes it work; see docs/adr/0007-private-gitops-
   # bootstrap.md for the empirical finding.
-  {{- if eq .Values.profile "local-multicluster" }}
+  {{- if has .Values.profile (list "local-multicluster" "aws-eks") }}
+  {{- /* Phase 3.4.4b: aws-eks too - the spoke bootstrap creates the namespace. */}}
   # Phase 2.7.4: nothing cluster-scoped - CreateNamespace=false on spokes.
   clusterResourceWhitelist: []
   {{- else }}

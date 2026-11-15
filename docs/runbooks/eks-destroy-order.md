@@ -12,8 +12,10 @@ separately authorized destroy operation.
 ## Order (documented, not executed)
 
 1. **Pause GitOps.** Pause auto-sync on the `aws-eks`-profile root
-   Application (and its generated `dev-aws`/`uat-aws`/`prod-aws`
-   Applications) so nothing re-reconciles mid-teardown.
+   Application on the hub (and its generated per-spoke Applications,
+   `platform-smoke-dev`/`-uat`/`-prod`) so nothing re-reconciles
+   mid-teardown. To remove one spoke only, delete its hub cluster Secret
+   (`spoke-<env>`) after pausing.
 2. **Retire workloads / `ExternalSecret`s.** Remove the workload
    Deployments/Jobs and their `ExternalSecret` resources for each
    environment being destroyed, in an order that lets each workload
