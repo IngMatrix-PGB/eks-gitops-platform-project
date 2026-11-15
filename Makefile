@@ -9,7 +9,7 @@
 	gitops-status gitops-test gitops-uninstall gitops-test-lifecycle \
 	gitops-switch-revision gitops-retire-appproject-kind gitops-resume-appproject-kind \
 	gitops-test-revision-switch gitops-test-appproject-kind-retirement \
-	eso-chart-fetch eso-render check-eso-chart eso-install eso-status eso-uninstall \
+	eso-chart-fetch eso-render check-eso-chart eso-crds-install eso-install eso-status eso-uninstall \
 	eso-test-runtime-health eso-test-lifecycle \
 	eso-provision-source-secret eso-test-secret-lifecycle eso-test-provision-source-secret-idempotency \
 	terraform-fmt terraform-init terraform-validate terraform-test terraform-validate-offline \
@@ -311,6 +311,9 @@ eso-render: ## Fully offline render + collision/ownership proof for the decouple
 
 check-eso-chart: ## Offline lint + collision/ownership proof for the ESO chart (standalone - requires a network chart fetch, so not part of `make validate`)
 	@sh scripts/validate/check-eso-chart.sh
+
+eso-crds-install: ## R-13: apply only the 25 ESO CRDs (kubectl server-side apply, no Helm release) - run before gitops-bootstrap on a fresh lab-lite
+	@sh lab/eso/install-crds.sh
 
 eso-install: ## Fail-closed idempotent install: 25 CRDs (kubectl apply, no Helm ownership) + two scoped Helm releases
 	@sh lab/eso/install.sh
