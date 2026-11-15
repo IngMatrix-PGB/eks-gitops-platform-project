@@ -1,7 +1,9 @@
 #!/bin/sh
 # Fully offline Helm render of gitops/bootstrap, plus proof that it
 # renders exactly the authorized shape: one AppProject, one
-# ApplicationSet with exactly three generator elements per profile, zero Secrets, no
+# ApplicationSet with exactly three generator elements per list profile
+# (local-kind, aws-eks) or exactly one clusters generator
+# (local-multicluster, Phase 2.7.4), zero Secrets, no
 # wildcard permissions, and correct revision propagation. Never touches
 # the cluster. Backs `make gitops-render`. Accepts REVISION=<value>
 # (default main) to prove propagation for a non-default revision too.
@@ -290,6 +292,80 @@ else
   fi
 fi
 rm -f "$short_env_values" "$short_env_out"
+
+# =============================================================================
+# Phase 2.7.4: local-multicluster profile (hub Argo CD -> registered kind
+# spokes through a clusters generator). Offline shape only - which
+# spokes actually get an Application is proven at runtime by
+# tests/multicluster/test-e2e.sh.
+# =============================================================================
+
+# --- negative: neither default nor aws-eks ever renders a clusters
+# generator (multicluster can never activate by omission) ---
+if grep -qE '^\s*- clusters:$' "$render_out" || grep -qE '^\s*- clusters:$' "$aws_render_out"; then
+  echo "FAIL: a clusters generator appears outside profile=local-multicluster" >&2
+  fail=1
+else
+  echo "OK: default and aws-eks renders contain no clusters generator"
+fi
+
+echo "gitops-render: helm lint (profile=local-multicluster) ..."
+if ! "$HELM_BIN" lint gitops/bootstrap --set profile=local-multicluster >/dev/null; then
+  echo "FAIL: helm lint failed for profile=local-multicluster" >&2
+  fail=1
+fi
+mc_render_out="$(mktemp)"
+trap 'rm -f "$render_out" "$aws_render_out" "$mc_render_out"' EXIT INT TERM
+if ! "$HELM_BIN" template gitops/bootstrap --set profile=local-multicluster --set "gitRevision=${revision}" > "$mc_render_out" 2>&1; then
+  echo "FAIL: helm template failed for profile=local-multicluster" >&2
+  cat "$mc_render_out" >&2
+  fail=1
+else
+  mc_fail=0
+  [ "$(grep -c '^kind: AppProject$' "$mc_render_out")" = "1" ] || { echo "FAIL: local-multicluster: expected exactly 1 AppProject" >&2; mc_fail=1; }
+  [ "$(grep -c '^kind: ApplicationSet$' "$mc_render_out")" = "1" ] || { echo "FAIL: local-multicluster: expected exactly 1 ApplicationSet" >&2; mc_fail=1; }
+  [ "$(grep -c '^kind: Secret$' "$mc_render_out" || true)" = "0" ] || { echo "FAIL: local-multicluster: a Secret was rendered" >&2; mc_fail=1; }
+  [ "$(grep -cE '^\s*- clusters:$' "$mc_render_out")" = "1" ] || { echo "FAIL: local-multicluster: expected exactly 1 clusters generator" >&2; mc_fail=1; }
+  [ "$(grep -cE '^\s*- list:$' "$mc_render_out" || true)" = "0" ] || { echo "FAIL: local-multicluster: a list generator is still rendered" >&2; mc_fail=1; }
+  grep -qE '^\s*eks-gitops-lab-lite\.local/owner: multicluster-registration$' "$mc_render_out" || { echo "FAIL: local-multicluster: selector lacks the registration owner label" >&2; mc_fail=1; }
+  grep -qE '^\s*- key: platform\.environment$' "$mc_render_out" || { echo "FAIL: local-multicluster: selector lacks the platform.environment expression" >&2; mc_fail=1; }
+  sel_values="$(awk '/- key: platform\.environment$/{f=1} f && /^[[:space:]]*- (dev|uat|prod|[a-z-]+)$/{printf "%s ", $2} f && /values:$/ && ++v==2 {exit}' "$mc_render_out")"
+  [ "$sel_values" = "dev uat prod " ] || { echo "FAIL: local-multicluster: selector environments are '$sel_values', expected exactly 'dev uat prod'" >&2; mc_fail=1; }
+  mc_project="$(awk '/^kind: AppProject$/{f=1} f && /^kind: ApplicationSet$/{exit} f{print}' "$mc_render_out")"
+  [ "$(printf '%s\n' "$mc_project" | grep -cE '^\s*- name: spoke-(dev|uat|prod)$')" = "3" ] || { echo "FAIL: local-multicluster: AppProject must allow exactly spoke-dev/spoke-uat/spoke-prod" >&2; mc_fail=1; }
+  if printf '%s\n' "$mc_project" | grep -qE 'server: |name: "?\*"?$|namespace: "?\*"?$'; then
+    echo "FAIL: local-multicluster: AppProject has a server-based or wildcard destination (the hub must be unreachable)" >&2; mc_fail=1
+  fi
+  printf '%s\n' "$mc_project" | grep -qE '^\s*clusterResourceWhitelist: \[\]$' || { echo "FAIL: local-multicluster: clusterResourceWhitelist must be empty" >&2; mc_fail=1; }
+  mc_appset="$(awk '/^kind: ApplicationSet$/{f=1} f{print}' "$mc_render_out")"
+  printf '%s\n' "$mc_appset" | grep -qE '^\s*- CreateNamespace=false$' || { echo "FAIL: local-multicluster: CreateNamespace=false missing" >&2; mc_fail=1; }
+  if printf '%s\n' "$mc_appset" | grep -qE 'CreateNamespace=true|managedNamespaceMetadata:|server: https://kubernetes\.default\.svc'; then
+    echo "FAIL: local-multicluster: template still creates namespaces or targets the hub's in-cluster server" >&2; mc_fail=1
+  fi
+  printf '%s\n' "$mc_appset" | grep -qE '^\s*name: "\{\{\.name\}\}"$' || { echo "FAIL: local-multicluster: destination is not the generated cluster name" >&2; mc_fail=1; }
+  printf '%s\n' "$mc_appset" | grep -q "targetRevision: ${revision}" || { echo "FAIL: local-multicluster: revision '${revision}' not propagated" >&2; mc_fail=1; }
+  for e in dev uat prod; do
+    [ -f "charts/standard-workload/values-${e}.yaml" ] || { echo "FAIL: local-multicluster: values-${e}.yaml missing" >&2; mc_fail=1; }
+  done
+  if [ "$mc_fail" -eq 0 ]; then
+    echo "OK: profile=local-multicluster renders 1 AppProject (spoke-dev/uat/prod by name only, no cluster-scoped grant) and 1 ApplicationSet with exactly 1 clusters generator (owner label + platform.environment in dev/uat/prod), CreateNamespace=false, destination by cluster name, revision propagated"
+  else
+    fail=1
+  fi
+fi
+
+# --- negative: an environment outside dev/uat/prod injected into the
+# selector list is detectable by the exact-list check above ---
+qa_values="$(mktemp)"
+printf 'profile: "local-multicluster"\nmulticluster:\n  environments: [dev, uat, prod, qa]\n' > "$qa_values"
+qa_sel="$("$HELM_BIN" template gitops/bootstrap -f "$qa_values" 2>/dev/null | awk '/- key: platform\.environment$/{f=1} f && /^[[:space:]]*- [a-z-]+$/{printf "%s ", $2} f && /values:$/ && ++v==2 {exit}')"
+rm -f "$qa_values"
+if [ "$qa_sel" = "dev uat prod qa " ]; then
+  echo "OK: confirmed the exact-selector check would reject an extra 'qa' environment (self-test)"
+else
+  echo "FAIL: selector self-test did not render the injected 'qa' environment (got '$qa_sel') - check is broken" >&2
+  fail=1
+fi
 
 if [ "$fail" -ne 0 ]; then
   echo "gitops-render: FAILED"

@@ -204,7 +204,7 @@ if gitops_appset_exists; then
   echo "FAIL: ApplicationSet '$GITOPS_APPSET_NAME' still present after root Application deletion" >&2
   cascade_fail=1
 fi
-for app in $GITOPS_GENERATED_APPS; do
+for app in $(gitops_generated_apps); do
   if gitops_generated_app_exists "$app"; then
     echo "FAIL: generated Application '$app' still present after root Application deletion" >&2
     cascade_fail=1

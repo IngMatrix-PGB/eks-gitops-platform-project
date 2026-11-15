@@ -50,8 +50,16 @@ fi
 echo "OK: helm lint passed for every scoped values file (exercises the chart's own values.schema.json)"
 
 echo "check-eso-chart: running the full collision/ownership proof (lab/eso/render.sh) ..."
-if ! sh lab/eso/render.sh; then
+if ! LAB_CLUSTER=lab-lite sh lab/eso/render.sh; then
   echo "check-eso-chart: FAILED"
+  exit 1
+fi
+
+# Phase 2.7.4: a lab-multicluster spoke runs a single release that owns
+# its own webhook/cert-controller - the same proof, for that topology.
+echo "check-eso-chart: same proof for a lab-multicluster spoke (LAB_CLUSTER=dev, single release owning the singletons) ..."
+if ! LAB_CLUSTER=dev sh lab/eso/render.sh; then
+  echo "check-eso-chart: FAILED (spoke topology)"
   exit 1
 fi
 

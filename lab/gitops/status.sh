@@ -49,7 +49,7 @@ else
 fi
 
 echo "--- generated Applications ---"
-for app in $GITOPS_GENERATED_APPS; do
+for app in $(gitops_generated_apps); do
   if gitops_generated_app_exists "$app"; then
     read -r sync health <<EOF
 $(gitops_app_sync_health "$app")
@@ -61,6 +61,11 @@ EOF
 done
 
 echo "--- environment ConfigMaps ---"
+if [ "$GITOPS_PROFILE" = "local-multicluster" ]; then
+  # Phase 2.7.4: the workloads live on the spokes, not the hub.
+  echo "profile local-multicluster: workloads run on the spokes - see 'make lab-mc-status'"
+  exit 0
+fi
 for ns in dev uat prod; do
   if pkubectl -n "$ns" get configmap platform-smoke >/dev/null 2>&1; then
     pkubectl -n "$ns" get configmap platform-smoke -o jsonpath="namespace=${ns} data={.data}{\"\n\"}"

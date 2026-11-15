@@ -56,3 +56,23 @@ awsEnvironments:
     namespace: uat-aws
   - name: prod-aws
     namespace: prod-aws
+
+# Phase 2.7.4 (ADR-0015): profile "local-multicluster" - the hub's Argo
+# CD deploys to the kind spokes registered by lab/multicluster/spoke-
+# register.sh (Phase 2.7.3), through a `clusters` generator instead of
+# the list above. A spoke is selected only when its hub cluster Secret
+# carries BOTH the registration owner label and a platform.environment
+# label whose value is in `environments` below - this list is the
+# selector's only source, so a fourth environment (or a hand-made
+# Secret labelled e.g. "qa") can never produce an Application. The
+# destination is the cluster NAME (spoke-<env>), never the hub's
+# in-cluster server. Must match lab/multicluster/_lib.sh.
+multicluster:
+  ownerLabelKey: eks-gitops-lab-lite.local/owner
+  ownerLabelValue: multicluster-registration
+  environmentLabelKey: platform.environment
+  clusterNamePrefix: spoke-
+  environments:
+    - dev
+    - uat
+    - prod

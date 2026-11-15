@@ -106,8 +106,8 @@ done <<EOF
 $(eso_environments)
 EOF
 
-echo "test-runtime-health: checking no unhealthy pods across eso-dev/eso-uat/eso-prod ..."
-for ns in eso-dev eso-uat eso-prod; do
+echo "test-runtime-health: checking no unhealthy pods across $(eso_environments | cut -d"|" -f2 | tr "\n" " ")..."
+for ns in $(eso_environments | cut -d"|" -f2); do
   bad_pods="$(pkubectl -n "$ns" get pods --no-headers 2>/dev/null | awk '$3 != "Running" && $3 != "Completed" {print}')"
   if [ -n "$bad_pods" ]; then
     echo "FAIL: unhealthy pod(s) in namespace '$ns':" >&2

@@ -80,6 +80,22 @@ case "$env_name" in
     ;;
 esac
 
+# Phase 2.7.4: on a lab-multicluster spoke only that spoke's own
+# environment exists; the hub never holds ESO source material.
+case "${LAB_CLUSTER:-lab-lite}" in
+  lab-lite) : ;;
+  dev|uat|prod)
+    if [ "$env_name" != "$LAB_CLUSTER" ]; then
+      echo "FAIL: spoke '$LAB_CLUSTER' only holds its own environment's source Secret (got '$env_name')" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "FAIL: ESO source Secrets never live on cluster '$LAB_CLUSTER'" >&2
+    exit 1
+    ;;
+esac
+
 case "$action" in
   ""|--rotate|--delete) : ;;
   *)

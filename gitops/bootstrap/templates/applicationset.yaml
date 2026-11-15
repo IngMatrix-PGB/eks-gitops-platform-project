@@ -6,6 +6,22 @@ ApplicationSet controller - NOT by `helm template` now. Every
 literal Helm string pieces so Helm passes it through untouched instead
 of trying to resolve .field as a Helm value.
 */ -}}
+{{- /*
+Phase 2.7.4: the generator's element fields differ per profile - the
+list generator exposes .env/.namespace directly; the clusters generator
+(local-multicluster) exposes them as .values.env, set from the spoke's
+platform.environment label (the namespace equals the environment name
+on a spoke, by spoke-register.sh's contract). These Helm variables hold
+the literal ApplicationSet expressions; for local-kind/aws-eks they
+produce exactly the same strings as before.
+*/ -}}
+{{- $envRef := printf "%s.env%s" "{{" "}}" }}
+{{- $nsRef := printf "%s.namespace%s" "{{" "}}" }}
+{{- $multicluster := eq .Values.profile "local-multicluster" }}
+{{- if $multicluster }}
+{{- $envRef = printf "%s.values.env%s" "{{" "}}" }}
+{{- $nsRef = $envRef }}
+{{- end }}
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -40,6 +56,26 @@ spec:
     - jsonPointers:
         - /spec/syncPolicy/automated
   generators:
+    {{- if $multicluster }}
+    {{- /*
+    Phase 2.7.4: one Application per registered spoke. The hub itself
+    (in-cluster) has no cluster Secret carrying these labels, so it is
+    never selected. matchLabels and matchExpressions are ANDed.
+    */}}
+    - clusters:
+        selector:
+          matchLabels:
+            {{ .Values.multicluster.ownerLabelKey }}: {{ .Values.multicluster.ownerLabelValue }}
+          matchExpressions:
+            - key: {{ .Values.multicluster.environmentLabelKey }}
+              operator: In
+              values:
+                {{- range .Values.multicluster.environments }}
+                - {{ . }}
+                {{- end }}
+        values:
+          env: '{{ "{{" }}index .metadata.labels "{{ .Values.multicluster.environmentLabelKey }}"{{ "}}" }}'
+    {{- else }}
     - list:
         elements:
           {{- /*
@@ -63,11 +99,12 @@ spec:
             namespace: {{ .namespace }}
           {{- end }}
           {{- else }}
-          {{ fail (printf "gitops/bootstrap: unknown profile %q - must be exactly \"local-kind\" or \"aws-eks\"" .Values.profile) }}
+          {{ fail (printf "gitops/bootstrap: unknown profile %q - must be exactly \"local-kind\", \"aws-eks\" or \"local-multicluster\"" .Values.profile) }}
           {{- end }}
+    {{- end }}
   template:
     metadata:
-      name: "platform-smoke-{{ "{{" }}.env{{ "}}" }}"
+      name: "platform-smoke-{{ $envRef }}"
       labels:
         eks-gitops-lab-lite.local/owner: gitops-bootstrap
       # Required so deleting this Application (directly, or via cascade
@@ -84,16 +121,30 @@ spec:
         path: {{ .Values.workloadChartPath }}
         helm:
           valueFiles:
-            - "values-{{ "{{" }}.env{{ "}}" }}.yaml"
+            - "values-{{ $envRef }}.yaml"
       destination:
+        {{- if $multicluster }}
+        name: "{{ "{{" }}.name{{ "}}" }}"
+        {{- else }}
         server: https://kubernetes.default.svc
-        namespace: "{{ "{{" }}.namespace{{ "}}" }}"
+        {{- end }}
+        namespace: "{{ $nsRef }}"
       syncPolicy:
         automated:
           selfHeal: true
           prune: true
         syncOptions:
+          {{- if $multicluster }}
+          {{- /*
+          Phase 2.7.4: the spoke credential (Phase 2.7.3) has
+          clusterResources=false and no Namespace permission by design;
+          spoke-register.sh creates the workload namespace with the same
+          Pod Security labels managedNamespaceMetadata sets below.
+          */}}
+          - CreateNamespace=false
+          {{- else }}
           - CreateNamespace=true
+          {{- end }}
           - ServerSideApply=true
           # Graduated safety step (official Argo CD sync-options
           # mechanism): defers pruning of anything removed from the
@@ -103,6 +154,7 @@ spec:
           # manual confirmation gate would only block routine automated
           # updates for no safety benefit (ADR-0008 / Phase 2.4 plan).
           - PruneLast=true
+        {{- if not $multicluster }}
         managedNamespaceMetadata:
           labels:
             eks-gitops-lab-lite.local/owner: gitops-bootstrap
@@ -115,6 +167,7 @@ spec:
             pod-security.kubernetes.io/audit-version: v1.36
             pod-security.kubernetes.io/warn: restricted
             pod-security.kubernetes.io/warn-version: v1.36
+        {{- end }}
         retry:
           limit: 5
           backoff:

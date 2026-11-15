@@ -239,3 +239,16 @@ optional cluster-scoped extras (`rbac.servicebindings.create`,
 - Phase 2.6.2, once authorized, must reference this ADR rather than
   re-litigate the operator-ownership, CRD-decoupling, or RBAC-scoping
   decisions made here.
+
+## Amendment (Phase 2.7.4, 2026-11-11)
+
+In `lab-multicluster` (ADR-0015) every spoke is its own cluster with a
+single environment, so it runs exactly **one** scoped release,
+`eso-<env>`, which owns that cluster's webhook/cert-controller
+singletons itself; the hub runs no ESO. `scripts/eso/_lib.sh` derives
+the release table from `LAB_CLUSTER` (lab-lite keeps its three releases
+and `eso-uat` as owner) and checks that each cluster has exactly one
+owner. Everything else in this ADR — CRDs owned by no Helm release,
+`scopedRBAC`, no `ClusterRole`, no wildcard, digest-pinned images — is
+unchanged and is proven for the spoke topology by the same offline
+render (`check-eso-chart` runs it for `LAB_CLUSTER=dev` too).

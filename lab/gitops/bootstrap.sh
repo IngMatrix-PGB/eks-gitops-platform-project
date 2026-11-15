@@ -21,6 +21,12 @@
 # not yet apply any Application for aws-eks (no root-application-aws-
 # eks.yaml exists to apply, and none is created by this phase). Any
 # other PROFILE value fails closed immediately.
+#
+# Phase 2.7.4: PROFILE now defaults to the target cluster's own profile
+# (local-kind on lab-lite, unchanged; local-multicluster on the
+# lab-multicluster hub - see scripts/gitops/_lib.sh GITOPS_PROFILE).
+# local-multicluster also requires every registered spoke to be running
+# with its ESO release Available and its source Secret present.
 set -eu
 
 if [ ! -f "scripts/lab/_lib.sh" ]; then
@@ -35,13 +41,29 @@ require_repo_root
 # shellcheck source=../../scripts/gitops/_lib.sh
 . scripts/gitops/_lib.sh
 
-profile="${PROFILE:-local-kind}"
+profile="${PROFILE:-$GITOPS_PROFILE}"
 
 case "$profile" in
 
-local-kind)
+local-kind|local-multicluster)
 
 revision="${REVISION:-$GITOPS_DEFAULT_REVISION}"
+
+# Phase 2.7.4: the local profile is bound to the target cluster
+# (scripts/gitops/_lib.sh GITOPS_PROFILE) - local-multicluster only on
+# the lab-multicluster hub, local-kind everywhere else; a spoke never
+# runs the bootstrap. A mismatch would put workloads on the hub or try
+# to reach spokes from a cluster that has none, so it fails closed.
+case "${LAB_CLUSTER:-lab-lite}" in
+  dev|uat|prod)
+    echo "FAIL: the GitOps bootstrap runs on the hub (LAB_CLUSTER=hub), never on spoke '$LAB_CLUSTER'" >&2
+    exit 1
+    ;;
+esac
+if [ "$profile" != "$GITOPS_PROFILE" ]; then
+  echo "FAIL: PROFILE '$profile' does not match cluster '${LAB_CLUSTER:-lab-lite}' (expected '$GITOPS_PROFILE')" >&2
+  exit 1
+fi
 
 if ! check_cluster_identity; then
   echo "FAIL: project cluster '$PROJECT_CLUSTER_NAME' is missing or does not match its expected identity" >&2
@@ -71,7 +93,29 @@ if ! gitops_remote_revision_exists "$revision"; then
 fi
 echo "OK: remote revision '${revision}' exists"
 
-if [ "$revision" = "$GITOPS_DEFAULT_REVISION" ]; then
+if [ "$profile" = "local-multicluster" ]; then
+  # shellcheck source=../multicluster/_lib.sh
+  . lab/multicluster/_lib.sh
+  mc_apps="$(gitops_generated_apps)"
+  if [ -z "$mc_apps" ]; then
+    echo "FAIL: no spoke is registered on the hub - run 'make mc-spoke-register SPOKE=<env>' first" >&2
+    exit 1
+  fi
+  for mc_app in $mc_apps; do
+    mc_env="${mc_app#platform-smoke-}"
+    if ! lab_mc_identity "$mc_env"; then
+      echo "FAIL: spoke '$mc_env' is registered on the hub but its cluster is not running ($LAB_MC_IDENTITY_CASE)" >&2
+      exit 1
+    fi
+    if ! mc_reason="$(lab_mc_spoke_ready "$mc_env")"; then
+      echo "FAIL: $mc_reason" >&2
+      exit 1
+    fi
+    echo "OK: spoke '$mc_env' registered, running, ESO Available and source Secret present"
+  done
+fi
+
+if [ "$revision" = "$GITOPS_DEFAULT_REVISION" ] && [ "$profile" = "local-kind" ]; then
   apply_file="$GITOPS_ROOT_APP_FILE"
 else
   apply_file="$(gitops_render_root_app_for_revision "$revision")"
@@ -135,7 +179,7 @@ echo "gitops-bootstrap: aws-eks preflight complete. Stopping here by design - no
 ;;
 
 *)
-echo "FAIL: unknown PROFILE '$profile' - must be exactly 'local-kind' or 'aws-eks'" >&2
+echo "FAIL: unknown PROFILE '$profile' - must be exactly 'local-kind', 'local-multicluster' or 'aws-eks'" >&2
 exit 1
 ;;
 

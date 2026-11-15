@@ -79,7 +79,7 @@ delivery roadmap for what exists versus what is proposed.
 | 2.7.1 | `dev`/`uat`/`prod` in the local lab (`staging` → `uat`, `production` → `prod`, `dev` added, three ESO releases) | Implemented |
 | 2.7.2 | Same rename in the aws-eks profile and Terraform, `dev` added there too (offline) | Implemented |
 | 2.7.3 | `lab-multicluster`: `management` hub + `dev`/`uat` spokes (`prod` opt-in) in `kind`; spoke registration with a namespace-scoped, rotating credential | Implemented |
-| 2.7.4 | Cluster-generator `ApplicationSet` and one ESO per spoke | `PROPOSED` |
+| 2.7.4 | Cluster-generator `ApplicationSet` and one ESO per spoke; `make mc-up` brings the whole profile up | Implemented |
 | 2.8 | Workload resilience in the standard chart: PodDisruptionBudget, topology spread, graceful shutdown, HPA, NetworkPolicy | `PROPOSED` |
 | 3.4 | Multi-account hub-and-spoke Terraform: organization guardrails, threat detection and config recording, budgets, Karpenter, immutable container registry with lifecycle rules (plan-only) | `PROPOSED` |
 | 5.1 | Image CI: build, vulnerability scan, SBOM, signing, push; tag-bump promotion `dev` → `uat` → `prod` | `PROPOSED` |
@@ -222,6 +222,22 @@ for the `management` hub plus one per spoke. Every lab target accepts
 `LAB_CLUSTER=lab-lite|hub|dev|uat|prod` (default `lab-lite`). lab-lite
 and lab-multicluster never run at the same time.
 
+Phase 2.7.4 puts the workloads in the spokes: the hub's Argo CD
+generates one Application per registered spoke, and each spoke runs its
+own ESO. One command does everything, in the only order that works on
+fresh clusters, and is a no-op when run again:
+
+```bash
+make lab-destroy                              # lab-lite must be down first
+make mc-up                                    # hub + dev + uat, Argo CD, registration, ESO, source Secrets, bootstrap
+make mc-up SPOKES=dev,uat,prod                # same, with prod
+make mc-test-e2e REVISION=<branch>            # mutating end-to-end proof (starts from nothing)
+make mc-spoke-deregister SPOKE=dev            # removes dev's Application and workloads first, then its access
+make lab-mc-destroy
+```
+
+The individual steps, as Phase 2.7.3 introduced them:
+
 ```bash
 make lab-destroy                              # lab-lite must be down first
 make lab-mc-create                            # hub + dev + uat (SPOKES=dev,uat,prod adds prod)
@@ -236,8 +252,9 @@ make lab-mc-destroy
 
 Each spoke's credential can manage only the six AppProject kinds in its
 own namespace: no ClusterRole, no Secrets, no `kube-system`. Measured
-memory for the hub plus three spokes is about 3.3 GiB. See the TAD's
-"Hub-and-Spoke Registration" section.
+memory for the hub plus three spokes is about 4.4 GiB with ESO and the
+workloads. See the TAD's "Hub-and-Spoke Registration" and "Cluster
+Generator and Per-Spoke ESO" sections.
 
 ## Repository governance
 

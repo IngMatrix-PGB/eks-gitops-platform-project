@@ -5,10 +5,10 @@
 | Field | Value |
 |---|---|
 | Document | eks-gitops-platform-project Technical Architecture |
-| Version | 0.6.0 |
+| Version | 0.7.0 |
 | Status | Implementation in progress |
-| Phase | Phase 2.6.3b implemented (runtime-tested in `kind`); Phase 3.1–3.3.5 implemented as offline-validated code; roadmap realigned to the hub-and-spoke model (ADR-0015) |
-| Last updated | 2026-11-10 |
+| Phase | Phase 2.7 implemented (hub-and-spoke `lab-multicluster`, runtime-tested in `kind`); Phase 3.1–3.3.5 implemented as offline-validated code; roadmap realigned to the hub-and-spoke model (ADR-0015) |
+| Last updated | 2026-11-11 |
 
 This document is the **single, authoritative source of truth** for the
 project's architecture: scope, principles, topology, control plane,
@@ -183,8 +183,9 @@ including each cluster's own ESO), and **application workloads**
   environment simulation validates GitOps generation, RBAC, destination
   restrictions, and reconciliation logic — it does **not** prove real
   cluster-level isolation.
-- `lab-multicluster` — **implemented as of Phase 2.7.3** (clusters and
-  registration; workloads arrive in 2.7.4). One `kind` cluster for the
+- `lab-multicluster` — **implemented as of Phase 2.7.4** (clusters,
+  registration, and per-spoke workloads with their own ESO; `make mc-up`
+  brings it up end to end). One `kind` cluster for the
   `management` hub (`eks-gitops-hub`) plus one per spoke
   (`eks-gitops-dev`, `eks-gitops-uat`, and `eks-gitops-prod` opt-in via
   `SPOKES=dev,uat,prod`), each with its own kubeconfig
@@ -321,10 +322,60 @@ platform's kinds (ADR-0015):
   cache lists every namespaced kind (Pods first, Secrets too) and the
   spoke's cluster sync fails under a credential that deliberately cannot
   read them.
-- `make mc-spoke-deregister SPOKE=<env>` removes the hub Secret first,
-  then the spoke's Role, RoleBinding, and `argocd-access` namespace
-  (invalidating every token issued for that ServiceAccount). The
-  workload namespace is kept.
+- `make mc-spoke-deregister SPOKE=<env>` first removes the
+  `platform.environment` label from the hub Secret and waits for the
+  spoke's Application to be deleted (Phase 2.7.4, see below), then
+  deletes the hub Secret, then the spoke's Role, RoleBinding, and
+  `argocd-access` namespace (invalidating every token issued for that
+  ServiceAccount). The workload namespace is kept.
+
+### Cluster Generator and Per-Spoke ESO (Phase 2.7.4)
+
+The hub's Argo CD deploys `charts/standard-workload` into every
+registered spoke through the same `gitops/bootstrap` chart, under a third
+profile, `local-multicluster`, which the hub selects automatically
+(`LAB_CLUSTER=hub`; a spoke never runs the bootstrap, and a profile that
+does not match the cluster fails closed):
+
+- **Generator:** a `clusters` generator selecting hub cluster Secrets
+  that carry both the registration owner label and
+  `platform.environment` in `dev`/`uat`/`prod` (from
+  `multicluster.environments`, the selector's only source). One
+  Application `platform-smoke-<env>` per spoke, destination by cluster
+  **name** (`spoke-<env>`), `values-<env>.yaml`,
+  `CreateNamespace=false` (the namespace comes from registration with
+  Pod Security `restricted`). The hub has no such Secret, so nothing is
+  generated for it; an unlabelled Secret or one labelled `qa` generates
+  nothing.
+- **AppProject:** under this profile it allows only
+  `spoke-dev/dev`, `spoke-uat/uat`, `spoke-prod/prod`, no
+  server-addressed destination, and an empty
+  `clusterResourceWhitelist` — not even a hand-made Application in the
+  project can land on the hub. The `local-kind` and `aws-eks` renders
+  are byte-for-byte unchanged.
+- **ESO per spoke:** `scripts/eso/_lib.sh` derives its release table
+  from `LAB_CLUSTER`. lab-lite keeps its three releases (`eso-uat` owns
+  the webhook/cert-controller); a spoke runs exactly one release,
+  `eso-<env>`, which owns its own cluster's singletons; the hub runs
+  none, and every ESO script fails closed there. The workload chart's
+  kubernetes-provider `SecretStore` is unchanged — source and consumer
+  live in the same spoke.
+- **Order:** `make mc-up` runs create → Argo CD and repository Secret on
+  the hub → per spoke: register (creates the namespace), ESO, source
+  Secret → hub bootstrap (which first checks every registered spoke is
+  running with ESO Available and its source Secret present). The ESO
+  CRDs therefore exist before Argo CD's first sync, so R-13 does not
+  arise in this profile. A second `make mc-up` changes nothing; it
+  rotates a spoke's token only when it expires within 2 h.
+- **Deregistration with a live Application:** proven empirically that
+  deleting the cluster Secret first **orphans** the spoke's workloads —
+  the ApplicationSet deletes the Application within seconds and its
+  finalizer completes without deleting anything, because the
+  destination no longer exists. `spoke-deregister.sh` therefore removes
+  the label first, waits for the Application (and its cascade on the
+  spoke) to finish while the credential still works, then deletes the
+  Secret. If it happens anyway, re-registering the spoke makes Argo CD
+  adopt the orphaned objects again.
 
 ### Local Lab Argo CD Bootstrap (Phase 2.2)
 
@@ -494,6 +545,10 @@ the combination of all layers above, evaluated per cluster.
 `ClusterSecretStore` requires a separate, explicit decision, per cluster
 if ever adopted. See ADR-0004.
 
+In `lab-multicluster` (Phase 2.7.4) this holds locally: each spoke runs
+its own ESO release reading a source Secret that lives in that spoke,
+and the hub runs no ESO at all.
+
 ## Terraform and Bootstrap Boundary
 
 Terraform provisions AWS infrastructure (VPC, EKS, IAM baseline, KMS,
@@ -608,7 +663,7 @@ including the bootstrap-cycle risk (R-04) — is Phase 6 scope.
 | Item | Cost | Status |
 |---|---|---|
 | Local lab (`lab-lite` or `lab-multicluster`) | No AWS service charges — runs on local Docker | Both profiles implemented |
-| Local memory, measured (Docker view, steady state, 2026-11-11) | lab-lite with Argo CD + 3 ESO releases + 3 workloads: 2.07 GiB. lab-multicluster bare: hub 0.81, dev 0.75, uat 0.55 GiB. With Argo CD on the hub and spokes registered: hub 1.20–1.46, dev 0.71–0.72, uat 0.62–0.83, prod 0.77 GiB (≈3.3 GiB for hub + 3 spokes) | `VERIFIED` by measurement; ESO and workloads in the spokes (Phase 2.7.4) add ≈0.12 GiB per spoke, measured in lab-lite |
+| Local memory, measured (Docker view, steady state, 2026-11-11) | lab-lite with Argo CD + 3 ESO releases + 3 workloads: 2.07 GiB. lab-multicluster bare: hub 0.81, dev 0.75, uat 0.55 GiB. With Argo CD on the hub and spokes registered: hub 1.20–1.46, dev 0.71–0.72, uat 0.62–0.83, prod 0.77 GiB (≈3.3 GiB for hub + 3 spokes) | `VERIFIED` by measurement. Phase 2.7.4, with ESO and the workload in every spoke: hub 1.31–1.39 GiB, each spoke 0.99–1.17 GiB (≈4.4 GiB for hub + 3 spokes) — more than the ≈0.12 GiB per spoke lab-lite suggested, because each spoke's single ESO release also runs its own webhook and cert-controller |
 | Terraform plan-only | No AWS service charges | `PROPOSED` as a standing rule |
 | One EKS cluster, standard support, control plane only | ≈US$0.10/hour | `INFERRED` — public AWS pricing at time of writing, not re-verified live |
 | Three EKS control planes running continuously | ≈US$219/month, before nodes/NAT/storage/transfer | `INFERRED` — same caveat; why this project never runs three permanent clusters |
@@ -658,10 +713,10 @@ Implementation Status" below.
 | R-07 | AWS costs could be incurred without authorization | High if it happened | Standing rule: no `apply` without fresh, explicit, scoped authorization | Mitigated by policy, not tooling yet |
 | R-08 | TAD/code drift as implementation begins | Medium | TAD updated in the same PR as any architecture change (`AGENTS.md`) | Open |
 | R-09 | Secret and confidentiality-term scanning is pattern-based, not exhaustive | Medium | Documented explicitly in each script; never presented as a complete scanner | Accepted limitation |
-| R-10 | `lab-multicluster` may be too resource-intensive for routine local iteration | Low | Measured in Phase 2.7.3: hub + 3 spokes ≈3.3 GiB, below the 5.3–7.1 GiB first estimated; `prod` stays opt-in, the two profiles never run together, and `make lab-mc-create` refuses when Docker memory is short | Mitigated |
+| R-10 | `lab-multicluster` may be too resource-intensive for routine local iteration | Low | Measured: hub + 3 spokes ≈3.3 GiB with registration only (Phase 2.7.3) and ≈4.4 GiB with ESO and workloads (Phase 2.7.4), below the 5.3–7.1 GiB first estimated; `prod` stays opt-in, the two profiles never run together, and `make lab-mc-create` refuses when Docker memory is short (spoke budget raised to 1300 MiB from the 2.7.4 measurement) | Mitigated |
 | R-11 | The hub holds credentials for every spoke, making it the most sensitive component | High | One least-privilege identity per spoke, no credential shared across spokes, spokes never trust the hub back. Proven locally in Phase 2.7.3: each spoke's token is rejected by every other spoke (HTTP 401) and cannot read Secrets, `kube-system`, or anything outside its namespace. The hub itself remains a single point of compromise (ADR-0015) | Open — per-spoke isolation proven locally |
 | R-12 | Naming drift between ADR-0015 (`dev`/`uat`/`prod`) and the code | Low | Local lab renamed in Phase 2.7.1; aws-eks profile and Terraform renamed in Phase 2.7.2 | Closed |
-| R-13 | Fresh-cluster bootstrap ordering: Argo CD cannot sync `charts/standard-workload` until the ESO CRDs exist, while `make eso-install` needs the workload namespaces Argo CD creates. Only clusters that kept the CRDs from an earlier install bootstrap cleanly | Medium (a new engineer following the README on a fresh cluster gets three `OutOfSync`/`Missing` Applications) | Found during Phase 2.7.1 testing on a fresh `lab-lite`; worked around by applying the 25 CRDs first with the same pinned render and field manager as `lab/eso/install.sh` step 1. A CRD-only install entry point is the proposed fix, in its own phase | Open |
+| R-13 | Fresh-cluster bootstrap ordering: Argo CD cannot sync `charts/standard-workload` until the ESO CRDs exist, while `make eso-install` needs the workload namespaces Argo CD creates. Only clusters that kept the CRDs from an earlier install bootstrap cleanly | Medium (a new engineer following the README on a fresh cluster gets three `OutOfSync`/`Missing` Applications) | Found during Phase 2.7.1 testing on a fresh `lab-lite`; worked around by applying the 25 CRDs first with the same pinned render and field manager as `lab/eso/install.sh` step 1. Phase 2.7.4 regression testing showed the CRDs alone are not enough: when Argo CD syncs before the `eso-uat` webhook answers, the `ExternalSecret` is rejected (`connection refused`), the Deployment never becomes healthy without its Secret, and the automated sync operation waits on it indefinitely; recovery is to terminate the operation and sync again. A CRD-only install entry point is the proposed fix, in its own phase. Does not arise in `lab-multicluster` (Phase 2.7.4): `make mc-up` installs ESO on each spoke before the hub bootstrap | Open (lab-lite only) |
 
 ## Evidence and Implementation Status
 
@@ -688,7 +743,7 @@ Implementation Status" below.
 | Terraform/EKS/Pod Identity/Secrets Manager IaC and the `aws-eks` GitOps profile (Phase 3.1–3.3.5) | `CODE-CONFIRMED`, offline only — never applied against AWS | `terraform test` suites for `network`/`eks`/`identity`, the `aws-eks` profile render matrix, and the offline EKS identity matrix all run in `make validate` |
 | Local lab renamed to `dev`/`uat`/`prod` with `dev` added (Phase 2.7.1): three environments, three ESO scoped releases (`eso-uat` singleton owner; `eso-dev`/`eso-prod` dependents) | `PARTIALLY VERIFIED` at commit time — offline proof verified pre-merge (`make validate`: chart lint/render and pairwise isolation for all three environments, `gitops-render` exactly 3 generator elements and 3 local destinations; `make check-eso-chart`: three releases, pairwise collision-free, singleton exactly once); the runtime lifecycle suites re-run against this phase's feature branch, with results recorded in that PR's description rather than asserted here in advance | `make validate`, `make check-eso-chart`, and the runtime suites listed in the PR |
 | aws-eks profile and Terraform renamed to `dev`/`uat`/`prod` with `dev` added (Phase 2.7.2) | `CODE-CONFIRMED`, offline only - never applied against AWS | `make validate` (chart aws fixtures and Terraform-default cross-check for all three, pairwise isolation), `make gitops-render` (aws-eks exactly 3 generator elements and 3 destinations, swap and fourth-environment negatives), `make terraform-validate-offline` (identity: 16 tftest runs, including every-pair identity and IAM-isolation checks) |
-| Hub-and-spoke workloads: cluster-generator `ApplicationSet`, one ESO per spoke (ADR-0015) | `PROPOSED` | Phase 2.7.4 lifecycle tests in `lab-multicluster` |
+| Hub-and-spoke workloads: cluster-generator `ApplicationSet`, one ESO per spoke (Phase 2.7.4, ADR-0015) | `PARTIALLY VERIFIED` at commit time — results of this phase's runs recorded in its PR description rather than asserted here in advance | `make gitops-render` and `make check-eso-chart` (offline: `local-multicluster` shape, unchanged `local-kind`/`aws-eks` renders, single-release spoke ESO); `make mc-test-e2e` with `dev`/`uat` and again with `prod` (`mc-up` from nothing and as a no-op, one Application per registered spoke and none for the hub, a `qa` or unlabelled cluster Secret, ESO-synced Secret per spoke, rotation and self-heal isolation, deregistration without orphans, hub uninstall cascading to the spokes); a one-off manual check that a `values-dev.yaml` change reaches `dev` only |
 | Multi-account AWS layout with organization guardrails (ADR-0015) | `PROPOSED` | Phase 3.4 offline `terraform test` plus emulator `apply` |
 | Argo CD's production AWS identity provider | `UNKNOWN` | Explicitly undecided pending Phase 3/4 (ADR-0005) |
 | Crossplane-based self-service infrastructure | `OUT OF SCOPE` | Deferred past the MVP (ADR-0001) |
@@ -717,7 +772,7 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
     - **2.7.1 — `dev`/`uat`/`prod` in the local lab:** implemented (`staging` → `uat`, `production` → `prod` across namespaces, values files, ESO releases/source namespaces, scripts, and tests; `dev` added as a third environment with its own `values-dev.yaml`, `eso-dev` scoped release, and `eso-source-dev`; the ESO singleton dependency generalized from one dependent to every dependent; `RESTORE_REVISION`/`BASE_REVISION` added to the two tests that restore to `main`, because a rename cannot restore to a pre-merge `main`). The aws-eks profile and Terraform are untouched.
     - **2.7.2 — Rename in the aws-eks profile and Terraform:** implemented, offline only (`awsEnvironments` = `dev-aws`/`uat-aws`/`prod-aws` with `values-{dev,uat,prod}-aws.yaml`; `terraform/envs/identity` instantiates `eso_dev`/`eso_uat`/`eso_prod` with `dev_*`/`uat_*`/`prod_*` variables and outputs; environment validations in `modules/eso-identity`, `modules/tags`, and the toolchain root accept `dev`/`uat`/`prod`; the cross-environment `check` block and the identity and IAM-isolation tftests cover every pair; no Terraform state existed, so no `moved` blocks were needed). `envs/identity` still models every environment in one cluster - the per-account split is Phase 3.4.
     - **2.7.3 — Hub and spoke clusters with registration:** implemented (`LAB_CLUSTER` selects the target of every lab script; `make lab-mc-create`/`destroy`/`status` for the hub plus `dev`/`uat`, `prod` opt-in; `make mc-spoke-register`/`deregister` with a namespace-scoped credential and a 24 h rotating token; Argo CD's spoke cache limited by `resource.inclusions`; probe-based end-to-end registration test; memory measured, see "Costs and FinOps"). The lab-lite suites (`gitops-test-lifecycle`, `eso-test-lifecycle`) were re-run after the `scripts/lab/_lib.sh` change.
-    - **2.7.4 — Cluster generator and per-spoke ESO:** not started. `ApplicationSet` moved to a cluster generator keyed on spoke labels, failing closed on unknown labels; one ESO release per spoke; end-to-end lifecycle test.
+    - **2.7.4 — Cluster generator and per-spoke ESO:** implemented (`gitops/bootstrap` profile `local-multicluster`: a `clusters` generator keyed on the registration owner label and `platform.environment` in `dev`/`uat`/`prod`, destination by cluster name, `CreateNamespace=false`, an AppProject that cannot target the hub; one ESO release per spoke owning its own webhook, none on the hub; `make mc-up` for an idempotent end-to-end bring-up; deregistration that cannot orphan workloads; `make mc-test-e2e`). The lab-lite suites and the Phase 2.7.3 multicluster suites were re-run.
   - **2.8 — Workload resilience and evidence hardening:** not started. Standard chart gains PodDisruptionBudget, topology spread constraints, graceful-shutdown defaults (`preStop`, termination grace period), optional HPA, and default-deny NetworkPolicy — the optional resources ADR-0006 left `NOT IMPLEMENTED`.
 - **Phase 3 — Terraform/EKS, plan-only:**
   - **3.1 — Network and EKS IaC foundation:** implemented, offline-validated only (ADR-0011, ADR-0012).
