@@ -4,3 +4,4 @@
 #   date (UTC, YYYY-MM-DD)  environment  image reference  promoted from
 # dev is promoted from a digest signed on main ("main"); uat only from
 # dev; prod only from uat. Rows are never edited or removed.
+2026-11-16	dev	ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke@sha256:34a4c2b272dbced5f7656b8f938881a411d84061de2d6aecbfe5696f179e174d	main

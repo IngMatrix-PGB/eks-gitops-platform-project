@@ -28,6 +28,22 @@ for f in scripts/image/image.sh scripts/promote/_lib.sh scripts/promote/promote.
   mkdir -p "$work/$(dirname "$f")"; cp "$f" "$work/$f"
 done
 cd "$work"
+# The test starts from a fixed state, not from whatever the repository
+# currently runs: every overlay on the upstream image of the base
+# values.yaml, and a ledger with its header only.
+up_repo="$(awk '/^image:/{b=1; next} b && /^  repository:/{print $2; exit}' "$here/charts/standard-workload/values.yaml")"
+up_digest="$(awk '/^image:/{b=1; next} b && /^  digest:/{print $2; exit}' "$here/charts/standard-workload/values.yaml")"
+[ -n "$up_repo" ] && [ -n "$up_digest" ] || { echo "FAIL: no image block in values.yaml" >&2; exit 1; }
+for f in charts/standard-workload/values-*.yaml; do
+  awk -v r="$up_repo" -v d="$up_digest" '
+    /^image:/ {b=1; print; next}
+    b && /^  repository:/ {print "  repository: " r; next}
+    b && /^  digest:/ {print "  digest: " d; next}
+    b && !/^  / {b=0}
+    {print}' "$f" > "$root/o" && cat "$root/o" > "$f"
+done
+grep -E '^[[:space:]]*(#|$)' gitops/promotions/smoke.tsv > "$root/l" || true
+cat "$root/l" > gitops/promotions/smoke.tsv
 git init -q && git add -A && git -c user.name=t -c user.email=t@example.invalid commit -qm base
 base="$(git rev-parse HEAD)"
 
