@@ -22,7 +22,27 @@ AWS account, credential or network path to AWS is involved.
    go to `.tools/out/terraform/summary.tsv` and one log per root. Copy a
    changed result into `terraform/emulator-coverage.tsv` together with
    the gap that explains it.
-5. Stop the emulator: `make tf-emulator-down`.
+5. Check that every root still matches the table, as CI does:
+   `make tf-emulator-ci`. It fails when a root's result differs from its
+   row in `terraform/emulator-coverage.tsv`, in either direction, and
+   writes `.tools/out/terraform/summary.md`.
+6. Stop the emulator: `make tf-emulator-down`.
+
+## In CI (Phase 5.2c)
+
+`.github/workflows/terraform.yml` runs steps 1, 5 and 6 on every PR and
+push to `main` that touches `terraform/`, `scripts/terraform/`, the
+pinned tool versions, the `Makefile` or the workflow itself. It is
+read-only and has no AWS credential or OIDC token. The job summary shows
+the result per root; on failure, the end of each root's log is printed.
+
+When `make tf-emulator-ci` fails:
+
+- **A root got worse:** the change broke something the emulator covered.
+  Read that root's log and fix the code.
+- **A root got better** (a newer emulator, or an API now avoided): update
+  its row and its gaps in `terraform/emulator-coverage.tsv`.
+- **A new root:** add its row and a `terraform/emulator/<root>.tfvars`.
 
 ## Notes
 

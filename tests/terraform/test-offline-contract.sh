@@ -962,7 +962,7 @@ setup_emulator_unpinned_image() { mutate_emulator "$1" 's#@sha256:[0-9a-f]*"$#"#
 run_case "the emulator script with an image not pinned by digest is rejected" reject setup_emulator_unpinned_image
 setup_emulator_one_endpoint() { mutate_emulator "$1" 's#for s in \$EMULATOR_SERVICES; do#for s in s3; do#'; }
 run_case "the emulator script that sends only some services to the emulator is rejected" reject setup_emulator_one_endpoint
-setup_emulator_no_identity() { mutate_emulator "$1" '/^  plan|apply|coverage)/,/run_root/{/^    check_identity$/d;}'; }
+setup_emulator_no_identity() { mutate_emulator "$1" '/^  plan|apply|coverage|ci)/,/run_root/{/^    check_identity$/d;}'; }
 run_case "the emulator script that skips the identity check before plan/apply is rejected" reject setup_emulator_no_identity
 setup_emulator_backend() { mutate_emulator "$1" 's#init -backend=false#init -backend-config=bucket=x#'; }
 run_case "the emulator script with a backend configuration is rejected" reject setup_emulator_backend
@@ -1025,6 +1025,48 @@ setup_static_no_ci() {
   sed -i.bak '/run: make tf-static/d' "$1/.github/workflows/validate.yml" && rm -f "$1/.github/workflows/validate.yml.bak"
 }
 run_case "the static-analysis script not run by the validate workflow is rejected" reject setup_static_no_ci
+
+# --- Phase 5.2c (ADR-0018): check 9e, the emulator workflow, and the ci
+# comparison kept by check 9b. ------------------------------------------
+TFWF_SRC="$here/.github/workflows/terraform.yml"
+put_tfwf() {
+  cp "$TFWF_SRC" "$1/.github/workflows/terraform.yml"
+  printf '\ntf-emulator-ci:\n\t@bash scripts/terraform/emulator.sh ci\n' >> "$1/Makefile"
+}
+# $1=fixture  $2=sed expression on the copied workflow; a no-op fails loudly.
+mutate_tfwf() {
+  put_tfwf "$1"
+  f="$1/.github/workflows/terraform.yml"
+  cp "$f" "$f.orig"
+  sed -i.bak -e "$2" "$f" && rm -f "$f.bak"
+  if cmp -s "$f" "$f.orig"; then
+    echo "FAIL: workflow mutation '$2' changed nothing" >&2
+    exit 1
+  fi
+  rm -f "$f.orig"
+}
+setup_tfwf_real() { put_tfwf "$1"; }
+run_case "the real emulator workflow, with its make tf-emulator-ci target, is accepted" accept setup_tfwf_real
+setup_tfwf_write() { mutate_tfwf "$1" 's#^  contents: read$#  contents: write#'; }
+run_case "the emulator workflow with write permissions is rejected" reject setup_tfwf_write
+setup_tfwf_id_token() { mutate_tfwf "$1" 's#^  contents: read$#  contents: read\n  id-token: write#'; }
+run_case "the emulator workflow with an OIDC token is rejected" reject setup_tfwf_id_token
+setup_tfwf_job_perms() { mutate_tfwf "$1" 's#^    runs-on: ubuntu-24.04$#    runs-on: ubuntu-24.04\n    permissions:\n      contents: read#'; }
+run_case "the emulator workflow with job-level permissions is rejected" reject setup_tfwf_job_perms
+setup_tfwf_no_ci() { mutate_tfwf "$1" '/run: make tf-emulator-ci$/d'; }
+run_case "the emulator workflow that does not run make tf-emulator-ci is rejected" reject setup_tfwf_no_ci
+setup_tfwf_services() { mutate_tfwf "$1" 's#^    timeout-minutes: 30$#    timeout-minutes: 30\n    services:\n      moto:\n        image: moto#'; }
+run_case "the emulator workflow with its own service container is rejected" reject setup_tfwf_services
+setup_tfwf_endpoint() { mutate_tfwf "$1" 's#^        run: make tf-emulator-ci$#        run: TF_EMULATOR_ENDPOINT=http://localhost:9 make tf-emulator-ci#'; }
+run_case "the emulator workflow that overrides the emulator endpoint is rejected" reject setup_tfwf_endpoint
+setup_tfwf_continue() { mutate_tfwf "$1" 's#^      - name: make tf-emulator-ci$#      - name: make tf-emulator-ci\n        continue-on-error: true#'; }
+run_case "the emulator workflow that tolerates a failed comparison is rejected" reject setup_tfwf_continue
+setup_tfwf_no_make() {
+  cp "$TFWF_SRC" "$1/.github/workflows/terraform.yml"
+}
+run_case "the emulator workflow without the make tf-emulator-ci target is rejected" reject setup_tfwf_no_make
+setup_emulator_no_compare() { mutate_emulator "$1" 's#rc=0; compare_coverage || rc=1#rc=0#'; }
+run_case "the emulator script whose ci mode skips the coverage comparison is rejected" reject setup_emulator_no_compare
 
 echo ""
 echo "test-offline-contract: $pass passed, $fail failed"

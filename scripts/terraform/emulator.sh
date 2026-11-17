@@ -10,6 +10,9 @@
 #   emulator.sh apply [ROOT...]   plan, apply, re-plan (must be empty), destroy
 #   emulator.sh coverage [ROOT...] like apply, but records the result of each
 #                                 step per root in .tools/out/terraform/
+#   emulator.sh ci                coverage for every root, then fails unless
+#                                 each root's result equals its row in
+#                                 terraform/emulator-coverage.tsv (Phase 5.2c)
 #
 # ROOT defaults to every root module (scripts/lab/terraform-root-modules.sh).
 #
@@ -35,6 +38,7 @@ TF_EMULATOR_REGION="us-east-1"
 TERRAFORM_BIN="${TERRAFORM_BIN:-$(pwd)/.tools/bin/terraform}"
 OUT_DIR="$(pwd)/.tools/out/terraform"
 FIXTURES_DIR="$(pwd)/terraform/emulator"
+COVERAGE_TABLE="$(pwd)/terraform/emulator-coverage.tsv"
 # moto's fixed account, built at runtime so no 12-digit literal is
 # committed (check-forbidden-terms).
 EMULATOR_ACCOUNT="123456789$(printf '%03d' 12)"
@@ -193,6 +197,34 @@ report() {
   fi
 }
 
+# Phase 5.2c: the measured result must equal the committed table, in both
+# directions. A root that got worse is a regression; one that got better
+# needs its row (and its gaps) updated. A root without a row, or a row
+# without a root, also fails. Writes a Markdown table to summary.md.
+compare_coverage() {
+  awk -F'\t' '
+    FNR == NR { if ($0 !~ /^#/ && $1 != "root" && NF >= 5) want[$1] = "plan=" $2 " apply=" $3 " replan=" $4 " destroy=" $5; next }
+    { got = $2 " " $3 " " $4 " " $5; seen[$1] = 1
+      if (!($1 in want)) { print "FAIL: " $1 " has no row in terraform/emulator-coverage.tsv (measured: " got ")"; bad = 1 }
+      else if (want[$1] != got) { print "FAIL: " $1 " measured " got ", table says " want[$1]; bad = 1 }
+      else print "OK: " $1 " matches the table (" got ")" }
+    END { for (r in want) if (!(r in seen)) { print "FAIL: " r " is in the table but was not measured"; bad = 1 }
+          exit bad }
+  ' "$COVERAGE_TABLE" "$OUT_DIR/summary.tsv"
+}
+
+write_summary_md() {
+  {
+    echo "### Terraform against the local AWS emulator"
+    echo ""
+    echo "| Root | plan | apply | re-plan | destroy | to create |"
+    echo "|---|---|---|---|---|---|"
+    awk -F'\t' '{ for (i = 2; i <= NF; i++) sub(/^[a-z]+=/, "", $i); print "| `" $1 "` | " $2 " | " $3 " | " $4 " | " $5 " | " $6 " |" }' "$OUT_DIR/summary.tsv"
+    echo ""
+    echo "Expected results and the emulator gaps behind them: \`terraform/emulator-coverage.tsv\`."
+  } > "$OUT_DIR/summary.md"
+}
+
 cmd="${1:-}"; shift || true
 check_endpoint
 case "$cmd" in
@@ -213,7 +245,8 @@ case "$cmd" in
     docker rm -f "$TF_EMULATOR_CONTAINER" >/dev/null 2>&1 || true
     echo "OK: emulator removed"
     ;;
-  plan|apply|coverage)
+  plan|apply|coverage|ci)
+    [ "$cmd" = ci ] && [ "$#" -gt 0 ] && fail "ci always measures every root module"
     [ -x "$TERRAFORM_BIN" ] || fail "$TERRAFORM_BIN missing - run 'make tools-install'"
     check_identity
     SCRATCH="$(mktemp -d)"; SCRATCH_HOME="$SCRATCH/home"; mkdir -p "$SCRATCH_HOME"
@@ -229,7 +262,12 @@ case "$cmd" in
       if [ "$cmd" = plan ]; then run_root plan "$r" || rc=1; else run_root apply "$r" || rc=1; fi
     done
     [ "$cmd" = coverage ] && rc=0
+    if [ "$cmd" = ci ]; then
+      write_summary_md
+      rc=0; compare_coverage || rc=1
+      [ "$rc" -eq 0 ] && echo "OK: every root module matches terraform/emulator-coverage.tsv"
+    fi
     exit "$rc"
     ;;
-  *) fail "usage: emulator.sh up|down|plan|apply|coverage [ROOT...]" ;;
+  *) fail "usage: emulator.sh up|down|plan|apply|coverage [ROOT...] | ci" ;;
 esac

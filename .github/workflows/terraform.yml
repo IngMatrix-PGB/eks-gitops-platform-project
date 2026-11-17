@@ -1,0 +1,86 @@
+name: terraform
+
+# Phase 5.2c (ADR-0018): every Terraform root module runs against the
+# local AWS emulator - plan, apply, a re-plan that must be empty, destroy -
+# and the result of each root must equal its row in
+# terraform/emulator-coverage.tsv. A root that gets worse fails; one that
+# gets better fails until its row is updated.
+#
+# No AWS account, credential or OIDC token: permissions are read-only, the
+# emulator is a container bound to 127.0.0.1 on the runner, started by the
+# same make target a developer uses (the image digest lives only in
+# scripts/terraform/emulator.sh), and the generated provider refuses any
+# account but the emulator's. check-terraform-offline (check 9e) keeps
+# this workflow's shape.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - "scripts/terraform/**"
+      - "scripts/lab/terraform-root-modules.sh"
+      - "scripts/lab/tool-versions.txt"
+      - "Makefile"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - "scripts/terraform/**"
+      - "scripts/lab/terraform-root-modules.sh"
+      - "scripts/lab/tool-versions.txt"
+      - "Makefile"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  emulator:
+    name: emulator
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        # Same immutable pin as validate.yml (actions/checkout v7.0.1).
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: make tools-install
+        # Checksum-verified Terraform from scripts/lab/tool-versions.txt.
+        run: make tools-install
+
+      - name: make tf-emulator-up
+        # moto, pinned by digest, published on 127.0.0.1 only; fails unless
+        # the endpoint answers as the emulator with the emulator's account.
+        run: make tf-emulator-up
+
+      - name: make tf-emulator-ci
+        run: make tf-emulator-ci
+
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f .tools/out/terraform/summary.md ]; then
+            cat .tools/out/terraform/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Logs of each root
+        if: failure()
+        run: |
+          for f in .tools/out/terraform/*.log; do
+            [ -f "$f" ] || continue
+            echo "::group::$f"
+            tail -n 60 "$f"
+            echo "::endgroup::"
+          done
+
+      - name: make tf-emulator-down
+        if: always()
+        run: make tf-emulator-down

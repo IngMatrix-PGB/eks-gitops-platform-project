@@ -386,10 +386,11 @@ if [ -f "$emulator_script" ]; then
   em_need "AWS config file disabled" 'AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null'
   em_need "provider pinned to the emulator account" 'allowed_account_ids[[:space:]]+= \[\\"\$EMULATOR_ACCOUNT\\"\]'
   em_need "every service endpoint sent to the emulator" 'for s in \$EMULATOR_SERVICES; do printf .* "\$TF_EMULATOR_ENDPOINT"; done'
+  em_need "ci compares every root with terraform/emulator-coverage.tsv" 'rc=0; compare_coverage \|\| rc=1'
   if grep -Eq 'backend-config|backend "' "$emulator_script"; then em_missing="$em_missing
   - no backend configuration (state stays in the scratch directory)"; fi
   # The identity check must run before any root in the plan/apply branch.
-  if ! awk '/^  plan\|apply\|coverage\)/{b=1} b && /check_identity/{ok=1} b && /run_root/{print (ok ? "ok" : "late"); exit}' "$emulator_script" | grep -qx ok; then
+  if ! awk '/^  plan\|apply\|coverage\|ci\)/{b=1} b && /check_identity/{ok=1} b && /run_root/{print (ok ? "ok" : "late"); exit}' "$emulator_script" | grep -qx ok; then
     em_missing="$em_missing
   - emulator identity checked before any plan/apply"
   fi
@@ -423,6 +424,34 @@ if [ -n "$gen_provider_hits" ]; then
   printf '%s\n' "$gen_provider_hits" >&2
 else
   ok "no script, Makefile or workflow other than $emulator_script writes a provider \"aws\" block"
+fi
+
+# --- 9e. The emulator workflow keeps its shape (Phase 5.2c, ADR-0018):
+# read-only, the emulator started by the same make target a developer
+# uses (so the digest and the 127.0.0.1 binding live only in the emulator
+# script), the coverage comparison, and no way around either. ------------
+tf_wf=".github/workflows/terraform.yml"
+if [ -f "$tf_wf" ]; then
+  wf_missing=""
+  wf_perms="$(awk '/^permissions:/{f=1; next} f && /^[^ ]/{exit} f && NF' "$tf_wf")"
+  [ "$(printf '%s' "$wf_perms" | sed 's/[[:space:]]//g')" = "contents:read" ] || wf_missing="$wf_missing
+  - workflow permissions exactly 'contents: read'"
+  grep -Eq '^    permissions:' "$tf_wf" && wf_missing="$wf_missing
+  - no job-level permissions"
+  grep -Eq '^[[:space:]]+run: make tf-emulator-up$' "$tf_wf" || wf_missing="$wf_missing
+  - starts the emulator with make tf-emulator-up"
+  grep -Eq '^[[:space:]]+run: make tf-emulator-ci$' "$tf_wf" || wf_missing="$wf_missing
+  - runs make tf-emulator-ci"
+  grep -Eq '^[[:space:]]+services:|docker run|TF_EMULATOR_(ENDPOINT|IMAGE|STEP_TIMEOUT)|continue-on-error' "$tf_wf" && wf_missing="$wf_missing
+  - no service container, docker run, emulator override or continue-on-error"
+  grep -Eq '^tf-emulator-ci:' Makefile 2>/dev/null && grep -Eq "^	@bash $emulator_script ci\$" Makefile \
+    || wf_missing="$wf_missing
+  - Makefile target tf-emulator-ci runs $emulator_script ci"
+  if [ -n "$wf_missing" ]; then
+    bad "$tf_wf lost part of its shape:$wf_missing"
+  else
+    ok "$tf_wf is read-only and runs the emulator only through make tf-emulator-up/tf-emulator-ci"
+  fi
 fi
 
 # --- 9d. Static analysis keeps its gate (Phase 5.2b, ADR-0019): the
