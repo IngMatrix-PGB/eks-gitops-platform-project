@@ -6,3 +6,4 @@
 # dev; prod only from uat. Rows are never edited or removed.
 2026-11-16	dev	ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke@sha256:34a4c2b272dbced5f7656b8f938881a411d84061de2d6aecbfe5696f179e174d	main
 2026-11-17	uat	ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke@sha256:34a4c2b272dbced5f7656b8f938881a411d84061de2d6aecbfe5696f179e174d	dev
+2026-11-17	prod	ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke@sha256:34a4c2b272dbced5f7656b8f938881a411d84061de2d6aecbfe5696f179e174d	uat
