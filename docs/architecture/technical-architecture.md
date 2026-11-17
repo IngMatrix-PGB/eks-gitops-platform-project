@@ -5,10 +5,10 @@
 | Field | Value |
 |---|---|
 | Document | eks-gitops-platform-project Technical Architecture |
-| Version | 0.23.0 |
+| Version | 0.24.0 |
 | Status | Implementation in progress |
 | Phase | Phase 2.7 implemented (hub-and-spoke `lab-multicluster`, runtime-tested in `kind`); Phase 2.8 implemented (workload resilience and HPA, runtime-tested in `kind`); Phase 3.4.1–3.4.4b implemented as offline-tested code (AWS organization, guardrails, account baseline, per-environment EKS, Karpenter, ECR, per-spoke ESO identity, hub-to-spoke Argo CD identity, aws-eks GitOps profile in hub-and-spoke form); Phase 3.1–3.3.5 implemented as offline-validated code; roadmap realigned to the hub-and-spoke model (ADR-0015) |
-| Last updated | 2026-11-13 |
+| Last updated | 2026-11-17 |
 
 This document is the **single, authoritative source of truth** for the
 project's architecture: scope, principles, topology, control plane,
@@ -776,6 +776,7 @@ Implementation Status" below.
 | Image supply chain: push, keyless signature, SBOM attestation, provenance (ADR-0017, Phase 5.1b) | `CODE-CONFIRMED` and run on `main`: published, signed and verified anonymously (package public) | multi-platform index built locally and both variants started; `make image-test-verify` (fake cosign pins the exact identity, the verified references and the fail-closed paths); `check-supply-chain` with twelve more mutation checks caught; `check-terraform-offline` allows `id-token: write` only in `image.yml` |
 | Image promotion dev → uat → prod (ADR-0017, Phase 5.1c) | `CODE-CONFIRMED` and run: dev, uat and prod promoted in order to the image signed on `main` (5.1c-2..4) | `make promote-test` (full dev → uat → prod flow, refusals and six hand-edit cases in a scratch repository with fake cosign); `make check-promotion`; mutation checks caught; lab regression of the refactored workload tests on lab-lite with podinfo (see the 5.1c-1 PR) |
 | Terraform against a local AWS emulator (ADR-0018, Phase 5.2a) | `CODE-CONFIRMED` and run locally against moto; not in CI yet (5.2c) | `make tf-emulator-coverage` on all ten roots (`terraform/emulator-coverage.tsv`); `make check-terraform-offline-regression` (one rejected mutation per emulator guard); runtime refusals of a remote endpoint, a non-emulator loopback server, and an account other than the emulator's |
+| Terraform static analysis (ADR-0019, Phase 5.2b) | `CODE-CONFIRMED`, run locally and in the `validate` workflow | `make tf-static`: `trivy config` on the tracked Terraform, embedded rules of the pinned trivy, HIGH/CRITICAL gated, four dated single-file exceptions in `terraform/.trivyignore.yaml`; runtime mutations (expired, removed, glob, stale, short statement) fail; `check-terraform-offline` check 9d with seven rejected mutations; `terraform test` rejects open, wide, empty and IPv6 EKS public access lists |
 | Argo CD's production AWS identity provider | `UNKNOWN` | Explicitly undecided pending Phase 3/4 (ADR-0005) |
 | Crossplane-based self-service infrastructure | `OUT OF SCOPE` | Deferred past the MVP (ADR-0001) |
 | Progressive Delivery as primary production gate | `OUT OF SCOPE` | Not the design (see "Application Delivery and Promotion") |
@@ -852,9 +853,9 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
     - **5.1c-3 — uat promotion:** implemented. uat and uat-aws take dev's image, recorded as `uat ← dev`.
     - **5.1c-4 — prod promotion:** implemented. prod and prod-aws take uat's image, recorded as `prod ← uat`; every environment now runs the first-party signed image.
     - **5.1c-5 — retire podinfo:** implemented. The base default image is the first-party one, the chart passes `UI_MESSAGE`/`SHUTDOWN_TIMEOUT` (the image still reads the old names as fallbacks until its next change), the overlay messages say `platform smoke <env>`, and no test or check names podinfo.
-  - **5.2 — Terraform CI (ADR-0018):** `terraform plan` and static analysis on every PR; `apply` of the supported resource types against a local AWS emulator, so infrastructure changes are applied — not only validated — before any real account is involved.
+  - **5.2 — Terraform CI (ADR-0018, ADR-0019):** `terraform plan` and static analysis on every PR; `apply` of the supported resource types against a local AWS emulator, so infrastructure changes are applied — not only validated — before any real account is involved.
     - **5.2a — Local emulator:** implemented. `scripts/terraform/emulator.sh` runs each root module in a scratch copy against moto (pinned by digest, loopback only) with a generated provider pinned to the emulator's account: plan, apply, a re-plan that must be empty, destroy. Measured coverage (`terraform/emulator-coverage.tsv`): full cycle for the toolchain root, network and registry; bootstrap applies with tag drift from an emulator gap; account-baseline, identity, org and security plan but stop at APIs moto lacks; eks does not plan (missing SSM AMI parameter). `check-terraform-offline` checks 9b/9c keep every guard.
-    - **5.2b — Static analysis:** not started. `trivy config` on `terraform/`, failing on HIGH/CRITICAL, with dated ignores.
+    - **5.2b — Static analysis:** implemented (ADR-0019). `make tf-static` runs `trivy config` with the pinned binary's embedded rules on a copy of the tracked Terraform, in the `validate` workflow. HIGH/CRITICAL fail unless `terraform/.trivyignore.yaml` accepts them for one file, with an expiry and a statement; expired or stale exceptions fail. Four accepted (EKS public endpoint, node egress, regional Config aggregator, state bucket on the AWS managed key); `eks_public_access_cidrs` gained the validation its description promised. MEDIUM/LOW are reported, not gated.
     - **5.2c — CI:** not started. A path-filtered workflow with the emulator as a service container.
   - **5.3 — Branch protection:** not started. Apply the ADR-0009 ruleset, now available because the repository is public (requires explicit authorization).
 - **Phase 6 — Hardening and operations:**

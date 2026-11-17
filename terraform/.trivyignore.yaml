@@ -1,0 +1,31 @@
+# Phase 5.2b (ADR-0019): HIGH/CRITICAL findings of `trivy config` on
+# terraform/ that are accepted. `make tf-static` fails on any other one.
+#
+# Fixed layout, checked by scripts/terraform/static-analysis.sh and
+# check-terraform-offline (check 9d):
+#   - id: the trivy check ID
+#   - paths: exact files, as trivy names them (no globs)
+#   - expired_at: YYYY-MM-DD; after that date the scan fails again
+#   - statement: why it does not apply here, in one line (20+ chars)
+# An entry whose finding disappears fails the scan too (stale exception).
+misconfigurations:
+  - id: AWS-0040
+    paths:
+      - "terraform-aws-modules/eks/aws/main.tf"
+    expired_at: 2027-05-17
+    statement: "EKS public endpoint is required for the operator and CI before a VPN exists; it is limited to var.eks_public_access_cidrs, whose validation rejects open ranges and anything wider than /16, and private access is on (ADR-0012)"
+  - id: AWS-0104
+    paths:
+      - "terraform-aws-modules/eks/aws/node_groups.tf"
+    expired_at: 2027-05-17
+    statement: "Node security group egress to 0.0.0.0/0 comes from the pinned upstream EKS module; nodes reach ECR, EKS, STS and the registries through the NAT gateway, and there are no VPC endpoints to narrow it to yet (ADR-0012)"
+  - id: AWS-0019
+    paths:
+      - "envs/security/main.tf"
+    expired_at: 2027-05-17
+    statement: "Config aggregator collects only var.aggregated_regions on purpose: the enforce-region SCP denies every other region (ADR-0016), so all_regions would add only regions that can hold no resources"
+  - id: AWS-0132
+    paths:
+      - "bootstrap/main.tf"
+    expired_at: 2027-05-17
+    statement: "State bucket uses SSE-KMS with the AWS managed key; a customer managed key adds value only with a key policy limited to the Terraform runner role, which does not exist until the real-AWS phase (ADR-0011)"

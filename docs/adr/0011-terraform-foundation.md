@@ -205,3 +205,10 @@ on loopback, with a provider block it generates in a scratch copy.
 and 9c). Everything else here is unchanged: no backend values, no
 committed provider block, no AWS credentials or OIDC in any workflow,
 and no real AWS resource without separate authorization.
+
+## Amendment (Phase 5.2b, 2026-11-17): static analysis
+
+[ADR-0019](0019-terraform-static-analysis.md) adds `trivy config` on the
+tracked Terraform to the `validate` workflow (`make tf-static`). It runs
+no Terraform command and reads no AWS API. `check-terraform-offline`
+check 9d keeps its threshold, exceptions and wiring.

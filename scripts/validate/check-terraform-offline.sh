@@ -425,6 +425,40 @@ else
   ok "no script, Makefile or workflow other than $emulator_script writes a provider \"aws\" block"
 fi
 
+# --- 9d. Static analysis keeps its gate (Phase 5.2b, ADR-0019): the
+# threshold, the failing exit code, the exception file, the embedded
+# (pinned) checks only, Terraform-only scope, the stale-exception check,
+# and the wiring into `make tf-static` and the validate workflow. -------
+static_script="scripts/terraform/static-analysis.sh"
+if [ -f "$static_script" ]; then
+  st_missing=""
+  st_need() { grep -Eq -- "$2" "$static_script" || st_missing="$st_missing
+  - $1"; }
+  st_need "threshold HIGH,CRITICAL" '^TF_STATIC_SEVERITY="HIGH,CRITICAL"$'
+  st_need "exception file terraform/.trivyignore.yaml" '^TF_IGNORE_FILE="terraform/\.trivyignore\.yaml"$'
+  st_need "gate fails with --exit-code 1 at the threshold" '--exit-code 1 --severity "\$TF_STATIC_SEVERITY" --ignorefile '
+  st_need "embedded checks only (--skip-check-update)" '--skip-check-update'
+  st_need "Terraform scanner on the tracked files" '--misconfig-scanners terraform'
+  st_need "scratch copy of git-tracked files" 'git ls-files -z terraform'
+  st_need "stale exceptions fail" 'holds stale exceptions'
+  st_need "expired exceptions fail" 'expired on '
+  grep -Eq -- '--severity (LOW|MEDIUM|UNKNOWN)|--exit-code 0' "$static_script" && st_missing="$st_missing
+  - no lower threshold and no --exit-code 0 on the gate"
+  grep -Eq '^tf-static:' Makefile 2>/dev/null && grep -Eq "^	@bash $static_script\$" Makefile \
+    || st_missing="$st_missing
+  - Makefile target tf-static runs $static_script"
+  if [ -f .github/workflows/validate.yml ]; then
+    grep -Eq '^[[:space:]]+run: make tf-static$' .github/workflows/validate.yml \
+      || st_missing="$st_missing
+  - .github/workflows/validate.yml runs make tf-static"
+  fi
+  if [ -n "$st_missing" ]; then
+    bad "$static_script lost part of its gate:$st_missing"
+  else
+    ok "$static_script keeps its gate (HIGH,CRITICAL, exit 1, dated exceptions, no stale ones, pinned checks, wired into make and validate)"
+  fi
+fi
+
 # --- 10. Every offline `terraform init` invocation in Makefile/*.sh
 # uses -backend=false. --------------------------------------------------
 init_missing_backend_false=""
