@@ -146,6 +146,11 @@ fi
 # --- 3. scale up under load; 4. Argo CD does not fight ---
 # Phase 5.1c-1: the load generators run the pinned test client image,
 # never the workload's own image (which may have no shell).
+# Phase 5.1c-4: each curl fetches 500 URLs over one kept-alive connection.
+# One process per request spent the generator's CPU limit on process
+# start-up; against the cheaper first-party image that held the HPA at
+# exactly its 70% target, inside the 10% tolerance, so it never scaled
+# within the window.
 for n in 1 2 3 4 5; do
   cat <<EOF | pkubectl apply -f - >/dev/null
 apiVersion: v1
@@ -167,7 +172,7 @@ spec:
         - |
           end=\$((\$(date +%s)+420))
           for w in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            ( while [ \$(date +%s) -lt \$end ]; do curl -s -o /dev/null --max-time 2 $svc/api/info; done ) &
+            ( while [ \$(date +%s) -lt \$end ]; do curl -s -o /dev/null --max-time 30 "$svc/api/info?n=[1-500]"; done ) &
           done
           wait
       resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { cpu: 300m, memory: 64Mi } }
