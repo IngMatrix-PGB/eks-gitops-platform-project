@@ -88,13 +88,12 @@ spec:
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           env:
-            - name: PODINFO_UI_MESSAGE
+            - name: UI_MESSAGE
               valueFrom:
                 configMapKeyRef:
                   name: {{ include "standard-workload.fullname" . }}-config
                   key: ui-message
-            # podinfo reads its flags from PODINFO_* environment variables.
-            - name: PODINFO_SERVER_SHUTDOWN_TIMEOUT
+            - name: SHUTDOWN_TIMEOUT
               value: "{{ $gs.serverShutdownTimeoutSeconds }}s"
           lifecycle:
             preStop:

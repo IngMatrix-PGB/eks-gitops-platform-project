@@ -3,8 +3,8 @@
 # distinct image of our repository that an overlay points at must verify
 # (scripts/image/image.sh verify: keyless signature by the main image
 # workflow + a CycloneDX SBOM attestation per platform). Images of other
-# repositories (podinfo during the transition) are reported, not
-# verified - check-promotion keeps them out of the promotion ledger.
+# repositories are reported, not verified - check-promotion keeps them out
+# of the promotion ledger.
 set -eu
 
 [ -f scripts/promote/_lib.sh ] || { echo "FAIL: run from the repository root" >&2; exit 1; }

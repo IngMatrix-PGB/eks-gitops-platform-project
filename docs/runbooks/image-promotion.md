@@ -64,5 +64,5 @@ The ledger keeps both rows; that is the audit trail.
 `apps/smoke` is distroless and has no shell. The lab tests send traffic
 from the pinned test client image (`scripts/workload/_lib.sh`) and probe
 the workload's network from an ephemeral container in the workload pod
-(`kubectl debug --profile=restricted`), so they work the same with
-podinfo and with smoke. `check-supply-chain` keeps it that way.
+(`kubectl debug --profile=restricted`), so they never depend on a shell
+in the workload image. `check-supply-chain` keeps it that way.

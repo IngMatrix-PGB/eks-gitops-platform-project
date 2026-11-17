@@ -21,7 +21,7 @@ resources:
     memory: 64Mi
 
 configMap:
-  uiMessage: "podinfo uat — phase 2.4 verified"
+  uiMessage: "platform smoke uat"
 
 # Phase 2.6.2: enables the read-only Secret mount for uat only.
 externalSecret:

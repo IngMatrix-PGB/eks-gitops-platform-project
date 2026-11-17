@@ -307,9 +307,9 @@ for ns in dev uat prod; do
   echo "OK: namespace '$ns' Deployment ($avail/$desired Available), runs its overlay's image $image, UID/GID 65532/65532, Service/ServiceAccount/ConfigMap present"
 done
 
-expected_dev_message="podinfo dev — phase 2.7.1"
-expected_uat_message="podinfo uat — phase 2.4 verified"
-expected_prod_message="podinfo prod — phase 2.4"
+expected_dev_message="platform smoke dev"
+expected_uat_message="platform smoke uat"
+expected_prod_message="platform smoke prod"
 gitops_check_workload_endpoint dev "platform-smoke-dev-standard-workload" "$expected_dev_message"
 gitops_check_workload_endpoint uat "platform-smoke-uat-standard-workload" "$expected_uat_message"
 gitops_check_workload_endpoint prod "platform-smoke-prod-standard-workload" "$expected_prod_message"

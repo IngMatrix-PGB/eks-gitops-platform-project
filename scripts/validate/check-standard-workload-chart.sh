@@ -417,8 +417,8 @@ run_negative_case_aws() {
   fixture="$root/aws-negative-$$.yaml"
   cat > "$fixture" <<FIXEOF
 image:
-  repository: ghcr.io/stefanprodan/podinfo
-  digest: "sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da"
+  repository: ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke
+  digest: "sha256:34a4c2b272dbced5f7656b8f938881a411d84061de2d6aecbfe5696f179e174d"
 replicaCount: 1
 resources:
   requests: { cpu: 25m, memory: 32Mi }
@@ -471,15 +471,15 @@ FIXEOF
 }
 
 run_negative_case "malformed digest" 'image:
-  repository: ghcr.io/stefanprodan/podinfo
+  repository: ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke
   digest: "sha256:zzzz"'
 
 run_negative_case "empty digest" 'image:
-  repository: ghcr.io/stefanprodan/podinfo
+  repository: ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke
   digest: ""'
 
 run_negative_case "null digest" 'image:
-  repository: ghcr.io/stefanprodan/podinfo
+  repository: ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke
   digest: null'
 
 run_negative_case "missing repository" 'image:
@@ -589,8 +589,8 @@ aws_fixture() {
   env_name="$1"; store="$2"; region="$3"; secret_name="$4"
   cat <<EOF
 image:
-  repository: ghcr.io/stefanprodan/podinfo
-  digest: "sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da"
+  repository: ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke
+  digest: "sha256:34a4c2b272dbced5f7656b8f938881a411d84061de2d6aecbfe5696f179e174d"
 replicaCount: 1
 resources:
   requests: { cpu: 25m, memory: 32Mi }
@@ -1169,8 +1169,8 @@ for render in "$render_dev" "$render_uat" "$render_prod" "$ov_dev" "$ov_uat" "$o
   dep="$(yaml_doc "$render" Deployment)"
   printf '%s\n' "$dep" | grep -qE '^\s+sleep:$' && printf '%s\n' "$dep" | grep -qE '^\s+seconds: 5$' \
     || { echo "FAIL: $render Deployment lacks the native preStop sleep (5s)" >&2; fail=1; }
-  printf '%s\n' "$dep" | grep -A1 'name: PODINFO_SERVER_SHUTDOWN_TIMEOUT' | grep -q 'value: "5s"' \
-    || { echo "FAIL: $render Deployment lacks PODINFO_SERVER_SHUTDOWN_TIMEOUT=5s" >&2; fail=1; }
+  printf '%s\n' "$dep" | grep -A1 'name: SHUTDOWN_TIMEOUT' | grep -q 'value: "5s"' \
+    || { echo "FAIL: $render Deployment lacks SHUTDOWN_TIMEOUT=5s" >&2; fail=1; }
   if printf '%s\n' "$dep" | grep -qE 'command:|- (sh|/bin/sh|bash)$'; then
     echo "FAIL: $render uses an exec/shell lifecycle hook - only the native sleep action is allowed" >&2; fail=1
   fi

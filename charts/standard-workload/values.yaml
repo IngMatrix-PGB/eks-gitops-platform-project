@@ -5,8 +5,8 @@
 # and docs/adr/0008-standard-workload-before-sso.md.
 
 image:
-  repository: ghcr.io/stefanprodan/podinfo
-  digest: "sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da"
+  repository: ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke
+  digest: "sha256:34a4c2b272dbced5f7656b8f938881a411d84061de2d6aecbfe5696f179e174d"
 
 replicaCount: 1
 revisionHistoryLimit: 3
@@ -67,7 +67,7 @@ volumes:
   tmpEmptyDir: true
 
 configMap:
-  uiMessage: "podinfo — override per environment"
+  uiMessage: "platform smoke — override per environment"
 
 # Phase 2.6.2: an externally-managed Secret this chart never creates,
 # read-only-mounted for the workload to consume. Disabled by default -

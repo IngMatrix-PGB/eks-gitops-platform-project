@@ -156,7 +156,7 @@ if [ "${RESILIENCE_BASELINE:-0}" = "1" ] && [ "${LAB_CLUSTER:-lab-lite}" = "lab-
   . scripts/gitops/_lib.sh
   gitops_pause_automated_sync "$app"
   pkubectl -n "$ns" patch deployment "$dep" --type=json -p '[{"op":"remove","path":"/spec/template/spec/containers/0/lifecycle"},{"op":"replace","path":"/spec/template/spec/terminationGracePeriodSeconds","value":30}]' >/dev/null
-  pkubectl -n "$ns" set env "deployment/$dep" PODINFO_SERVER_SHUTDOWN_TIMEOUT- >/dev/null
+  pkubectl -n "$ns" set env "deployment/$dep" SHUTDOWN_TIMEOUT- >/dev/null
   pkubectl -n "$ns" rollout status "deployment/$dep" --timeout=180s >/dev/null
   wait_ready2 180 || true
   read -r btotal bbad <<EOF

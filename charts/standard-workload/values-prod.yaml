@@ -20,7 +20,7 @@ resources:
     memory: 128Mi
 
 configMap:
-  uiMessage: "podinfo prod — phase 2.4"
+  uiMessage: "platform smoke prod"
 
 # Phase 2.6.2: enables the read-only Secret mount for prod only -
 # fully separate SecretStore/source-namespace/source-Secret/auth
