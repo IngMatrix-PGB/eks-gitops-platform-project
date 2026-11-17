@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 
 .PHONY: help validate check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked \
-	check-standard-workload-chart check-spoke-access check-supply-chain check-tool-platforms-regression \
+	check-standard-workload-chart check-spoke-access check-supply-chain check-tool-platforms-regression check-repo-governance check-repo-governance-regression governance-diff \
 	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle lab-test-eks-identity-offline eks-test-spoke-secret image-build image-scan image-sbom image-all image-build-multi image-publish image-scan-remote image-sign image-verify image-test-verify promote promotion-verify check-promotion promote-test \
 	argocd-chart-fetch argocd-render argocd-install argocd-status argocd-uninstall argocd-port-forward \
 	argocd-test-runtime-health argocd-test-lifecycle \
@@ -27,7 +27,7 @@ help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-supply-chain check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -61,6 +61,15 @@ check-spoke-access: ## Phase 3.4.4a: the shared spoke Role (platform/spoke-acces
 
 check-supply-chain: ## Phase 5.1a: SHA-pinned GitHub-owned actions only, no write permissions, digest-pinned non-root Dockerfiles, scan threshold, dated .trivyignore, Dependabot coverage
 	@bash scripts/validate/check-supply-chain.sh
+
+check-repo-governance: ## Phase 5.3a: offline - the main ruleset file (no bypass, strict checks pinned to GitHub Actions) and that every required check is one job in a workflow that runs on every PR
+	@bash scripts/validate/check-repo-governance.sh
+
+check-repo-governance-regression: ## Regression-test check-repo-governance.sh and scripts/ci/changed-paths.sh against throwaway fixtures
+	@sh tests/governance/test-repo-governance.sh
+
+governance-diff: ## Phase 5.3: read-only - compare the live main ruleset on GitHub with .github/rulesets/main.json (needs gh as a repo admin)
+	@bash scripts/governance/ruleset.sh diff
 
 check-tool-platforms-regression: ## Regression-test the darwin-arm64/linux-amd64 platform support in install-tools.sh and check-prerequisites.sh
 	@sh tests/lab/test-tool-platforms.sh
