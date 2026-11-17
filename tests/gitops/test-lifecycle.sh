@@ -39,6 +39,8 @@ require_repo_root
 . scripts/eso/_lib.sh
 # shellcheck source=../../scripts/gitops/_lib.sh
 . scripts/gitops/_lib.sh
+# shellcheck source=../../scripts/promote/_lib.sh
+. scripts/promote/_lib.sh
 
 revision="${REVISION:?REVISION is required, e.g. REVISION=feat/phase-2.3-gitops-bootstrap}"
 
@@ -271,11 +273,19 @@ for ns in dev uat prod; do
     echo "FAIL: namespace '$ns' Deployment/$dep availableReplicas='${avail:-<absent>}', expected '$desired'" >&2
     exit 1
   fi
-  digest="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
-  case "$digest" in
-    *"@sha256:ec73780a8425f59ea49f5bc8cdff0d598805a224fbaa1f86c67a244f250fa9da") : ;;
-    *) echo "FAIL: namespace '$ns' Deployment/$dep image is not the pinned digest: $digest" >&2; exit 1 ;;
+  # Phase 5.1c-2: each environment runs its own promoted image, so the
+  # expected reference is the one its overlay pins in this checkout (run
+  # the test from the same commit as REVISION).
+  image="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+  expected_image="$(overlay_image_ref "$PROMOTE_CHART_DIR/values-$ns.yaml")"
+  case "$expected_image" in
+    *@sha256:????????????????????????????????????????????????????????????????) : ;;
+    *) echo "FAIL: overlay values-$ns.yaml does not pin an image by digest: '$expected_image'" >&2; exit 1 ;;
   esac
+  if [ "$image" != "$expected_image" ]; then
+    echo "FAIL: namespace '$ns' Deployment/$dep image '$image', expected the overlay's '$expected_image'" >&2
+    exit 1
+  fi
   uid="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.template.spec.securityContext.runAsUser}' 2>/dev/null || true)"
   gid="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.template.spec.securityContext.runAsGroup}' 2>/dev/null || true)"
   if [ "$uid" != "65532" ] || [ "$gid" != "65532" ]; then
@@ -294,7 +304,7 @@ for ns in dev uat prod; do
     echo "FAIL: namespace '$ns' ConfigMap/${dep}-config absent" >&2
     exit 1
   fi
-  echo "OK: namespace '$ns' Deployment ($avail/$desired Available), digest-pinned, UID/GID 65532/65532, Service/ServiceAccount/ConfigMap present"
+  echo "OK: namespace '$ns' Deployment ($avail/$desired Available), runs its overlay's image $image, UID/GID 65532/65532, Service/ServiceAccount/ConfigMap present"
 done
 
 expected_dev_message="podinfo dev — phase 2.7.1"

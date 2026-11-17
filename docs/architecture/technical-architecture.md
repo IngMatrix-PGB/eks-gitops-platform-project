@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Document | eks-gitops-platform-project Technical Architecture |
-| Version | 0.18.0 |
+| Version | 0.19.0 |
 | Status | Implementation in progress |
 | Phase | Phase 2.7 implemented (hub-and-spoke `lab-multicluster`, runtime-tested in `kind`); Phase 2.8 implemented (workload resilience and HPA, runtime-tested in `kind`); Phase 3.4.1–3.4.4b implemented as offline-tested code (AWS organization, guardrails, account baseline, per-environment EKS, Karpenter, ECR, per-spoke ESO identity, hub-to-spoke Argo CD identity, aws-eks GitOps profile in hub-and-spoke form); Phase 3.1–3.3.5 implemented as offline-validated code; roadmap realigned to the hub-and-spoke model (ADR-0015) |
 | Last updated | 2026-11-13 |
@@ -845,9 +845,10 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
       - Not in the repo yet: the Argo CD install on the EKS hub (its `resource.inclusions` and Pod Identity service accounts). Real registration is Phase 6.4.
   - **5.1 — Image CI and promotion (ADR-0017):** build, vulnerability scan with a failing threshold, SBOM, signature, and push to the registry; promotion `dev` → `uat` → `prod` as PRs that bump an immutable image reference.
     - **5.1a — Build, scan, SBOM:** implemented. `apps/smoke` (first-party Go service honoring the chart contract), digest-pinned multi-stage Dockerfile with tests in the build stage, Trivy failing on fixable HIGH/CRITICAL vulnerabilities and HIGH/CRITICAL Dockerfile misconfigurations, CycloneDX SBOM by syft, `.github/workflows/image.yml` on PRs and `main` (read-only token, nothing pushed). `check-supply-chain` guards the static rules.
-    - **5.1b — Push and sign:** implemented as code; first real run on the first push to `main` that changes the image, then the package is made public by hand (`docs/runbooks/image-publish.md`). linux/amd64 + linux/arm64 index cross-compiled with pinned BuildKit; `publish` job (main push only, after the PR job) pushes to GHCR, re-scans every platform, signs with cosign keyless, attests a CycloneDX SBOM per platform and SLSA provenance, and verifies against the exact main-workflow identity.
+    - **5.1b — Push and sign:** implemented; the first publish ran on `main` and the package is public (`docs/runbooks/image-publish.md`). linux/amd64 + linux/arm64 index cross-compiled with pinned BuildKit; `publish` job (main push only, after the PR job) pushes to GHCR, re-scans every platform, signs with cosign keyless, attests a CycloneDX SBOM per platform and SLSA provenance, and verifies against the exact main-workflow identity.
     - **5.1c-1 — Promotion tooling:** implemented. Per-overlay `image` blocks (still podinfo); `make promote` (dev ← signed digest from main, uat ← dev, prod ← uat; verifies first; edits two overlays and appends one row to the append-only ledger `gitops/promotions/smoke.tsv`); `check-promotion` offline and `promotion.yml` online; lab tests send traffic from a pinned test client image and probe egress from an ephemeral container, so they no longer need a shell in the workload image (`docs/runbooks/image-promotion.md`).
-    - **5.1c-2..4 — Promotions:** not started. dev, then uat, then prod, each a reviewed PR with the lab regression; then podinfo leaves the repository. Needs 5.1b's first publish on `main` and a public package.
+    - **5.1c-2 — dev promotion:** implemented. dev and dev-aws run the image signed on `main` (`sha-3b040e230d87`), recorded as the first ledger row; uat and prod still run podinfo.
+    - **5.1c-3..4 — uat and prod promotions:** not started. Each a reviewed PR with the lab regression; then podinfo leaves the repository.
   - **5.2 — Terraform CI:** not started. `terraform plan` and static analysis on every PR; `apply` of the supported resource types against a local AWS emulator in CI, so infrastructure changes are applied — not only validated — before any real account is involved.
   - **5.3 — Branch protection:** not started. Apply the ADR-0009 ruleset, now available because the repository is public (requires explicit authorization).
 - **Phase 6 — Hardening and operations:**
