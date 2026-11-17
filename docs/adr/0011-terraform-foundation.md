@@ -194,3 +194,14 @@ binary, and an unsupported platform) proving `extract_pinned_member_zip`
 fails closed on every unsafe input; `make validate`, `git diff --check`,
 and a secrets scan confirming no AWS account ID, role ARN, or credential
 material appears anywhere in this subphase's files.
+
+## Amendment (Phase 5.2a, 2026-11-17): plan and apply against a local emulator
+
+[ADR-0018](0018-terraform-against-a-local-aws-emulator.md) adds one
+exception to the offline contract: `scripts/terraform/emulator.sh` may
+run `plan`, `apply` and `destroy`, and only against a local AWS emulator
+on loopback, with a provider block it generates in a scratch copy.
+`check-terraform-offline` enforces every guard of that script (checks 9b
+and 9c). Everything else here is unchanged: no backend values, no
+committed provider block, no AWS credentials or OIDC in any workflow,
+and no real AWS resource without separate authorization.

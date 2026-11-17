@@ -14,6 +14,7 @@
 	eso-provision-source-secret eso-test-secret-lifecycle eso-test-provision-source-secret-idempotency \
 	terraform-fmt terraform-init terraform-validate terraform-test terraform-validate-offline \
 	check-terraform-offline check-terraform-offline-regression \
+	tf-emulator-up tf-emulator-down tf-emulator-plan tf-emulator-apply tf-emulator-coverage \
 	lab-mc-create lab-mc-destroy lab-mc-status mc-spoke-register mc-spoke-deregister \
 	lab-mc-test-lifecycle mc-test-registration \
 	mc-spoke-eso-install mc-spoke-source-secret mc-bootstrap mc-up mc-test-e2e \
@@ -383,3 +384,22 @@ check-terraform-offline: ## Phase 3.1: deterministic enforcement of the Terrafor
 
 check-terraform-offline-regression: ## Regression-test check-terraform-offline.sh's accept/reject matrix against throwaway fixture repositories
 	@sh tests/terraform/test-offline-contract.sh
+
+# Phase 5.2a (ADR-0018): Terraform against a local AWS emulator (moto,
+# pinned by digest) on loopback. Never AWS: scripts/terraform/emulator.sh
+# is the only place plan/apply run, and check-terraform-offline keeps its
+# guards. ROOT= limits the run to one or more root modules.
+tf-emulator-up: ## Phase 5.2a: start the local AWS emulator container on loopback (needs docker)
+	@bash scripts/terraform/emulator.sh up
+
+tf-emulator-down: ## Phase 5.2a: remove the local AWS emulator container
+	@bash scripts/terraform/emulator.sh down
+
+tf-emulator-plan: ## Phase 5.2a: plan root modules against the local emulator (ROOT=..., default all)
+	@bash scripts/terraform/emulator.sh plan $(ROOT)
+
+tf-emulator-apply: ## Phase 5.2a: plan, apply, re-plan (must be empty) and destroy against the local emulator (ROOT=..., default all)
+	@bash scripts/terraform/emulator.sh apply $(ROOT)
+
+tf-emulator-coverage: ## Phase 5.2a: like tf-emulator-apply for every root, recording each step's result in .tools/out/terraform/summary.tsv
+	@bash scripts/terraform/emulator.sh coverage $(ROOT)

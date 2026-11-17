@@ -96,7 +96,8 @@ delivery roadmap for what exists versus what is proposed.
 | 5.1c-3 | uat promoted from dev (same signed image); both uat overlays and one ledger row | Implemented |
 | 5.1c-4 | prod promoted from uat (same signed image), with the resilience and autoscaling regression; both prod overlays and one ledger row | Implemented |
 | 5.1c-5 | podinfo retired: the base default image is the first-party one, the chart passes `UI_MESSAGE`/`SHUTDOWN_TIMEOUT`, overlay messages renamed | Implemented |
-| 5.2 | Terraform CI: `plan` on every PR, static analysis, `apply` against a local AWS emulator | `PROPOSED` |
+| 5.2a | Terraform against a local AWS emulator (moto, pinned by digest, loopback only): `make tf-emulator-plan`/`tf-emulator-apply` run plan, apply, an empty re-plan and destroy in scratch copies; measured coverage in `terraform/emulator-coverage.tsv`; guards enforced by `check-terraform-offline` (ADR-0018, `docs/runbooks/terraform-emulator.md`) | Implemented (local) |
+| 5.2b-c | Terraform static analysis (`trivy config`) and the CI job running the emulator on PRs | `PROPOSED` |
 | 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | `PROPOSED` |
 | 6.2 | Backup and restore drill | `PROPOSED` |
 | 6.3 | Multi-language reference application with a data store, growing `apps/smoke` | `PROPOSED` |
