@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-11-13
 
-Implemented: Phase 5.1a. Proposed: 5.1b and 5.1c (below).
+Implemented: Phase 5.1a, 5.1b and 5.1c (amendments below).
 
 ## Context
 
@@ -163,3 +163,18 @@ Implemented; no environment changes image yet (runbook:
 - **Forbidden-terms exceptions** cover exactly the overlay `digest:`
   line and a well-formed ledger row, because a real digest can contain
   a run of twelve digits.
+
+## Amendment (Phase 5.1c-2 to 5.1c-5, 2026-11-17): promotions and podinfo retired
+
+- **Promotions:** dev, then uat, then prod took the index signed on
+  `main` for `3b040e2` (`sha-3b040e230d87`), one reviewed PR each, all
+  through `make promote`. The ledger holds `dev ← main`, `uat ← dev`,
+  `prod ← uat`. Each PR carried the lab regression; prod's added the
+  resilience and autoscaling tests.
+- **Autoscaling load:** the generator now reuses connections (500 URLs
+  per `curl`). With one process per request, the cheaper first-party
+  image held CPU at exactly the HPA target and it did not scale.
+- **podinfo retired:** the base default image is the first-party one;
+  the chart passes `UI_MESSAGE` and `SHUTDOWN_TIMEOUT`. `apps/smoke`
+  still reads the `PODINFO_*` names as fallbacks; they go with the next
+  image change, which needs a new publish and promotion anyway.

@@ -50,7 +50,7 @@ reconciling this repository's own `gitops/` directory over a read-only
 SSH deploy key into `dev`, `uat`, and `prod` namespaces, each
 running a real Restricted-PSS-compliant
 `Deployment`/`Service`/`ServiceAccount`/`ConfigMap`
-(`charts/standard-workload`, a pinned, non-root `podinfo` image) instead
+(`charts/standard-workload`, a pinned, non-root image) instead
 of the earlier smoke `ConfigMap`, plus two namespace-scoped External
 Secrets Operator controllers (one per environment), each now backed by
 its own namespaced `SecretStore`/`ExternalSecret` pair (Kubernetes-
@@ -95,11 +95,11 @@ delivery roadmap for what exists versus what is proposed.
 | 5.1c-2 | dev promoted to the signed image from `main` (`sha-3b040e230d87`); both dev overlays and one ledger row | Implemented |
 | 5.1c-3 | uat promoted from dev (same signed image); both uat overlays and one ledger row | Implemented |
 | 5.1c-4 | prod promoted from uat (same signed image), with the resilience and autoscaling regression; both prod overlays and one ledger row | Implemented |
-| 5.1c-5 | Retire podinfo: base default image, `UI_MESSAGE`/`SHUTDOWN_TIMEOUT` instead of the `PODINFO_*` names, overlay wording | `PROPOSED` |
+| 5.1c-5 | podinfo retired: the base default image is the first-party one, the chart passes `UI_MESSAGE`/`SHUTDOWN_TIMEOUT`, overlay messages renamed | Implemented |
 | 5.2 | Terraform CI: `plan` on every PR, static analysis, `apply` against a local AWS emulator | `PROPOSED` |
 | 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | `PROPOSED` |
 | 6.2 | Backup and restore drill | `PROPOSED` |
-| 6.3 | Multi-language reference application with a data store, replacing `podinfo` | `PROPOSED` |
+| 6.3 | Multi-language reference application with a data store, growing `apps/smoke` | `PROPOSED` |
 
 Full detail and ordering live in the TAD's
 [Delivery Roadmap](docs/architecture/technical-architecture.md#delivery-roadmap).
@@ -213,9 +213,9 @@ reusable Helm chart at `charts/standard-workload/` — `Deployment`,
 `Service`, `ServiceAccount`, `ConfigMap` only, Restricted-Pod-Security-
 Standards-compliant by default (non-root UID/GID `65532`, dropped
 capabilities, read-only root filesystem, `seccompProfile:
-RuntimeDefault`), running a digest-pinned, non-root, multi-arch
-`podinfo` image. `dev`/`uat`/`prod` differ in replica count,
-resources, and a `PODINFO_UI_MESSAGE` value sourced from the chart's
+RuntimeDefault`), running the project's own digest-pinned, signed,
+multi-arch image (`apps/smoke`, promoted per environment). `dev`/`uat`/`prod`
+differ in replica count, resources, and a `UI_MESSAGE` value sourced from the chart's
 own `ConfigMap` — proven functionally consumed via `GET /api/info`, not
 just checksum-decoration. Ingress/HPA/PodDisruptionBudget/NetworkPolicy/
 ServiceMonitor remain deliberately unimplemented (ADR-0006's

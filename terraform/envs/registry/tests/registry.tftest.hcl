@@ -9,7 +9,7 @@ mock_provider "aws" {}
 
 variables {
   owner           = "IngMatrix-PGB"
-  repositories    = ["podinfo", "reference-app"]
+  repositories    = ["smoke", "reference-app"]
   organization_id = "o-exampleorg01"
   spoke_account_ids = {
     dev  = format("%012d", 11)
@@ -22,7 +22,7 @@ run "repositories_immutable_scanned_encrypted" {
   command = apply
 
   assert {
-    condition     = toset([for r in aws_ecr_repository.this : r.name]) == toset(["eks-gitops-platform-project/podinfo", "eks-gitops-platform-project/reference-app"])
+    condition     = toset([for r in aws_ecr_repository.this : r.name]) == toset(["eks-gitops-platform-project/smoke", "eks-gitops-platform-project/reference-app"])
     error_message = "One repository per workload, named <project>/<name>."
   }
   assert {
@@ -71,7 +71,7 @@ run "spokes_pull_only" {
 run "rejects_uppercase_repository" {
   command = plan
   variables {
-    repositories = ["PodInfo"]
+    repositories = ["Smoke"]
   }
   expect_failures = [var.repositories]
 }
@@ -79,7 +79,7 @@ run "rejects_uppercase_repository" {
 run "rejects_duplicate_repository" {
   command = plan
   variables {
-    repositories = ["podinfo", "podinfo"]
+    repositories = ["smoke", "smoke"]
   }
   expect_failures = [var.repositories]
 }

@@ -72,7 +72,7 @@ done
 
 # Phase 2.4+: the workload is charts/standard-workload, whose only
 # ConfigMap is "<release>-standard-workload-config" with a single key,
-# ui-message (consumed by the Deployment as PODINFO_UI_MESSAGE). The
+# ui-message (consumed by the Deployment as UI_MESSAGE). The
 # Phase 2.3 smoke chart's configmap/platform-smoke (data.environment) no
 # longer exists. "Synced" above already proves live == Git at the
 # tracked revision; these checks prove the per-environment contract:
@@ -103,9 +103,9 @@ for ns in dev uat prod; do
     echo "FAIL: namespace '$ns' configmap/$cm data.ui-message is the chart default ('$actual') - the per-environment values file was not applied" >&2
     fail=1
   fi
-  ref="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="PODINFO_UI_MESSAGE")].valueFrom.configMapKeyRef.name}' 2>/dev/null || true)"
+  ref="$(pkubectl -n "$ns" get deployment "$dep" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="UI_MESSAGE")].valueFrom.configMapKeyRef.name}' 2>/dev/null || true)"
   if [ "$ref" != "$cm" ]; then
-    echo "FAIL: namespace '$ns' deployment/$dep PODINFO_UI_MESSAGE reads configmap '${ref:-<none>}', expected '$cm'" >&2
+    echo "FAIL: namespace '$ns' deployment/$dep UI_MESSAGE reads configmap '${ref:-<none>}', expected '$cm'" >&2
     fail=1
   fi
   case "$seen_messages" in

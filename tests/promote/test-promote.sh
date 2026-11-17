@@ -29,11 +29,10 @@ for f in scripts/image/image.sh scripts/promote/_lib.sh scripts/promote/promote.
 done
 cd "$work"
 # The test starts from a fixed state, not from whatever the repository
-# currently runs: every overlay on the upstream image of the base
-# values.yaml, and a ledger with its header only.
-up_repo="$(awk '/^image:/{b=1; next} b && /^  repository:/{print $2; exit}' "$here/charts/standard-workload/values.yaml")"
-up_digest="$(awk '/^image:/{b=1; next} b && /^  digest:/{print $2; exit}' "$here/charts/standard-workload/values.yaml")"
-[ -n "$up_repo" ] && [ -n "$up_digest" ] || { echo "FAIL: no image block in values.yaml" >&2; exit 1; }
+# currently runs: every overlay on an image of another repository (as
+# before the first promotion), and a ledger with its header only.
+up_repo="registry.example.invalid/upstream"
+up_digest="\"sha256:$(printf 'e%.0s' $(seq 1 64))\""
 for f in charts/standard-workload/values-*.yaml; do
   awk -v r="$up_repo" -v d="$up_digest" '
     /^image:/ {b=1; print; next}
@@ -79,7 +78,7 @@ ref_of() { . scripts/promote/_lib.sh; overlay_image_ref "charts/standard-workloa
 rows() { grep -cvE '^[[:space:]]*(#|$)' gitops/promotions/smoke.tsv || true; }
 changed() { git status --porcelain | awk '{print $2}' | sort | tr '\n' ' '; }
 
-# --- baseline: podinfo everywhere, empty ledger ---
+# --- baseline: an upstream image everywhere, empty ledger ---
 check && ok "baseline passes check-promotion" || { bad "baseline fails: $(cat "$root/check")"; }
 
 # --- refusals before anything is promoted ---
@@ -90,7 +89,7 @@ expect_refused() {
   elif [ -n "$(changed)" ]; then bad "$desc: refused but changed $(changed)"
   else ok "refused, nothing changed: $desc"; fi
 }
-rc=0; promote uat || rc=$?; expect_refused "uat while dev still runs podinfo" "promote dev first"
+rc=0; promote uat || rc=$?; expect_refused "uat while dev still runs an upstream image" "promote dev first"
 rc=0; promote dev || rc=$?; expect_refused "dev without DIGEST" "dev needs DIGEST"
 rc=0; promote qa "$d1" || rc=$?; expect_refused "unknown environment" "ENV must be one of"
 rc=0; promote dev "sha256:abc" || rc=$?; expect_refused "malformed digest" "DIGEST must be"
