@@ -344,11 +344,18 @@ $f" ;;
 done < <(list_versionable_files)
 
 plan_apply_pattern='terraform[^"'"'"'\n]*[[:space:]](plan|apply)([[:space:]]|$)'
+# Phase 5.2a (ADR-0018): the one exception. scripts/terraform/emulator.sh
+# may run plan/apply/destroy, and only against the local emulator. It is
+# skipped here; check 9b below fails the whole check if it loses a guard.
+# A call to that script (Makefile, workflow) is not itself a Terraform
+# invocation, so its path is removed from a line before matching.
+emulator_script="scripts/terraform/emulator.sh"
 plan_apply_hits=""
 while IFS= read -r f; do
   [ -z "$f" ] && continue
   [ -f "$f" ] || continue
-  hit="$(grep -Ein "$plan_apply_pattern" "$f" 2>/dev/null || true)"
+  [ "$f" = "$emulator_script" ] && continue
+  hit="$(sed 's#scripts/terraform/emulator\.sh##g' "$f" 2>/dev/null | grep -Ein "$plan_apply_pattern" 2>/dev/null || true)"
   if [ -n "$hit" ]; then
     plan_apply_hits="$plan_apply_hits
 $f:
@@ -363,6 +370,59 @@ if [ -n "$plan_apply_hits" ]; then
   printf '%s\n' "$plan_apply_hits" >&2
 else
   ok "no real 'terraform plan'/'terraform apply' CLI invocation in Makefile/*.sh/workflows"
+fi
+
+# --- 9b. The emulator exception keeps every guard (ADR-0018). Each
+# marker is one layer that keeps plan/apply away from real AWS; losing
+# any of them fails closed. Only checked when the script exists. --------
+if [ -f "$emulator_script" ]; then
+  em_missing=""
+  em_need() { grep -Eq -- "$2" "$emulator_script" || em_missing="$em_missing
+  - $1"; }
+  em_need "emulator image pinned by digest" '^TF_EMULATOR_IMAGE="[^"]+@sha256:[0-9a-f]{64}"$'
+  em_need "default endpoint on loopback" '^TF_EMULATOR_ENDPOINT="\$\{TF_EMULATOR_ENDPOINT:-http://(localhost|127\.0\.0\.1):[0-9]+\}"$'
+  em_need "loopback-only endpoint check" 'http://127\.0\.0\.1:\[0-9\]\*\|http://localhost:\[0-9\]\*\) : ;;'
+  em_need "terraform runs under env -i" '^[[:space:]]*env -i \\$'
+  em_need "AWS config file disabled" 'AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null'
+  em_need "provider pinned to the emulator account" 'allowed_account_ids[[:space:]]+= \[\\"\$EMULATOR_ACCOUNT\\"\]'
+  em_need "every service endpoint sent to the emulator" 'for s in \$EMULATOR_SERVICES; do printf .* "\$TF_EMULATOR_ENDPOINT"; done'
+  if grep -Eq 'backend-config|backend "' "$emulator_script"; then em_missing="$em_missing
+  - no backend configuration (state stays in the scratch directory)"; fi
+  # The identity check must run before any root in the plan/apply branch.
+  if ! awk '/^  plan\|apply\|coverage\)/{b=1} b && /check_identity/{ok=1} b && /run_root/{print (ok ? "ok" : "late"); exit}' "$emulator_script" | grep -qx ok; then
+    em_missing="$em_missing
+  - emulator identity checked before any plan/apply"
+  fi
+  if [ -n "$em_missing" ]; then
+    bad "$emulator_script lost a guard that keeps plan/apply on the local emulator:$em_missing"
+  else
+    ok "$emulator_script keeps every emulator guard (pinned image, loopback, env -i, no AWS config, allowed_account_ids, all endpoints, no backend, identity first)"
+  fi
+fi
+
+# --- 9c. No script, Makefile or workflow other than the emulator script
+# writes a provider "aws" block (this checker and its own regression
+# test only name it). -----------------------------------------------------
+gen_provider_hits=""
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  [ -f "$f" ] || continue
+  case "$f" in
+    "$emulator_script"|scripts/validate/check-terraform-offline.sh|tests/terraform/test-offline-contract.sh) continue ;;
+  esac
+  # A heredoc line or an echo/printf that emits the block's opening line.
+  hit="$(grep -En '^[[:space:]]*((echo|printf)[^#]*)?provider[[:space:]]+\\?"aws\\?"[[:space:]]*\{' "$f" 2>/dev/null || true)"
+  [ -n "$hit" ] && gen_provider_hits="$gen_provider_hits
+$f:
+$hit"
+done <<EOF_FILES
+$real_cmd_files
+EOF_FILES
+if [ -n "$gen_provider_hits" ]; then
+  bad "a provider \"aws\" block is written outside $emulator_script:"
+  printf '%s\n' "$gen_provider_hits" >&2
+else
+  ok "no script, Makefile or workflow other than $emulator_script writes a provider \"aws\" block"
 fi
 
 # --- 10. Every offline `terraform init` invocation in Makefile/*.sh

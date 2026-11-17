@@ -921,6 +921,68 @@ EOF
 run_case "a Pod Identity Association targeting the real ESO controller ServiceAccount is accepted" \
   accept setup_association_targets_real_controller_accepted
 
+# --- Phase 5.2a (ADR-0018): the emulator exception -----------------------
+# The real scripts/terraform/emulator.sh is copied into the fixture; each
+# reject case removes exactly one guard from that copy.
+EMU_SRC="$here/scripts/terraform/emulator.sh"
+put_emulator() {
+  mkdir -p "$1/scripts/terraform"
+  cp "$EMU_SRC" "$1/scripts/terraform/emulator.sh"
+}
+# $1=fixture  $2=sed expression applied to the copy; the case fails loudly
+# if the expression changed nothing (a no-op mutation proves nothing).
+mutate_emulator() {
+  put_emulator "$1"
+  f="$1/scripts/terraform/emulator.sh"
+  cp "$f" "$f.orig"
+  sed -i.bak -e "$2" "$f" && rm -f "$f.bak"
+  if cmp -s "$f" "$f.orig"; then
+    echo "FAIL: emulator mutation '$2' changed nothing" >&2
+    exit 1
+  fi
+  rm -f "$f.orig"
+}
+setup_emulator_real() {
+  put_emulator "$1"
+  printf '\ntf-emulator-x:\n\t@bash scripts/terraform/emulator.sh %s\n' "$PLAN_WORD" >> "$1/Makefile"
+}
+run_case "the real emulator script, and a Makefile target that calls it with '$PLAN_WORD', are accepted" accept setup_emulator_real
+
+setup_emulator_no_allowed_accounts() { mutate_emulator "$1" '/allowed_account_ids/d'; }
+run_case "the emulator script without allowed_account_ids is rejected" reject setup_emulator_no_allowed_accounts
+setup_emulator_remote_default() { mutate_emulator "$1" 's#:-http://localhost:5050#:-http://emulator.example.invalid:5050#'; }
+run_case "the emulator script with a non-loopback default endpoint is rejected" reject setup_emulator_remote_default
+setup_emulator_no_loopback_check() { mutate_emulator "$1" 's#http://127.0.0.1:\[0-9\]\*|http://localhost:\[0-9\]\*) : ;;#*) : ;;#'; }
+run_case "the emulator script without its loopback-only endpoint check is rejected" reject setup_emulator_no_loopback_check
+setup_emulator_no_env_i() { mutate_emulator "$1" 's#^  env -i \\$#  env \\#'; }
+run_case "the emulator script running terraform without env -i is rejected" reject setup_emulator_no_env_i
+setup_emulator_aws_config() { mutate_emulator "$1" 's#AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null##'; }
+run_case "the emulator script that lets the caller's AWS config through is rejected" reject setup_emulator_aws_config
+setup_emulator_unpinned_image() { mutate_emulator "$1" 's#@sha256:[0-9a-f]*"$#"#'; }
+run_case "the emulator script with an image not pinned by digest is rejected" reject setup_emulator_unpinned_image
+setup_emulator_one_endpoint() { mutate_emulator "$1" 's#for s in \$EMULATOR_SERVICES; do#for s in s3; do#'; }
+run_case "the emulator script that sends only some services to the emulator is rejected" reject setup_emulator_one_endpoint
+setup_emulator_no_identity() { mutate_emulator "$1" '/^  plan|apply|coverage)/,/run_root/{/^    check_identity$/d;}'; }
+run_case "the emulator script that skips the identity check before plan/apply is rejected" reject setup_emulator_no_identity
+setup_emulator_backend() { mutate_emulator "$1" 's#init -backend=false#init -backend-config=bucket=x#'; }
+run_case "the emulator script with a backend configuration is rejected" reject setup_emulator_backend
+
+setup_other_script_plan() {
+  mkdir -p "$1/scripts"
+  printf '#!/bin/sh\n.tools/bin/terraform -chdir=terraform %s\n' "$PLAN_WORD" > "$1/scripts/other.sh"
+}
+run_case "a 'terraform ... $PLAN_WORD' in any other script is still rejected" reject setup_other_script_plan
+setup_other_script_named_like_emulator() {
+  mkdir -p "$1/scripts/terraform"
+  printf '#!/bin/sh\n.tools/bin/terraform -chdir=terraform %s # scripts/terraform/emulator.sh\n' "$APPLY_WORD" > "$1/scripts/terraform/emulator2.sh"
+}
+run_case "naming the emulator script on a line does not exempt a real '$APPLY_WORD'" reject setup_other_script_named_like_emulator
+setup_other_script_writes_provider() {
+  mkdir -p "$1/scripts"
+  printf '#!/bin/sh\necho %s > x.tf\n' "'provider \"aws\" {'" > "$1/scripts/gen.sh"
+}
+run_case "another script that writes a provider \"aws\" block is rejected" reject setup_other_script_writes_provider
+
 echo ""
 echo "test-offline-contract: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then

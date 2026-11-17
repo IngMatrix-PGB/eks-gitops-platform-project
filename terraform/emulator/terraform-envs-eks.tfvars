@@ -1,0 +1,14 @@
+environment                      = "dev"
+aws_region                       = "us-east-1"
+vpc_id                           = "vpc-emulator"
+private_subnet_ids               = ["subnet-emulator-1", "subnet-emulator-2"]
+eks_public_access_cidrs          = ["203.0.113.1/32"]
+admin_principal_arn              = "arn:aws:iam::__EMULATOR_ACCOUNT_0__:role/emulator-admin"
+breakglass_principal_arn         = "arn:aws:iam::__EMULATOR_ACCOUNT_0__:role/emulator-breakglass"
+owner                            = "IngMatrix-PGB"
+pod_identity_agent_addon_version = "v1.3.4-eksbuild.1"
+vpc_cni_addon_version            = "v1.19.2-eksbuild.1"
+coredns_addon_version            = "v1.11.4-eksbuild.2"
+kube_proxy_addon_version         = "v1.36.0-eksbuild.1"
+metrics_server_addon_version     = "v0.7.2-eksbuild.1"
+hub_account_id                   = "__EMULATOR_ACCOUNT_3__"
