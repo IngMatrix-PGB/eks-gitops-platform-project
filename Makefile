@@ -14,7 +14,7 @@
 	eso-provision-source-secret eso-test-secret-lifecycle eso-test-provision-source-secret-idempotency \
 	terraform-fmt terraform-init terraform-validate terraform-test terraform-validate-offline \
 	check-terraform-offline check-terraform-offline-regression \
-	tf-emulator-up tf-emulator-down tf-emulator-plan tf-emulator-apply tf-emulator-coverage tf-static \
+	tf-emulator-up tf-emulator-down tf-emulator-plan tf-emulator-apply tf-emulator-coverage tf-emulator-ci tf-static \
 	lab-mc-create lab-mc-destroy lab-mc-status mc-spoke-register mc-spoke-deregister \
 	lab-mc-test-lifecycle mc-test-registration \
 	mc-spoke-eso-install mc-spoke-source-secret mc-bootstrap mc-up mc-test-e2e \
@@ -403,6 +403,9 @@ tf-emulator-apply: ## Phase 5.2a: plan, apply, re-plan (must be empty) and destr
 
 tf-emulator-coverage: ## Phase 5.2a: like tf-emulator-apply for every root, recording each step's result in .tools/out/terraform/summary.tsv
 	@bash scripts/terraform/emulator.sh coverage $(ROOT)
+
+tf-emulator-ci: ## Phase 5.2c: tf-emulator-coverage for every root, failing unless each result equals its row in terraform/emulator-coverage.tsv (run by .github/workflows/terraform.yml)
+	@bash scripts/terraform/emulator.sh ci
 
 
 tf-static: ## Phase 5.2b: trivy config on the tracked Terraform code - fails on HIGH/CRITICAL unless terraform/.trivyignore.yaml accepts it (dated, one file), or on a stale exception

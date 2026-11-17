@@ -105,3 +105,30 @@ Emulators considered (checked on 2026-11-17):
   any other script and a provider block written anywhere else.
 - Runtime refusals: a non-loopback endpoint and a loopback server that
   is not the emulator are both refused before Terraform runs.
+
+## Amendment (Phase 5.2c, 2026-11-17): the emulator in CI
+
+- **Workflow:** `.github/workflows/terraform.yml`, on PRs and pushes to
+  `main` that touch `terraform/`, `scripts/terraform/`, the root-module
+  discovery, the pinned tool versions, the `Makefile` or the workflow.
+  Permissions are `contents: read` only; no AWS credential and no OIDC
+  token.
+- **Emulator start:** the job runs `make tf-emulator-up`, the same target
+  a developer uses, instead of a `services:` container as first planned.
+  The image digest and the `127.0.0.1` binding then live only in
+  `scripts/terraform/emulator.sh`, so there is no second copy to drift.
+- **Gate (`make tf-emulator-ci`):** every root runs the full cycle, and
+  each root's result must equal its row in
+  `terraform/emulator-coverage.tsv`. A root that gets worse fails as a
+  regression; one that gets better fails until its row and gaps are
+  updated; a root without a row, or a row without a root, fails.
+- **Contract (`check-terraform-offline`):** check 9b also requires the
+  comparison in the script's `ci` mode; check 9e keeps the workflow
+  read-only, requires `make tf-emulator-up` and `make tf-emulator-ci`, and
+  rejects a service container, `docker run`, an emulator override or
+  `continue-on-error`.
+- **Dependabot** does not see the moto image, because no Dockerfile,
+  compose file or workflow names it. Its digest is bumped by hand, with
+  the coverage table re-measured in the same PR.
+- **Cost:** USD 0; about five minutes of CI time, on Terraform changes
+  only.
