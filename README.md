@@ -93,7 +93,8 @@ delivery roadmap for what exists versus what is proposed.
 | 5.1b | Multi-platform image pushed to GHCR from `main` only, cosign keyless signature, SBOM attestation per platform, SLSA provenance, verified against the exact main-workflow identity (`make image-verify`, `docs/runbooks/image-publish.md`) | Implemented (published from `main`, package public) |
 | 5.1c-1 | Promotion tooling: `make promote` (dev ← signed digest from main, uat ← dev, prod ← uat), append-only ledger, `make check-promotion`, `promotion.yml`; lab tests independent of the workload image (`docs/runbooks/image-promotion.md`) | Implemented |
 | 5.1c-2 | dev promoted to the signed image from `main` (`sha-3b040e230d87`); both dev overlays and one ledger row | Implemented |
-| 5.1c-3..4 | Promote uat, then prod (one reviewed PR each, with lab regression); then retire podinfo | `PROPOSED` |
+| 5.1c-3 | uat promoted from dev (same signed image); both uat overlays and one ledger row | Implemented |
+| 5.1c-4 | Promote prod from uat (reviewed PR, resilience and autoscaling regression); then retire podinfo | `PROPOSED` |
 | 5.2 | Terraform CI: `plan` on every PR, static analysis, `apply` against a local AWS emulator | `PROPOSED` |
 | 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | `PROPOSED` |
 | 6.2 | Backup and restore drill | `PROPOSED` |
