@@ -53,6 +53,17 @@ variable "private_subnet_ids" {
 variable "eks_public_access_cidrs" {
   type        = list(string)
   description = "CIDR blocks allowed to reach the EKS public API endpoint (e.g. the operator's current IP, /32). No default - an unset value must fail closed rather than silently defaulting to 0.0.0.0/0."
+
+  # Phase 5.2b (ADR-0019): the public endpoint is accepted by the static
+  # analysis only because this list is narrow. An open range would make
+  # the API server reachable from anywhere.
+  validation {
+    condition = length(var.eks_public_access_cidrs) > 0 && alltrue([
+      for c in var.eks_public_access_cidrs :
+      can(regex("^[0-9.]+/[0-9]+$", c)) && can(cidrhost(c, 0)) && tonumber(split("/", c)[1]) >= 16
+    ])
+    error_message = "eks_public_access_cidrs must be a non-empty list of IPv4 CIDR blocks of /16 or narrower; 0.0.0.0/0 and other open ranges are rejected."
+  }
 }
 
 variable "admin_principal_arn" {

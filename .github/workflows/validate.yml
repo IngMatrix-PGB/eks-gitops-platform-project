@@ -65,6 +65,15 @@ jobs:
         # terraform plan/apply against real AWS occurs in this phase.
         run: make terraform-validate-offline
 
+      - name: make tf-static
+        # Phase 5.2b (ADR-0019): trivy config on a copy of the tracked
+        # Terraform files, with the checks embedded in the pinned trivy
+        # (already installed by "make tools-install"). Fails on any
+        # HIGH/CRITICAL finding not accepted, dated and scoped to one
+        # file in terraform/.trivyignore.yaml. Reads only the public
+        # Terraform Registry for the pinned modules; no AWS access.
+        run: make tf-static
+
       - name: Determine diff range
         id: diffrange
         run: |

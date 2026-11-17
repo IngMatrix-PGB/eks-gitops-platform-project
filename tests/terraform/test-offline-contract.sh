@@ -983,6 +983,49 @@ setup_other_script_writes_provider() {
 }
 run_case "another script that writes a provider \"aws\" block is rejected" reject setup_other_script_writes_provider
 
+# --- Phase 5.2b (ADR-0019): check 9d, the static-analysis gate. ---------
+STATIC_SRC="$here/scripts/terraform/static-analysis.sh"
+put_static() {
+  mkdir -p "$1/scripts/terraform"
+  cp "$STATIC_SRC" "$1/scripts/terraform/static-analysis.sh"
+  printf '\ntf-static:\n\t@bash scripts/terraform/static-analysis.sh\n' >> "$1/Makefile"
+  printf '\n      - name: make tf-static\n        run: make tf-static\n' >> "$1/.github/workflows/validate.yml"
+}
+# $1=fixture  $2=sed expression on the copied script; a no-op fails loudly.
+mutate_static() {
+  put_static "$1"
+  f="$1/scripts/terraform/static-analysis.sh"
+  cp "$f" "$f.orig"
+  sed -i.bak -e "$2" "$f" && rm -f "$f.bak"
+  if cmp -s "$f" "$f.orig"; then
+    echo "FAIL: static mutation '$2' changed nothing" >&2
+    exit 1
+  fi
+  rm -f "$f.orig"
+}
+setup_static_real() { put_static "$1"; }
+run_case "the real static-analysis script, wired into make and validate, is accepted" accept setup_static_real
+setup_static_low_threshold() { mutate_static "$1" 's#^TF_STATIC_SEVERITY="HIGH,CRITICAL"$#TF_STATIC_SEVERITY="CRITICAL"#'; }
+run_case "the static-analysis script with a threshold above HIGH is rejected" reject setup_static_low_threshold
+setup_static_no_exit_code() { mutate_static "$1" 's#--exit-code 1 --severity#--severity#'; }
+run_case "the static-analysis gate without --exit-code 1 is rejected" reject setup_static_no_exit_code
+setup_static_exit_zero() { mutate_static "$1" 's#^repo="\$(pwd)"$#repo="$(pwd)"; extra="--exit-code 0"#'; }
+run_case "the static-analysis script that adds --exit-code 0 is rejected" reject setup_static_exit_zero
+setup_static_check_update() { mutate_static "$1" 's#--skip-check-update ##'; }
+run_case "the static-analysis script that downloads a newer rule bundle is rejected" reject setup_static_check_update
+setup_static_no_stale() { mutate_static "$1" '/holds stale exceptions/d'; }
+run_case "the static-analysis script without the stale-exception check is rejected" reject setup_static_no_stale
+setup_static_no_make() {
+  put_static "$1"
+  sed -i.bak '/^tf-static:/,/static-analysis.sh/d' "$1/Makefile" && rm -f "$1/Makefile.bak"
+}
+run_case "the static-analysis script without its make tf-static target is rejected" reject setup_static_no_make
+setup_static_no_ci() {
+  put_static "$1"
+  sed -i.bak '/run: make tf-static/d' "$1/.github/workflows/validate.yml" && rm -f "$1/.github/workflows/validate.yml.bak"
+}
+run_case "the static-analysis script not run by the validate workflow is rejected" reject setup_static_no_ci
+
 echo ""
 echo "test-offline-contract: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then

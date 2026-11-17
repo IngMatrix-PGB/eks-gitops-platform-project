@@ -360,3 +360,37 @@ run "rejects_unknown_environment" {
   }
   expect_failures = [var.environment]
 }
+
+# Phase 5.2b (ADR-0019): the public API endpoint is accepted by the
+# static analysis only because its CIDR list is narrow.
+run "rejects_open_public_access_cidr" {
+  command = plan
+  variables {
+    eks_public_access_cidrs = ["0.0.0.0/0"]
+  }
+  expect_failures = [var.eks_public_access_cidrs]
+}
+
+run "rejects_wide_public_access_cidr" {
+  command = plan
+  variables {
+    eks_public_access_cidrs = ["203.0.113.1/32", "10.0.0.0/8"]
+  }
+  expect_failures = [var.eks_public_access_cidrs]
+}
+
+run "rejects_empty_public_access_cidrs" {
+  command = plan
+  variables {
+    eks_public_access_cidrs = []
+  }
+  expect_failures = [var.eks_public_access_cidrs]
+}
+
+run "rejects_ipv6_public_access_cidr" {
+  command = plan
+  variables {
+    eks_public_access_cidrs = ["::/0"]
+  }
+  expect_failures = [var.eks_public_access_cidrs]
+}
