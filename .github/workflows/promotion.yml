@@ -10,11 +10,6 @@ name: promotion
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "charts/standard-workload/values-*.yaml"
-      - "gitops/promotions/**"
-      - "scripts/promote/**"
-      - ".github/workflows/promotion.yml"
   workflow_dispatch: {}
 
 permissions:
@@ -25,8 +20,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    # Phase 5.3a (ADR-0020): this workflow runs on every pull request so
+    # its check can be required on main; this job says whether the change
+    # touches the paths below. Same list as `on.push.paths` where there is
+    # one (check-repo-governance compares them).
+    name: promotion paths
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.paths.outputs.relevant }}
+    steps:
+      - name: Checkout
+        # actions/checkout v7.0.1, the same pin as validate.yml. Full
+        # history so the pull request's merge base is present.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Paths this workflow covers
+        id: paths
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          bash scripts/ci/changed-paths.sh \
+            'charts/standard-workload/values-*.yaml' \
+            'gitops/promotions/**' \
+            'scripts/promote/**' \
+            '.github/workflows/promotion.yml' \
+            'scripts/ci/changed-paths.sh'
+
   verify:
     name: verify promoted images
+    needs: changes
+    # Skipped (which a required check counts as passed) only when the
+    # paths job answered exactly "false"; if it failed or gave no answer,
+    # this job runs.
+    if: ${{ !cancelled() && needs.changes.outputs.relevant != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

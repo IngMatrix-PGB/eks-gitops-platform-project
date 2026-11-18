@@ -15,6 +15,11 @@
 > `Validation Method` is a repository-settings mutation and stays gated
 > on a fresh, explicit authorization (`AGENTS.md`). The original record
 > below is kept unchanged as the history of the decision.
+>
+> **Update (2026-11-17):** superseded for branch protection by
+> [ADR-0020](0020-main-branch-ruleset.md), which keeps this ruleset's
+> rules, requires the four pull request checks instead of `validate`
+> alone, and keeps the ruleset as code in `.github/rulesets/main.json`.
 
 ## Context
 
