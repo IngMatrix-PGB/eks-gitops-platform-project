@@ -124,3 +124,16 @@ forever; leaving those checks optional lets a failing one merge.
 - After 5.3b: `make governance-diff` reports no drift; a docs-only test
   pull request shows the three required jobs skipped and becomes
   mergeable; a direct push and a force push to `main` are rejected.
+
+## Applied (Phase 5.3b, 2026-11-17)
+
+- `ruleset.sh apply --confirm` created ruleset `main`;
+  `make governance-diff` reports no drift. "Update branch", secret
+  scanning and push protection were turned on.
+- Docs-only test pull request: `validate` ran; `emulator`,
+  `build, scan, SBOM` and `verify promoted images` were skipped by their
+  paths jobs and counted as passed; the pull request became mergeable
+  and was closed without merging.
+- A direct push to `main` was rejected (GH013: changes must be made
+  through a pull request, four required checks expected), and so was a
+  force push (cannot force-push to this branch). `main` did not move.
