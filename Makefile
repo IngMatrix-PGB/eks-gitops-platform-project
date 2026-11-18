@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 
 .PHONY: help validate check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked \
-	check-standard-workload-chart check-spoke-access check-supply-chain check-tool-platforms-regression check-repo-governance check-repo-governance-regression governance-diff \
+	check-standard-workload-chart check-spoke-access check-spoke-access-regression argocd-upgrade check-supply-chain check-tool-platforms-regression check-repo-governance check-repo-governance-regression governance-diff \
 	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle lab-test-eks-identity-offline eks-test-spoke-secret image-build image-scan image-sbom image-all image-build-multi image-publish image-scan-remote image-sign image-verify image-test-verify promote promotion-verify check-promotion promote-test \
 	argocd-chart-fetch argocd-render argocd-install argocd-status argocd-uninstall argocd-port-forward \
 	argocd-test-runtime-health argocd-test-lifecycle \
@@ -30,7 +30,7 @@ help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -59,8 +59,14 @@ check-private-untracked: ## Verify local-only reference material is excluded and
 check-standard-workload-chart: ## Offline lint/render/schema/PSS/dry-run validation of charts/standard-workload for both environments
 	@sh scripts/validate/check-standard-workload-chart.sh
 
-check-spoke-access: ## Phase 3.4.4a: the shared spoke Role (platform/spoke-access/role.yaml) grants exactly the AppProject's namespaced kinds - no ClusterRole, no secrets, no wildcard
+check-spoke-access: ## Phase 3.4.4a/6.3a: the spoke Role, the AppProject and Argo CD's spoke resource.inclusions name exactly the same kinds - no ClusterRole, no secrets, no wildcard
 	@bash scripts/validate/check-spoke-access.sh
+
+check-spoke-access-regression: ## Phase 6.3a: check-spoke-access against mutated copies of the three places
+	@sh tests/validate/test-spoke-access.sh
+
+argocd-upgrade: ## Phase 6.3a: apply a reviewed lab/argocd/values-lab.yaml change to a running Argo CD (LAB_CLUSTER=); shows the change, needs CONFIRM=yes, rolls back on mismatch
+	@sh lab/argocd/upgrade.sh $(if $(filter yes,$(CONFIRM)),--confirm,)
 
 check-observability: ## Phase 6.1b: offline - promtool on the hub and every spoke Prometheus config (agent mode), per-environment scoping, no inline credential, dashboards valid with one datasource and parseable queries
 	@sh scripts/validate/check-observability.sh

@@ -9,7 +9,10 @@
 #     namespaceResourceWhitelist (gitops/bootstrap/templates/appproject.yaml),
 #     kind for kind - so the two can never drift apart;
 #   - never secrets, never a wildcard, and every rule's verbs are exactly
-#     get/list/watch/create/update/patch/delete.
+#     get/list/watch/create/update/patch/delete;
+#   - Phase 6.3a: Argo CD's resource.inclusions for the spokes
+#     (lab/argocd/values-lab.yaml) name exactly the same kinds - the third
+#     place the list lives.
 # Fully offline; part of `make validate`.
 set -euo pipefail
 
@@ -54,6 +57,27 @@ elif [ "$role_pairs" = "$project_pairs" ]; then
 else
   bad "$ROLE and the AppProject's namespaceResourceWhitelist differ"
   diff <(printf '%s\n' "$project_pairs") <(printf '%s\n' "$role_pairs") | sed 's/^/      /' >&2 || true
+fi
+
+# Phase 6.3a: the third place - Argo CD's resource.inclusions for the
+# spokes (lab/argocd/values-lab.yaml, the entries whose clusters are the
+# lab spokes) must name exactly the AppProject's kinds, or the hub's cache
+# would not see (or would try to list) a kind the Role does not match.
+VALUES="${ARGOCD_VALUES:-lab/argocd/values-lab.yaml}"
+project_kinds="$(awk '/namespaceResourceWhitelist:/ {f=1; next} f && /^  [a-zA-Z]/ {f=0}
+  f && /group:/ { g = $0; sub(/.*group: */, "", g); gsub(/"/, "", g) }
+  f && /kind:/  { k = $0; sub(/.*kind: */, "", k); print g "/" k }' "$PROJECT" | sort)"
+incl_kinds="$(awk '/resource.inclusions: \|/ {f=1; next} f && /^  [a-zA-Z]/ {f=0}
+  f && /apiGroups:/ { g = $0; sub(/.*\[/, "", g); sub(/\].*/, "", g); gsub(/[" ]/, "", g) }
+  f && /kinds:/     { k = $0; sub(/.*\[/, "", k); sub(/\].*/, "", k); gsub(/[" ]/, "", k) }
+  f && /clusters:/  { if ($0 ~ /eks-gitops-\*-control-plane/) { n = split(k, a, ","); for (i = 1; i <= n; i++) print g "/" a[i] } }' "$VALUES" | sort)"
+if [ -z "$incl_kinds" ]; then
+  bad "could not read the spokes' resource.inclusions from $VALUES"
+elif [ "$incl_kinds" = "$project_kinds" ]; then
+  echo "OK: $VALUES resource.inclusions for the spokes name exactly the AppProject's $(printf '%s\n' "$incl_kinds" | grep -c .) kinds"
+else
+  bad "$VALUES resource.inclusions for the spokes and the AppProject differ"
+  diff <(printf '%s\n' "$project_kinds") <(printf '%s\n' "$incl_kinds") | sed 's/^/      /' >&2 || true
 fi
 
 if [ "$fail" -ne 0 ]; then echo "check-spoke-access: FAILED"; exit 1; fi

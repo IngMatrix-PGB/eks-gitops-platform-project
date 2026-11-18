@@ -30,6 +30,9 @@ require_repo_root
 . scripts/backup/_lib.sh
 require_helm
 require_bk_chart
+# YAML is parsed with the pinned yq (make tools-install), never PyYAML.
+YQ_BIN=".tools/bin/yq"
+[ -x "$YQ_BIN" ] || { echo "FAIL: $YQ_BIN not found - run 'make tools-install'" >&2; exit 1; }
 # shellcheck source=../../scripts/eso/_lib.sh
 LAB_CLUSTER=lab-lite . scripts/eso/_lib.sh
 
@@ -46,10 +49,11 @@ for c in hub dev uat prod; do
   r="$work/r-$c.yaml"
   hits="$(eso_check_no_rbac_wildcards "$r" || true)"; [ -z "$hits" ] || bad "$c: RBAC wildcard: $hits"
   # Structural checks on the parsed render.
-  if ! python3 -I - "$r" "$c" "$(bk_bucket "$c")" "$BK_STORE_URL" "${BK_VELERO_IMAGE_REPOSITORY}@${BK_VELERO_IMAGE_DIGEST}" "$BK_AWS_PLUGIN_IMAGE" "$(bk_namespaces "$c")" <<'PY'
-import sys, yaml
+  "$YQ_BIN" eval-all -o=json '[.]' "$r" > "$r.json"
+  if ! python3 -I - "$r.json" "$c" "$(bk_bucket "$c")" "$BK_STORE_URL" "${BK_VELERO_IMAGE_REPOSITORY}@${BK_VELERO_IMAGE_DIGEST}" "$BK_AWS_PLUGIN_IMAGE" "$(bk_namespaces "$c")" <<'PY'
+import json, sys
 path, c, bucket, url, velero_img, plugin_img, nss = sys.argv[1:8]
-docs = [d for d in yaml.safe_load_all(open(path)) if d]
+docs = [d for d in json.load(open(path)) if d]
 errs = []
 def by_kind(k): return [d for d in docs if d.get("kind") == k]
 kinds = sorted(d["kind"] for d in docs)

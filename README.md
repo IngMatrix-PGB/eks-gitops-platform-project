@@ -107,7 +107,8 @@ delivery roadmap for what exists versus what is proposed.
 | 6.2 | Backup and restore drill | Implemented (6.2a–6.2b) |
 | 6.2a | Velero on every member backs up the state outside Git (platform Secrets and ConfigMaps) to a lab S3 store (`versitygw`, one bucket and key per member, under `.local/backups/`); every 6 h, TTL 72 h; least-privilege RBAC; backup alerts in the hub; `make backup-restore-check` restores into throwaway namespaces and compares by SHA-256 (ADR-0022, `docs/runbooks/backup-restore.md`) | Implemented; verified on lab-multicluster (hub, dev, uat) |
 | 6.2b | Scripted, destructive restore drills: `make backup-drill-spoke SPOKE=<env>` and `make backup-drill-hub` (both `CONFIRM=yes`) rebuild a lost member from Git plus its backup and verify by SHA-256 that source values, credentials and registrations return unchanged; measured RTO 556 s (uat) and 350 s (hub) | Implemented; both drills run on lab-multicluster |
-| 6.3 | Multi-language reference application with a data store, growing `apps/smoke` | `PROPOSED` |
+| 6.3 | Multi-language reference application with a data store, growing `apps/smoke` | In progress |
+| 6.3a | Platform contract for stateful components: StatefulSet, PVC, Job, CronJob allowed on spokes in the AppProject, the spoke Role and Argo CD's inclusions (checked as one); `make argocd-upgrade` applies a reviewed Argo CD values change with diff, confirmation and rollback (ADR-0023, `docs/runbooks/argocd-upgrade.md`) | Implemented; upgrade and RBAC verified on lab-multicluster |
 
 Full detail and ordering live in the TAD's
 [Delivery Roadmap](docs/architecture/technical-architecture.md#delivery-roadmap).
