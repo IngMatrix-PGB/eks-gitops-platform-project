@@ -43,6 +43,16 @@ Re-running is a no-op when nothing changed. A changed config or values
 upgrade the release and roll the pod. A release on another chart, or not
 `deployed`, is refused.
 
+A spoke's install waits until the hub accepts the spoke's credential,
+up to three minutes. Measured: 5 to 15 s. Only then does it start the
+agent. The hub answers 401 until the kubelet refreshes its mounted web
+config, and Prometheus does not retry samples refused with 401.
+
+Measured on 2026-11-18 with the hub, dev and uat:
+
+- the stack adds about 0.77 GiB on the hub;
+- it adds about 65 Mi on each spoke.
+
 ## Check
 
 On a spoke, `make obs-status LAB_CLUSTER=dev` checks that the agent has
@@ -113,8 +123,9 @@ make obs-install LAB_CLUSTER=dev
 make obs-uninstall LAB_CLUSTER=dev
 ```
 
-Removing a spoke removes its release, its Secret, and its user on the
-hub. A credential copied from it then gets 401.
+Removing a spoke removes its release, its Secret and its user on the
+hub. The command then waits until the hub refuses the old credential with
+401, which took 40 s when measured.
 
 ```bash
 make obs-uninstall LAB_CLUSTER=hub

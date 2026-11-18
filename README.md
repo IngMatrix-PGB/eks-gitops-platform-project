@@ -101,7 +101,7 @@ delivery roadmap for what exists versus what is proposed.
 | 5.3b | Ruleset applied (`make governance-diff` OK), "Update branch", secret scanning and push protection on; verified with a docs-only PR (path-scoped checks skipped, mergeable) and a rejected direct push and force push | Implemented |
 | 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | In progress |
 | 6.1a | `apps/smoke` serves request counts and durations in the Prometheus format on its own port (9090, standard library only); the chart renders the `metrics` port and opens it only to the `monitoring` namespace (ADR-0021) | Implemented; running in dev, uat and prod (#50–#52) |
-| 6.1b | Metrics pipeline: Prometheus agent and kube-state-metrics per spoke, remote write with one credential per spoke to the hub's Prometheus; Alertmanager and Grafana (dashboards as code) on the hub; `make obs-install` / `obs-status`; configs and dashboards checked by promtool in `make validate` | Implemented (code, offline-tested; lab install pending) |
+| 6.1b | Metrics pipeline: Prometheus agent and kube-state-metrics per spoke, remote write with one credential per spoke to the hub's Prometheus; Alertmanager and Grafana (dashboards as code) on the hub; `make obs-install` / `obs-status`; configs and dashboards checked by promtool in `make validate` | Implemented; verified on lab-multicluster (hub, dev, uat) |
 | 6.2 | Backup and restore drill | `PROPOSED` |
 | 6.3 | Multi-language reference application with a data store, growing `apps/smoke` | `PROPOSED` |
 

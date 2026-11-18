@@ -9,8 +9,8 @@
 #          series (`count by (cluster) (up)`); EXPECT_CLUSTERS="hub spoke-dev
 #          ..." makes each listed cluster mandatory. Grafana: healthy, its
 #          provisioned datasource answers, the platform dashboards exist.
-#   spoke  release deployed and Ready; the agent's own metrics show samples
-#          sent to the hub and none failed.
+#   spoke  release deployed and Ready; over STATUS_WINDOW seconds (default
+#          75) the agent sent samples to the hub and none was refused.
 #
 # Credentials are read from the Secrets into a mode-600 netrc file in a
 # mktemp directory, used by curl, and removed; never printed.
@@ -103,12 +103,22 @@ if [ "$role" = hub ]; then
   want_n="$(ls platform/observability/dashboards/*.json | wc -l | tr -d ' ')"
   [ "$n" = "$want_n" ] && ok "Grafana has the $want_n platform dashboards" || bad "Grafana platform dashboards: $n (want $want_n)"
 else
+  # Two readings of the agent's own counters, STATUS_WINDOW seconds apart
+  # (default 75, more than two 30s scrape intervals): samples must have
+  # been sent in the window and none refused in it. Totals alone would
+  # keep reporting failures from before a fix.
   port_forward "deploy/${OBS_RELEASE}-prometheus-server" 9090
-  curl -s "http://127.0.0.1:${local_port}/metrics" > "$work/m"
-  sent="$(awk '/^prometheus_remote_storage_samples_total[{ ]/ { s += $NF } END { printf "%d", s }' "$work/m")"
-  failed="$(awk '/^prometheus_remote_storage_samples_failed_total[{ ]/ { s += $NF } END { printf "%d", s }' "$work/m")"
-  [ "${sent:-0}" -gt 0 ] && ok "agent sent $sent samples to the hub" || bad "agent has sent no samples yet"
-  [ "${failed:-0}" -eq 0 ] && ok "no failed remote-write samples" || bad "$failed remote-write samples failed (credential or hub address?)"
+  window="${STATUS_WINDOW:-75}"
+  counters() {
+    curl -s "http://127.0.0.1:${local_port}/metrics" | awk '
+      /^prometheus_remote_storage_samples_total[{ ]/ { s += $NF }
+      /^prometheus_remote_storage_samples_failed_total[{ ]/ { f += $NF }
+      END { printf "%d %d\n", s, f }'
+  }
+  c0="$(counters)"; sleep "$window"; c1="$(counters)"
+  sent0="${c0% *}"; failed0="${c0#* }"; sent1="${c1% *}"; failed1="${c1#* }"
+  if [ $((sent1 - sent0)) -gt 0 ]; then ok "agent sent $((sent1 - sent0)) samples to the hub in the last ${window}s ($sent1 in total)"; else bad "agent sent no samples in the last ${window}s"; fi
+  if [ $((failed1 - failed0)) -eq 0 ]; then ok "no remote-write sample refused in the window ($failed1 refused since the agent started)"; else bad "$((failed1 - failed0)) remote-write samples refused in the window (credential or hub address?)"; fi
 fi
 
 if [ "$fail" -ne 0 ]; then echo "obs-status: FAILED ($role on '$PROJECT_CLUSTER_NAME')"; exit 1; fi

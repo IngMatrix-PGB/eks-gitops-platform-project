@@ -143,6 +143,25 @@ decides how much of it runs locally.
   probes and one NodePort on the hub, agent mode and credential wiring on
   the spoke); `make check-observability` in `validate` (promtool on every
   config, per-environment scoping, no inline credential, dashboards with
-  one datasource and parseable queries) and its regression test. Live on
-  lab-multicluster: recorded here when installed and measured.
+  one datasource and parseable queries) and its regression test.
+- 6.1b, live on lab-multicluster (hub, dev, uat; 2026-11-18):
+  - `make obs-install` on each member, then `make obs-status`: every
+    target `up` (11: three on the hub, four per spoke); unauthenticated
+    query and remote write answered 401; each spoke's series labeled with
+    its own cluster and environment and only from its own namespace;
+    Grafana healthy, anonymous API refused, datasource reachable, every
+    dashboard query answered through it.
+  - NetworkPolicy, from a pod in another namespace: kube-state-metrics,
+    the agent, Alertmanager and Grafana time out; the hub Prometheus
+    answers 401.
+  - Re-running the install changes nothing. Removing a spoke waits until
+    the hub refuses its old credential (401 after 40 s, the kubelet's
+    refresh of the mounted web config); reinstalling it waits until the
+    hub accepts the new one before the agent starts, so no sample is
+    refused (the first install, before that wait existed, lost about a
+    minute of samples to 401).
+  - Memory (Docker view): hub node +0.77 GiB (Prometheus 63 Mi,
+    Alertmanager 18 Mi, Grafana 247 Mi), each spoke's agent and
+    kube-state-metrics about 65 Mi; about 2.8 GiB stay free with hub, dev
+    and uat. That clears the 1.5 GiB gate, so 6.1d (logs) proceeds.
 - 6.1c–6.1d: recorded here as each lands.

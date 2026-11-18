@@ -65,7 +65,10 @@ OBS_SECRET_REMOTE_WRITE="obs-remote-write"     # spoke: its own remote-write pas
 OBS_GRAFANA_DASHBOARDS_CM="obs-grafana-dashboards"
 
 # Docker memory the install needs free, in MiB, per role. A floor for
-# refusing early (Phase 6.1b measurement updates it), not a promise.
+# refusing early, not a promise. Measured 2026-11-18 (Docker view, hub +
+# dev + uat): the hub node grew ~790 MiB (Prometheus 63Mi, Alertmanager
+# 18Mi, Grafana 247Mi working set, plus node overhead); a spoke's agent
+# and kube-state-metrics ~65Mi; the spoke floor is their memory limits.
 OBS_HUB_MIB=900
 OBS_SPOKE_MIB=350
 
@@ -483,12 +486,13 @@ securityContext:
     type: RuntimeDefault
 containerSecurityContext:
 $(_obs_container_sc "  ")
+# Measured 247Mi working set right after start (Phase 6.1b).
 resources:
   requests:
     cpu: 25m
-    memory: 96Mi
+    memory: 256Mi
   limits:
-    memory: 320Mi
+    memory: 512Mi
 grafana.ini:
   analytics:
     reporting_enabled: false
@@ -615,4 +619,40 @@ _obs_hub_write_web() {
   } > "$2/secret/web.yml"
   obs_apply_secret "$1" "$OBS_SECRET_WEB" "$2/secret"
   rm -rf "$2"
+}
+
+# obs_hub_wait <hub-kubectl-fn> <user> <password-file> <accept|refuse> [timeout-s]
+# - waits until the hub's Prometheus accepts (or refuses) <user>'s
+# credential. The kubelet refreshes the mounted web config about a minute
+# after a change, so a new user is not accepted, and a removed one not
+# refused, right away. Probes with a remote write whose body is not
+# valid: 401 means refused; 400 means authenticated (nothing is written).
+# Without the accept wait, an agent started at once has its first samples
+# refused with 401, which Prometheus does not retry.
+obs_hub_wait() {
+  ow_kc="$1"; ow_user="$2"; ow_pw="$3"; ow_want="$4"; ow_timeout="${5:-180}"
+  ow_dir="$(mktemp -d)"
+  ow_port="$(awk 'BEGIN { srand(); print 20000 + int(rand() * 20000) }')"
+  "$ow_kc" -n "$OBS_NAMESPACE" port-forward "svc/${OBS_HUB_QUERY_SVC}" "${ow_port}:80" >/dev/null 2>&1 &
+  ow_pf=$!
+  { printf 'machine 127.0.0.1 login %s password ' "$ow_user"; cat "$ow_pw"; printf '\n'; } > "$ow_dir/netrc"
+  chmod 600 "$ow_dir/netrc"
+  ow_start="$(date +%s)"; ow_code=""; ow_done=1
+  while [ $(( $(date +%s) - ow_start )) -lt "$ow_timeout" ]; do
+    ow_code="$(curl -s -o /dev/null -w '%{http_code}' --netrc-file "$ow_dir/netrc" -X POST \
+      -H 'Content-Type: application/x-protobuf' --data-binary 'x' "http://127.0.0.1:${ow_port}/api/v1/write" 2>/dev/null || true)"
+    case "$ow_want:$ow_code" in
+      accept:2??|accept:400|accept:415|refuse:401) ow_done=0; break ;;
+    esac
+    sleep 5
+  done
+  kill "$ow_pf" 2>/dev/null || true
+  wait "$ow_pf" 2>/dev/null || true
+  rm -rf "$ow_dir"
+  if [ "$ow_done" -eq 0 ]; then
+    echo "OK: the hub ${ow_want}s '$ow_user' (probe answered $ow_code after $(( $(date +%s) - ow_start ))s)"
+    return 0
+  fi
+  echo "FAIL: the hub does not ${ow_want} '$ow_user' after ${ow_timeout}s (last answer: ${ow_code:-none})" >&2
+  return 1
 }

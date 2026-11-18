@@ -96,7 +96,7 @@
             "type": "prometheus",
             "uid": "hub-prometheus"
           },
-          "expr": "sum by (cluster) (rate(http_requests_total{job=\"workload\",cluster=~\"$cluster\",code=~\"5..\"}[5m])) / sum by (cluster) (rate(http_requests_total{job=\"workload\",cluster=~\"$cluster\"}[5m]))",
+          "expr": "(sum by (cluster) (rate(http_requests_total{job=\"workload\",cluster=~\"$cluster\",code=~\"5..\"}[5m])) or 0 * sum by (cluster) (rate(http_requests_total{job=\"workload\",cluster=~\"$cluster\"}[5m]))) / sum by (cluster) (rate(http_requests_total{job=\"workload\",cluster=~\"$cluster\"}[5m]))",
           "legendFormat": "{{cluster}}"
         }
       ],

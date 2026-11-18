@@ -4,7 +4,8 @@
 #
 #   spoke  uninstalls release obs, deletes its Secret obs-remote-write and,
 #          when the hub is up, removes user spoke-<env> from the hub's web
-#          config, so the removed spoke can no longer write.
+#          config and waits until the hub refuses that credential (401), so
+#          the removed spoke can no longer write.
 #   hub    uninstalls obs-grafana and obs, deletes the dashboards ConfigMap
 #          and the Secrets this stack created. Spokes still installed then
 #          fail their remote writes until they are removed too.
@@ -39,12 +40,19 @@ delete_named() { # $1=kind $2=name
 }
 
 if [ "$role" = spoke ]; then
+  work="$(mktemp -d)"
+  trap 'rm -rf "$work"' EXIT INT TERM
+  umask 077
+  # Keep the password (in a mktemp file) to prove the hub refuses it.
+  have_pw=0
+  obs_secret_key pkubectl "$OBS_SECRET_REMOTE_WRITE" password > "$work/pw" 2>/dev/null && have_pw=1
   uninstall_release "$OBS_RELEASE"
   delete_named secret "$OBS_SECRET_REMOTE_WRITE"
   hk() { ckubectl hub "$@"; }
   if lab_mc_identity hub; then
     obs_hub_remove_user hk "spoke-${LAB_CLUSTER}"
     echo "OK: user 'spoke-${LAB_CLUSTER}' absent from the hub's web config"
+    if [ "$have_pw" -eq 1 ]; then obs_hub_wait hk "spoke-${LAB_CLUSTER}" "$work/pw" refuse; fi
   else
     echo "obs-uninstall: hub not up ($LAB_MC_IDENTITY_CASE) - nothing to remove there"
   fi

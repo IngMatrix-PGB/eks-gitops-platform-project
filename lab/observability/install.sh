@@ -139,6 +139,7 @@ else
   else
     echo "OK: remote-write credential for '$user' already present on the spoke and the hub - kept"
   fi
+  obs_hub_wait hk "$user" "$work/pw" accept
   rm -f "$work/pw"
   obs_write_prom_config spoke "$env" "$work/prometheus.yml"
   obs_write_prom_values spoke "$env" "$work/prometheus.yml" "$work/values.yaml"
