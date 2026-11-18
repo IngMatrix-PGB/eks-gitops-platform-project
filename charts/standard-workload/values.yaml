@@ -62,6 +62,15 @@ serviceAccount:
 service:
   port: 9898
 
+# Phase 6.1a (ADR-0021): the workload serves Prometheus metrics on a
+# separate container port named "metrics" (METRICS_PORT), never on the
+# Service clients use. The NetworkPolicy opens that port only to the
+# namespaces in scrapeFromNamespaces (the spoke's Prometheus agent).
+metrics:
+  enabled: true
+  port: 9090
+  scrapeFromNamespaces: ["monitoring"]
+
 volumes:
   dataEmptyDir: true
   tmpEmptyDir: true

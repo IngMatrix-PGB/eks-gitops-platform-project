@@ -176,3 +176,14 @@ Deployment, so no replicas hand-over is needed. `check-standard-workload-chart`'
 former R-14 guards are inverted: an aws overlay must now render the
 policy with the same exact shape as the local ones, and prod-aws must
 render the HPA.
+
+## Amendment (Phase 6.1a, 2026-11-17): metrics port
+
+- The workload serves Prometheus metrics on a container port named
+  `metrics` (`metrics.port`, default 9090), passed as `METRICS_PORT`,
+  never on the Service.
+- The NetworkPolicy adds one ingress rule: that port, only from the
+  namespaces in `metrics.scrapeFromNamespaces` (default `monitoring`).
+- `metrics.enabled: false` removes the port, the variable and the rule;
+  a metrics port equal to `service.port` fails the render.
+- Decided in [ADR-0021](0021-observability.md).

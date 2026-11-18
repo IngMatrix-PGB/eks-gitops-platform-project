@@ -100,6 +100,7 @@ delivery roadmap for what exists versus what is proposed.
 | 5.3a | Ruleset for `main` as code (`.github/rulesets/main.json`: PR required, no force push or deletion, four strict required checks pinned to GitHub Actions, no bypass); `terraform`/`image`/`promotion` run on every PR with a paths job so their checks always report; `check-repo-governance`, `make governance-diff` (ADR-0020, `docs/runbooks/repository-governance.md`) | Implemented |
 | 5.3b | Ruleset applied (`make governance-diff` OK), "Update branch", secret scanning and push protection on; verified with a docs-only PR (path-scoped checks skipped, mergeable) and a rejected direct push and force push | Implemented |
 | 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | `PROPOSED` |
+| 6.1a | `apps/smoke` serves request counts and durations in the Prometheus format on its own port (9090, standard library only); the chart renders the `metrics` port and opens it only to the `monitoring` namespace (ADR-0021) | Implemented (code; takes effect per environment when the new image is promoted) |
 | 6.2 | Backup and restore drill | `PROPOSED` |
 | 6.3 | Multi-language reference application with a data store, growing `apps/smoke` | `PROPOSED` |
 
