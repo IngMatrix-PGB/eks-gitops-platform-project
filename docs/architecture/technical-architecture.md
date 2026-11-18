@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Document | eks-gitops-platform-project Technical Architecture |
-| Version | 0.31.0 |
+| Version | 0.32.0 |
 | Status | Implementation in progress |
 | Phase | Phase 2.7 implemented (hub-and-spoke `lab-multicluster`, runtime-tested in `kind`); Phase 2.8 implemented (workload resilience and HPA, runtime-tested in `kind`); Phase 3.4.1–3.4.4b implemented as offline-tested code (AWS organization, guardrails, account baseline, per-environment EKS, Karpenter, ECR, per-spoke ESO identity, hub-to-spoke Argo CD identity, aws-eks GitOps profile in hub-and-spoke form); Phase 3.1–3.3.5 implemented as offline-validated code; roadmap realigned to the hub-and-spoke model (ADR-0015) |
 | Last updated | 2026-11-18 |
@@ -694,9 +694,20 @@ Phase 6.1 (ADR-0021) builds the stack in the hub-and-spoke shape.
 
 ## Availability and Recovery
 
-`NOT IMPLEMENTED`. Workload-level resilience (PodDisruptionBudget,
-topology spread, graceful shutdown, HPA) is Phase 2.8. Backup and a
-scripted restore drill are Phase 6.2. Single-point-of-failure analysis
+Workload-level resilience (PodDisruptionBudget, topology spread,
+graceful shutdown, HPA) is Phase 2.8.
+
+**Backup (6.2a, ADR-0022).** Velero on every member backs up the state
+that is not in Git (Secrets and ConfigMaps of the platform namespaces,
+and PersistentVolumeClaims once 6.3 adds a data store). It writes every
+6 hours to a lab S3 store, `versitygw` under `.local/backups/`, which
+outlives every cluster.
+- Each member has its own bucket and key.
+- Workloads are rebuilt by Argo CD from Git, never restored from backup.
+- Backup health alerts fire in the hub.
+- A non-destructive restore check runs on demand.
+
+The destructive drills, losing a spoke and losing the hub, are 6.2b. Single-point-of-failure analysis
 for the GitOps delivery path — now centered on the hub (R-11) and
 including the bootstrap-cycle risk (R-04) — is Phase 6 scope.
 
@@ -744,6 +755,7 @@ a fresh, explicit authorization.**
 | [ADR-0019](../adr/0019-terraform-static-analysis.md) | Static analysis of the Terraform code | Accepted |
 | [ADR-0020](../adr/0020-main-branch-ruleset.md) | Ruleset for the main branch (supersedes ADR-0009's branch protection gap) | Accepted |
 | [ADR-0021](../adr/0021-observability.md) | Observability for the hub and the spokes | Accepted (6.1a–6.1d implemented) |
+| [ADR-0022](../adr/0022-backup-and-restore.md) | Backup and restore of the state outside Git | Accepted (6.2a implemented) |
 
 Each ADR above records an **approved decision**, not an implemented one
 — every capability it describes is tracked honestly in "Evidence and
@@ -770,6 +782,7 @@ Implementation Status" below.
 | R-15 | Spoke → hub metrics travel over plain HTTP, and Prometheus basic auth has no per-user authorization: any spoke's credential can also query every cluster's series | Low in the lab (local docker bridge, metrics only, no Secret values in any series) | LAB-ONLY and documented as such (ADR-0021). One credential per spoke, generated at install, only its bcrypt hash on the hub, removed with the spoke; unauthenticated reads and writes return 401 (`make obs-status`). TLS, a private endpoint and per-identity write access (SigV4) are the AWS design, decided at 6.4 | Accepted for the lab |
 | R-16 | The SLO alerts are proven by unit tests only: `apps/smoke` never answers 5xx on its user routes, and lab traffic is sparse | Low (the alert logic is tested case by case; what is untested live is the end-to-end firing of an SLO alert) | 12 `promtool` test cases, including thresholds, both windows, per-cluster isolation and excluded routes; live, the recording series exist per spoke and an Argo CD alert was fired end to end through the same Prometheus → Alertmanager path. A failure-injection mode for the workload would close it | Accepted |
 | R-17 | The log agent needs read access to node log files: a read-only `hostPath` of `/var/log` and the root user, the one exception to Pod Security `restricted` in the lab | Medium (a compromised agent could read every container's logs on its node) | Confined to its own namespace `logging` (enforced `privileged`, `restricted` audited and warned, ingress denied). Inside it: read-only root filesystem, all capabilities dropped, no escalation, RuntimeDefault seccomp, no service account token, no RBAC, no host network. It collects only its environment namespace's files; `obs-render` enforces every one of these settings. EKS uses its own log path (decided at 6.4) | Accepted for the lab |
+| R-18 | Velero backups hold Secrets in clear text: Velero does not encrypt resource data | Medium (whoever reads `.local/backups` reads every platform credential and the ESO source values) | The store is reachable only from the kind network, with no host port; `.local/backups` is mode 700 and gitignored; one S3 key per member, confined to its own bucket (another member's key gets 403, tested); the root credential is used only inside the container. On AWS: S3 with SSE-KMS, a bucket policy per member role and Object Lock, decided at 6.4 | Accepted for the lab |
 
 ## Evidence and Implementation Status
 
@@ -808,6 +821,7 @@ Implementation Status" below.
 | Metrics pipeline (ADR-0021, Phase 6.1b) | `CODE-CONFIRMED` and runtime-tested on lab-multicluster (hub, dev, uat), 2026-11-18 | `make obs-render` (exact object sets per role, pinned digests, restricted pods, no Secret in any release, cluster-wide RBAC limited to nodes and nodes/metrics, pods only in the environment namespace, no RBAC on the hub, TCP probes on the hub, one NodePort); `make check-observability` (promtool on the hub and every spoke config, per-environment scoping, no inline credential, dashboards with one datasource and parseable queries) and its regression (11 cases); live: `make obs-status` on every member (11 targets up, 401 without credentials, per-spoke labels and namespaces, Grafana datasource and dashboards), NetworkPolicy probes from other namespaces, idempotent re-run, spoke removal refused by the hub within 40 s, hub node +0.77 GiB and ~65 Mi per spoke |
 | SLO and alerts (ADR-0021, Phase 6.1c) | `CODE-CONFIRMED`, unit-tested, and runtime-tested on lab-multicluster, 2026-11-18 | `make check-observability`: `promtool check rules` and `promtool test rules`, 12 cases; every alert has a firing case, every SLO alert a silent one; regression rejects 7 more mutations. Live: 15 rules loaded and healthy, recording series per spoke under generated traffic, the Argo CD controller scraped, all four dashboards answer through Grafana, `ArgoCDApplicationControllerDown` fired to Alertmanager after 361 s with the controller scaled to 0 and resolved after it returned |
 | Logs (ADR-0021, Phase 6.1d) | `CODE-CONFIRMED`, offline-tested, and runtime-tested on lab-multicluster, 2026-11-18 | `make obs-render` (Loki: pinned digests, restricted pods, ClusterRole with no rules, no PVC, 72h retention, gateway basic auth, one NodePort; Fluent Bit per environment: own-namespace path, spoke labels and user, `hostPath` exactly `/var/log` read-only, no token, no RBAC, no Secret); `make check-observability` (two datasources one per panel, LogQL selects on `cluster`) with 3 more regression mutations. Live: log streams for spoke-dev and spoke-uat from their own namespaces only, 401 without credentials, NetworkPolicy probes, a removed spoke refused by Loki within 41 s, Grafana Loki datasource and logs dashboard; hub +0.28 GiB, Fluent Bit 4 Mi per spoke, ~2.5 GiB free |
+| Backup of the state outside Git (ADR-0022, Phase 6.2a) | `CODE-CONFIRMED`, offline-tested, and runtime-tested on lab-multicluster, 2026-11-18 | `make backup-render` (hub/dev/uat/prod: pinned images, exact ClusterRole, no wildcard or `cluster-admin`, restricted pods, own bucket, schedule scope, Helm objects excluded); 5 backup alerts unit-tested with 2 regression mutations. Live: Velero on hub, dev and uat with locations Available; backups hold exactly the out-of-Git Secrets; `make backup-restore-check` restored 15 Secrets identical; store stopped → `VeleroBackupStorageUnavailable` on all three, recovered and resolved after restart; Velero 42–81 Mi per member, store 17 MiB |
 | Argo CD's production AWS identity provider | `UNKNOWN` | Explicitly undecided pending Phase 3/4 (ADR-0005) |
 | Crossplane-based self-service infrastructure | `OUT OF SCOPE` | Deferred past the MVP (ADR-0001) |
 | Progressive Delivery as primary production gate | `OUT OF SCOPE` | Not the design (see "Application Delivery and Promotion") |
@@ -898,7 +912,9 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
     - **6.1d — Logs:** implemented. Loki (single binary, 72 h, basic-auth gateway) on the hub; Fluent Bit per spoke in namespace `logging`, own-namespace files only, same per-spoke credential; Grafana Loki datasource and logs dashboard; verified on lab-multicluster. Phase 6.1 is complete.
     - **6.1c — SLO and alerts:** implemented. SLO recording rules and four burn-rate alerts; Argo CD health alerts from the hub's application controller; unit tests in `make validate`; SLO and Argo CD dashboards; Argo CD alert fired end to end on lab-multicluster.
     - **6.1b — Metrics pipeline:** implemented as code. Prometheus agent and kube-state-metrics per spoke, remote write with one basic-auth credential per spoke to the hub's Prometheus; Alertmanager and Grafana with dashboards as code on the hub; `make obs-install|obs-status|obs-uninstall|obs-render`, `make check-observability` in `validate`. Installed and verified on lab-multicluster (hub, dev, uat); measured memory leaves about 2.8 GiB free, so 6.1d (logs) proceeds.
-  - **6.2 — Backup and restore:** not started. Cluster-resource and volume backup to object storage, with a scripted restore drill whose result is recorded as evidence.
+  - **6.2 — Backup and restore (ADR-0022):** in progress. Cluster-resource and volume backup to object storage, with a scripted restore drill whose result is recorded as evidence.
+    - **6.2a — Backups:** implemented. Velero on every member backs up the out-of-Git state to a lab S3 store (`versitygw`, one bucket and key per member, data under `.local/backups/`); least-privilege RBAC; schedule every 6 h, TTL 72 h; backup alerts in the hub; non-destructive restore check. Verified on lab-multicluster.
+    - **6.2b — Restore drills:** not started. Losing a spoke, then the hub; each rebuilt from Git plus its backup, RTO measured.
   - **6.3 — Reference application:** not started. Grow `apps/smoke` into a small multi-language application (two or three services) and one data store whose credentials arrive through ESO, proving the standard chart across languages.
   - **6.4 — First real AWS deployment:** not started. Hub plus one spoke in a single sandbox account, created and destroyed in one authorized session with a budget alert in place; measured cost and evidence recorded here.
 - **Phase 7 — Final evidence, draw.io, and DOCX:** not started.

@@ -58,3 +58,11 @@ scrape_configs:
     relabel_configs:
       - target_label: cluster
         replacement: hub
+
+  # Phase 6.2a: the hub's own Velero.
+  - job_name: velero
+    static_configs:
+      - targets: ["velero.velero.svc:8085"]
+    relabel_configs:
+      - target_label: cluster
+        replacement: hub

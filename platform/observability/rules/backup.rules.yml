@@ -1,0 +1,52 @@
+# Phase 6.2a (ADR-0022): backup health, from each member's Velero
+# (scraped by the spoke agents and by the hub itself). The schedule is
+# every 6 hours; "stale" is two missed runs plus one hour.
+groups:
+  - name: backup-health
+    rules:
+      - alert: VeleroBackupFailed
+        expr: max by (cluster) (velero_backup_last_status{schedule="velero-platform-state"}) == 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The last scheduled backup of {{ $labels.cluster }} did not complete"
+          description: "Velero reports the last run of schedule velero-platform-state as failed or partially failed. Check the Backup's status and logs in namespace velero."
+
+      - alert: VeleroBackupStale
+        expr: time() - max by (cluster) (velero_backup_last_successful_timestamp{schedule="velero-platform-state"}) > 13 * 3600
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.cluster }} has no successful backup in 13 hours"
+          description: "The last successful backup is {{ $value | humanizeDuration }} old; the schedule runs every 6 hours."
+
+      - alert: VeleroNoSuccessfulBackup
+        expr: |
+          max by (cluster) (up{job="velero"}) == 1
+          unless on (cluster)
+          max by (cluster) (velero_backup_last_successful_timestamp{schedule="velero-platform-state"})
+        for: 13h
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Velero on {{ $labels.cluster }} has run for 13 hours without one successful backup"
+          description: "Velero is up and scraped, but reports no successful backup of schedule velero-platform-state."
+
+      - alert: VeleroBackupStorageUnavailable
+        expr: min by (cluster) (velero_backup_location_status_gauge) == 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The backup store is unavailable to {{ $labels.cluster }}"
+          description: "Velero's BackupStorageLocation has not been Available for 10 minutes: the store is down, unreachable, or refuses this cluster's key."
+
+      - alert: VeleroDown
+        expr: max by (cluster) (up{job="velero"}) == 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Velero on {{ $labels.cluster }} has not been scraped for 10 minutes"
+          description: "No backup runs while Velero is down, and the other backup alerts go blind for this cluster."

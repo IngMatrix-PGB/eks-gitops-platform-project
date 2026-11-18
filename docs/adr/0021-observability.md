@@ -266,6 +266,9 @@ decides how much of it runs locally.
     `ArgoCDApplicationControllerDown` reached Alertmanager after 361 s
     (`severity=page`, `cluster=hub`). It was resolved after scaling back
     to 1, and the applications were still Synced and Healthy.
+- 6.2a (ADR-0022) adds `backup.rules.yml` with five backup-health
+  alerts and the `velero` scrape job on every member, under this ADR's
+  rules contract.
 - 6.1d, offline: `make obs-render`.
   - **Loki:** object set, pinned digests, restricted pods, a ClusterRole
     with no rules, no PersistentVolumeClaim, retention and tenancy, one

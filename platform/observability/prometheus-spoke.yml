@@ -78,3 +78,9 @@ scrape_configs:
         target_label: pod
       - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
         target_label: app
+
+  # Phase 6.2a: this spoke's Velero (backup health; its NetworkPolicy
+  # admits the monitoring namespace on this port only).
+  - job_name: velero
+    static_configs:
+      - targets: ["velero.velero.svc:8085"]
