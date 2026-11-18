@@ -15,6 +15,11 @@
 #     targets, variables), and every query parses (promtool check rules on
 #     the expressions, with $cluster replaced).
 #
+#   - Phase 6.1c: every rule file passes `promtool check rules` and has a
+#     unit-test file that passes `promtool test rules`; every alert is
+#     expected to fire in at least one test case, and every SLO alert also
+#     to stay silent in one; the hub config loads the rule files.
+#
 # OBS_CHECK_ROOT (default ".") lets the regression test run this script
 # unmodified against a mutated copy.
 set -eu
@@ -64,6 +69,37 @@ for f in "$cfg_dir/prometheus-hub.yml" "$cfg_dir/prometheus-spoke.yml"; do
     bad "$(basename "$f"): inline credential at line(s) $(cut -d: -f1 "$work/inline" | tr '\n' ' ')"
   fi
 done
+
+# --- rules (Phase 6.1c) ---------------------------------------------------------
+rules_dir="$cfg_dir/rules"
+grep -qF -- '- /etc/config/*.rules.yml' "$cfg_dir/prometheus-hub.yml" || bad "hub config does not load /etc/config/*.rules.yml"
+nr=0
+for rf in "$rules_dir"/*.rules.yml; do
+  [ -f "$rf" ] || continue
+  nr=$((nr + 1)); b="$(basename "$rf" .rules.yml)"
+  if ! "$promtool" check rules --lint-fatal "$rf" > "$work/out" 2>&1; then
+    bad "$b.rules.yml: $(grep -iE 'error|fail' "$work/out" | head -2 | tr '\n' ' ')"; continue
+  fi
+  tf="$rules_dir/tests/$b.test.yml"
+  if [ ! -f "$tf" ]; then bad "$b.rules.yml has no unit tests ($tf)"; continue; fi
+  if ! "$promtool" test rules "$tf" > "$work/out" 2>&1; then
+    bad "$b.test.yml: $(head -12 "$work/out" | tr '\n' ' ' | cut -c1-400)"; continue
+  fi
+  # Each alert: at least one case expecting it to fire.
+  for a in $(sed -n 's/^[[:space:]]*- alert: //p' "$rf"); do
+    awk -v a="$a" '
+      /alertname:/ { cur = $2 }
+      /exp_alerts: \[\]/ { if (cur == a) silent = 1; cur = "" }
+      /exp_alerts:$/ { if (cur == a) fires = 1 }
+      END { exit !(fires) }' "$tf" || bad "$b: alert $a is never expected to fire in $b.test.yml"
+    case "$a" in Smoke*)
+      awk -v a="$a" '/alertname:/ { cur = $2 } /exp_alerts: \[\]/ { if (cur == a) s = 1 } END { exit !s }' "$tf" \
+        || bad "$b: SLO alert $a is never expected to stay silent in $b.test.yml" ;;
+    esac
+  done
+done
+[ "$nr" -gt 0 ] || bad "no rule file in $rules_dir"
+[ "$fail" -eq 0 ] && ok "$nr rule files: promtool check and unit tests pass; every alert fires in a test, every SLO alert also stays silent in one"
 
 # --- dashboards ------------------------------------------------------------------
 n=0

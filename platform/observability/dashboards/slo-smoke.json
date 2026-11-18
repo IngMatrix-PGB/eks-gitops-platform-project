@@ -1,0 +1,260 @@
+{
+  "uid": "platform-slo-smoke",
+  "title": "Platform / SLO: smoke availability",
+  "description": "Phase 6.1c: share of / and /api/info requests not answered 5xx, per environment. Objective 99.5 % over 30 days (error budget 0.5 %). The lab keeps 7 days of data, so the 30-day figures cover what is stored.",
+  "tags": [
+    "platform",
+    "phase-6.1"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "timezone": "utc",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "cluster",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "hub-prometheus"
+        },
+        "query": {
+          "query": "label_values(cluster:smoke_http_errors:ratio_rate5m, cluster)",
+          "refId": "cluster"
+        },
+        "definition": "label_values(cluster:smoke_http_errors:ratio_rate5m, cluster)",
+        "multi": true,
+        "includeAll": true,
+        "current": {},
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Availability over 30 days, by cluster",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "1 - ((sum by (cluster) (rate(http_requests_total{job=\"workload\",route=~\"/|/api/info\",cluster=~\"$cluster\",code=~\"5..\"}[30d])) or 0 * sum by (cluster) (rate(http_requests_total{job=\"workload\",route=~\"/|/api/info\",cluster=~\"$cluster\"}[30d]))) / sum by (cluster) (rate(http_requests_total{job=\"workload\",route=~\"/|/api/info\",cluster=~\"$cluster\"}[30d])))",
+          "legendFormat": "{{cluster}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Error budget left over 30 days, by cluster",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "1 - (((sum by (cluster) (rate(http_requests_total{job=\"workload\",route=~\"/|/api/info\",cluster=~\"$cluster\",code=~\"5..\"}[30d])) or 0 * sum by (cluster) (rate(http_requests_total{job=\"workload\",route=~\"/|/api/info\",cluster=~\"$cluster\"}[30d]))) / sum by (cluster) (rate(http_requests_total{job=\"workload\",route=~\"/|/api/info\",cluster=~\"$cluster\"}[30d]))) / 0.005)",
+          "legendFormat": "{{cluster}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "1 means the budget is untouched; 0 means it is spent; below 0, overspent."
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "SLO alerts firing",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "ALERTS{slo=\"smoke-availability\",alertstate=\"firing\"}",
+          "legendFormat": "",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Burn rate by window (1 = spending exactly the budget)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "cluster:smoke_http_errors:ratio_rate5m{cluster=~\"$cluster\"} / 0.005",
+          "legendFormat": "{{cluster}} 5m"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "cluster:smoke_http_errors:ratio_rate1h{cluster=~\"$cluster\"} / 0.005",
+          "legendFormat": "{{cluster}} 1h"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "cluster:smoke_http_errors:ratio_rate6h{cluster=~\"$cluster\"} / 0.005",
+          "legendFormat": "{{cluster}} 6h"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "cluster:smoke_http_errors:ratio_rate1d{cluster=~\"$cluster\"} / 0.005",
+          "legendFormat": "{{cluster}} 1d"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "cluster:smoke_http_errors:ratio_rate3d{cluster=~\"$cluster\"} / 0.005",
+          "legendFormat": "{{cluster}} 3d"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Alerts: 14.4x over 1h and 5m, 6x over 6h and 30m (page); 3x over 1d and 2h, 1x over 3d and 6h (ticket)."
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Error ratio over 5m and 1h, by cluster",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "cluster:smoke_http_errors:ratio_rate5m{cluster=~\"$cluster\"}",
+          "legendFormat": "{{cluster}} 5m"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "cluster:smoke_http_errors:ratio_rate1h{cluster=~\"$cluster\"}",
+          "legendFormat": "{{cluster}} 1h"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {}
+    }
+  ]
+}

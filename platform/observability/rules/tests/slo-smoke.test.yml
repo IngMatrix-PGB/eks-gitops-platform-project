@@ -1,0 +1,183 @@
+# Unit tests for slo-smoke.rules.yml (promtool test rules, Phase 6.1c;
+# run by make check-observability). Counters grow once per minute:
+# "a+bxN" is a, then +b for N minutes; "_" is a missing sample.
+# Budget: 0.005. Thresholds: 14.4x = 0.072, 6x = 0.03, 3x = 0.015,
+# 1x = 0.005.
+rule_files:
+  - ../slo-smoke.rules.yml
+evaluation_interval: 1m
+
+tests:
+  # dev answers 10 % of its requests with 5xx; uat answers none. Only dev
+  # fires (the "cluster" label is kept on both sides of every "and"), and
+  # the ratio is recorded per cluster: 0.1 for dev, 0 (not absent) for uat.
+  - name: a fast burn fires for the burning cluster only
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/api/info",code="200"}'
+        values: '0+90x120'
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/api/info",code="500"}'
+        values: '0+10x120'
+      - series: 'http_requests_total{cluster="spoke-uat",job="workload",route="/api/info",code="200"}'
+        values: '0+100x120'
+    promql_expr_test:
+      - expr: round(cluster:smoke_http_errors:ratio_rate5m, 0.0001)
+        eval_time: 30m
+        exp_samples:
+          - labels: '{cluster="spoke-dev"}'
+            value: 0.1
+          - labels: '{cluster="spoke-uat"}'
+            value: 0
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SmokeAvailabilityBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: SmokeAvailabilityBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {severity: page, slo: smoke-availability, burn_rate: "14.4", cluster: spoke-dev}
+            exp_annotations:
+              summary: "smoke availability in spoke-dev is burning its error budget at 14.4x or more"
+              description: "Error ratio over 1h is 10% (threshold 0.072), and the 5m window agrees. Objective 99.5 % over 30 days."
+
+  # Both windows are required: the errors stop at 60m. At 75m the 1h
+  # window is still above 14.4x (7.6 %), the 5m window is at 0, and the
+  # alert is resolved. At 55m, before they stop, it fires.
+  - name: the short window resolves a fast burn soon after the errors stop
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/",code="200"}'
+        values: '0+90x60 5400+100x60'
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/",code="503"}'
+        values: '0+10x60 600+0x60'
+    promql_expr_test:
+      - expr: round(cluster:smoke_http_errors:ratio_rate1h, 0.001) > 0.072
+        eval_time: 75m
+        exp_samples:
+          - labels: '{cluster="spoke-dev"}'
+            value: 0.076
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: SmokeAvailabilityBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {severity: page, slo: smoke-availability, burn_rate: "14.4", cluster: spoke-dev}
+            exp_annotations:
+              summary: "smoke availability in spoke-dev is burning its error budget at 14.4x or more"
+              description: "Error ratio over 1h is 10% (threshold 0.072), and the 5m window agrees. Objective 99.5 % over 30 days."
+      - eval_time: 75m
+        alertname: SmokeAvailabilityBudgetBurnFast
+        exp_alerts: []
+
+  # 5 % errors: below 14.4x (7.2 %), above 6x (3 %). Only the 6x alert
+  # fires, once its 15m "for" has passed.
+  - name: a burn below 14.4x fires only the 6x alert
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{cluster="spoke-uat",job="workload",route="/",code="200"}'
+        values: '0+95x120'
+      - series: 'http_requests_total{cluster="spoke-uat",job="workload",route="/",code="500"}'
+        values: '0+5x120'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: SmokeAvailabilityBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SmokeAvailabilityBudgetBurnHigh
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: SmokeAvailabilityBudgetBurnHigh
+        exp_alerts:
+          - exp_labels: {severity: page, slo: smoke-availability, burn_rate: "6", cluster: spoke-uat}
+            exp_annotations:
+              summary: "smoke availability in spoke-uat is burning its error budget at 6x or more"
+              description: "Error ratio over 6h is 5% (threshold 0.03), and the 30m window agrees. Objective 99.5 % over 30 days."
+
+  # 2 % errors: above 3x (1.5 %), below 6x (3 %). The 3x ticket fires
+  # after its 1h "for"; the 6x page does not.
+  - name: a burn between 3x and 6x fires the 3x ticket, not the 6x page
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/",code="200"}'
+        values: '0+98x180'
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/",code="500"}'
+        values: '0+2x180'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SmokeAvailabilityBudgetBurnMedium
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SmokeAvailabilityBudgetBurnMedium
+        exp_alerts:
+          - exp_labels: {severity: ticket, slo: smoke-availability, burn_rate: "3", cluster: spoke-dev}
+            exp_annotations:
+              summary: "smoke availability in spoke-dev is burning its error budget at 3x or more"
+              description: "Error ratio over 1d is 2% (threshold 0.015), and the 2h window agrees. Objective 99.5 % over 30 days."
+      - eval_time: 2h
+        alertname: SmokeAvailabilityBudgetBurnHigh
+        exp_alerts: []
+
+  # 0.6 % errors: above 1x (0.5 %), below 3x (1.5 %). Only the slow
+  # ticket fires, after its 3h "for".
+  - name: a slow burn fires only the 1x ticket
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/",code="200"}'
+        values: '0+994x300'
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/",code="500"}'
+        values: '0+6x300'
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: SmokeAvailabilityBudgetBurnMedium
+        exp_alerts: []
+      - eval_time: 4h
+        alertname: SmokeAvailabilityBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SmokeAvailabilityBudgetBurnSlow
+        exp_alerts: []
+      - eval_time: 4h
+        alertname: SmokeAvailabilityBudgetBurnSlow
+        exp_alerts:
+          - exp_labels: {severity: ticket, slo: smoke-availability, burn_rate: "1", cluster: spoke-dev}
+            exp_annotations:
+              summary: "smoke availability in spoke-dev is burning its error budget at 1x or more"
+              description: "Error ratio over 3d is 0.6% (threshold 0.005), and the 6h window agrees. Objective 99.5 % over 30 days."
+
+  # 5xx on routes outside the SLI (probes, unmatched paths) never count.
+  - name: errors outside the user-facing routes are not part of the SLI
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/",code="200"}'
+        values: '0+100x120'
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/readyz",code="503"}'
+        values: '0+100x120'
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="unmatched",code="500"}'
+        values: '0+100x120'
+    promql_expr_test:
+      - expr: cluster:smoke_http_errors:ratio_rate1h
+        eval_time: 65m
+        exp_samples:
+          - labels: 'cluster:smoke_http_errors:ratio_rate1h{cluster="spoke-dev"}'
+            value: 0
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: SmokeAvailabilityBudgetBurnFast
+        exp_alerts: []
+
+  # No traffic: no ratio is recorded (not 0, not NaN) and nothing fires.
+  - name: no traffic records nothing and fires nothing
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/",code="200"}'
+        values: '0x120'
+    promql_expr_test:
+      - expr: cluster:smoke_http_errors:ratio_rate5m > -1
+        eval_time: 60m
+        exp_samples: []
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: SmokeAvailabilityBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: SmokeAvailabilityBudgetBurnSlow
+        exp_alerts: []

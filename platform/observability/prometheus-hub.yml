@@ -16,7 +16,10 @@ alerting:
     - static_configs:
         - targets: ["obs-alertmanager.monitoring.svc:9093"]
 
-# Recording and alerting rules arrive with Phase 6.1c.
+# Phase 6.1c: the SLO and Argo CD rules (platform/observability/rules/),
+# mounted next to this file from the same ConfigMap.
+rule_files:
+  - /etc/config/*.rules.yml
 
 scrape_configs:
   # Every endpoint of this Prometheus needs basic auth (web config), its
@@ -41,6 +44,17 @@ scrape_configs:
   - job_name: grafana
     static_configs:
       - targets: ["obs-grafana.monitoring.svc:80"]
+    relabel_configs:
+      - target_label: cluster
+        replacement: hub
+
+  # Phase 6.1c: the hub's Argo CD application controller (application
+  # health, sync status and sync operations), through a Service this
+  # release adds in the argocd namespace; the Argo CD install is not
+  # changed. Its NetworkPolicy already admits the metrics port.
+  - job_name: argocd-application-controller
+    static_configs:
+      - targets: ["obs-argocd-application-controller-metrics.argocd.svc:8082"]
     relabel_configs:
       - target_label: cluster
         replacement: hub

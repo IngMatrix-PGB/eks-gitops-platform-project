@@ -135,13 +135,59 @@ Removing the hub removes its releases, Secrets and dashboards ConfigMap.
 Remove the spokes first, or their remote writes fail until you do.
 Neither command deletes the namespace.
 
+## Alerts
+
+The hub loads the rules in `platform/observability/rules/`:
+
+- **The smoke availability SLO.** Four burn-rate alerts, `page` at 14.4x
+  and 6x, `ticket` at 3x and 1x.
+- **Argo CD.** Four alerts: an application Degraded for 10 minutes, an
+  application OutOfSync for 30 minutes, a failed sync, and the
+  application controller down.
+
+Alertmanager has no external receiver in the lab. Read the alerts from
+its API:
+
+```bash
+.tools/bin/kubectl --kubeconfig .local/kubeconfig-hub -n monitoring port-forward svc/obs-alertmanager 9093:9093
+```
+
+Then open `http://localhost:9093/api/v2/alerts`, or the Grafana
+dashboards "Platform / SLO: smoke availability" and "Platform / Argo CD".
+
+To fire one Argo CD alert on purpose, scale the application controller
+to zero and back:
+
+```bash
+.tools/bin/kubectl --kubeconfig .local/kubeconfig-hub -n argocd scale statefulset argocd-application-controller --replicas=0
+```
+
+`ArgoCDApplicationControllerDown` fires about 6 minutes later. Put the
+controller back:
+
+```bash
+.tools/bin/kubectl --kubeconfig .local/kubeconfig-hub -n argocd scale statefulset argocd-application-controller --replicas=1
+```
+
+No application is reconciled while the controller is at zero.
+
+The `obs` release adds one object outside `monitoring`: the Service
+`argocd/obs-argocd-application-controller-metrics`. It is removed with
+the release. Run `make obs-uninstall LAB_CLUSTER=hub` before
+`make argocd-uninstall`; otherwise the latter finds that Service and
+keeps the namespace.
+
 ## Change a config or a dashboard
 
-1. Edit the file under `platform/observability/`.
-2. Run `make check-observability`. It runs promtool on every config,
-   checks that each spoke is scoped to its environment and that no
-   credential is written inline, and checks that every dashboard uses
-   the one datasource and that each query parses.
+1. Edit the file under `platform/observability/`. A new or changed rule
+   needs its case in `platform/observability/rules/tests/`.
+2. Run `make check-observability`. It checks:
+   - **Configs:** promtool passes on every config; each spoke is scoped
+     to its environment; no credential is written inline.
+   - **Rules:** `promtool check rules` and `promtool test rules` pass;
+     every alert fires in at least one test case.
+   - **Dashboards:** every dashboard uses the one datasource, and every
+     query parses.
 3. If you changed a pin or values in `scripts/observability/_lib.sh`,
    also run `make obs-render`.
 4. After the pull request merges, run `make obs-install` on each member

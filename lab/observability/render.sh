@@ -123,7 +123,7 @@ obs_write_grafana_values "$work/values-grafana.yaml"
 "$HELM_BIN" lint "$OBS_GRAFANA_CHART_TGZ" -n "$OBS_NAMESPACE" -f "$work/values-grafana.yaml" >/dev/null || bad "grafana: helm lint failed"
 "$HELM_BIN" template "$OBS_GRAFANA_RELEASE" "$OBS_GRAFANA_CHART_TGZ" -n "$OBS_NAMESPACE" -f "$work/values-grafana.yaml" > "$work/grafana.yaml"
 h="$work/hub.yaml"; g="$work/grafana.yaml"
-check_kinds "hub" "$h" "ConfigMapx2 Deploymentx1 NetworkPolicyx3 Servicex3 ServiceAccountx2 StatefulSetx1 "
+check_kinds "hub" "$h" "ConfigMapx2 Deploymentx1 NetworkPolicyx3 Servicex4 ServiceAccountx2 StatefulSetx1 "
 check_kinds "grafana" "$g" "ConfigMapx1 Deploymentx1 Servicex1 ServiceAccountx1 "
 check_images "hub" "$h" "$prom_img" "$am_img"
 check_images "grafana" "$g" "$graf_img"
@@ -144,6 +144,22 @@ grep -qE '^kind: (ClusterRole|Role|ClusterRoleBinding|RoleBinding)$' "$h" "$g" &
 grep -qF "uid: ${OBS_GRAFANA_DS_UID}" "$g" && grep -qF 'basicAuthPassword: $__env{OBS_PROM_PASSWORD}' "$g" \
   && ok "grafana: one provisioned datasource (${OBS_GRAFANA_DS_UID}), password from the environment" || bad "grafana: datasource provisioning wrong"
 awk '/^[[:space:]]*\[auth.anonymous\]/{f=1;next} /^[[:space:]]*\[/{f=0} f' "$g" | grep -qE '^[[:space:]]*enabled = false$' && ok "grafana: anonymous access off" || bad "grafana: anonymous access not off"
+# Phase 6.1c: the rule files reach the ConfigMap byte for byte (the chart
+# templates extraManifests, and alert annotations use {{ }} too), and the
+# only object outside monitoring is the Argo CD metrics Service.
+mkdir -p "$work/cm"
+for rf in platform/observability/rules/*.rules.yml; do
+  b="$(basename "$rf")"
+  # The key's block ends at the next key or document; blank lines are held
+  # back so the trailing ones Helm adds are not counted.
+  awk -v k="  $b: |" '$0 == k {f=1; next} f && (/^  [^ ]/ || /^---/) {f=0} f { if ($0 == "") { n++ } else { while (n > 0) { print ""; n-- } print } }' "$h" \
+    | sed 's/^    //' > "$work/cm/$b"
+  if cmp -s "$rf" "$work/cm/$b"; then ok "hub: $b rendered byte-identical into the config ConfigMap"; else bad "hub: $b differs after rendering"; fi
+done
+outside="$(grep -E '^  namespace: ' "$h" | sort -u | tr -d ' ' | tr '\n' ' ')"
+[ "$outside" = "namespace:argocd namespace:monitoring " ] && [ "$(grep -c '^  namespace: argocd$' "$h")" -eq 1 ] \
+  && grep -q 'name: obs-argocd-application-controller-metrics' "$h" \
+  && ok "hub: one object outside monitoring, the Argo CD controller metrics Service" || bad "hub: unexpected objects outside monitoring ($outside)"
 for ns_render in "$s" "$h"; do
   grep -q 'name: obs-default-deny-ingress' "$ns_render" || bad "default-deny ingress NetworkPolicy missing"
 done

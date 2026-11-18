@@ -86,6 +86,44 @@ decides how much of it runs locally.
   - Changed from the plan: scraping Argo CD's metrics, and the SLO and
     Argo CD dashboards, move to 6.1c with the rules that use them. 6.1b
     ships two dashboards: clusters overview and the smoke workload.
+- **The SLO and the alerts (6.1c), as built:**
+  - Rules in `platform/observability/rules/`, loaded by the hub
+    Prometheus from the same ConfigMap as its config (a change rolls the
+    pod). Recording rules
+    `cluster:smoke_http_errors:ratio_rate{5m,30m,1h,2h,6h,1d,3d}`: 5xx
+    share of `/` and `/api/info` per `cluster`; 0 rather than absent when
+    there are no errors, absent when there is no traffic.
+  - Burn-rate alerts `SmokeAvailabilityBudgetBurn{Fast,High,Medium,Slow}`
+    at 14.4x, 6x, 3x and 1x of the 0.005 budget, each requiring its long
+    and short window, labeled `severity` (page or ticket), `slo` and
+    `burn_rate`.
+  - Argo CD alerts: `ArgoCDApplicationDegraded` (10m),
+    `ArgoCDApplicationOutOfSync` (30m), `ArgoCDApplicationSyncFailed` (a
+    failed or errored sync in the last 10m) and
+    `ArgoCDApplicationControllerDown` (5m, also when not scraped at all),
+    grouped by application and destination.
+  - Argo CD's metrics come from the hub's application controller through
+    a Service the `obs` release adds in the `argocd` namespace (selector
+    on the controller pods, port `metrics`). Changed from the plan:
+    enabling the chart's metrics Service would change the Argo CD values,
+    which `make argocd-install` refuses on an installed hub by design;
+    the controller's own NetworkPolicy already admits its metrics port.
+    Only the application controller is scraped: every alert needs only
+    its metrics.
+  - Unit tests in `platform/observability/rules/tests/`, run by `make
+    check-observability`. It also requires that every alert is expected
+    to fire in some test case, and every SLO alert also to stay silent in
+    one.
+  - Dashboards added: SLO (availability and budget left over the stored
+    window, burn rate per window, error ratio, firing SLO alerts) and
+    Argo CD (applications by health and sync, controller up, sync
+    operations, firing Argo CD alerts).
+  - Live fire test: only the Argo CD family. `apps/smoke` has no failure
+    mode that answers 5xx on its user routes, so no live SLO alert can be
+    produced without injecting failures into the workload. The plan's
+    lab-only short-window copy of the rules was dropped: with no 5xx it
+    would prove nothing beyond the unit tests. Live, the SLO is checked by
+    its recording series existing for every spoke.
 - **Logs (6.1d)** only if the measured lab leaves at least 1.5 GiB free
   with the hub, dev and uat; otherwise deferred to the AWS phase by an
   amendment here.
@@ -164,4 +202,31 @@ decides how much of it runs locally.
     Alertmanager 18 Mi, Grafana 247 Mi), each spoke's agent and
     kube-state-metrics about 65 Mi; about 2.8 GiB stay free with hub, dev
     and uat. That clears the 1.5 GiB gate, so 6.1d (logs) proceeds.
-- 6.1c–6.1d: recorded here as each lands.
+- 6.1c, offline: `promtool check rules` and `promtool test rules` in
+  `make check-observability`. 12 test cases:
+  - each alert fires;
+  - each SLO alert stays silent below its threshold;
+  - an alert needs both its windows, so it resolves once the errors stop;
+  - one spoke's errors never fire for another;
+  - errors on probes or unmatched paths are not counted;
+  - no traffic records nothing.
+
+  The regression test rejects seven more mutations, including:
+  - a fast-burn alert without its short window;
+  - an error ratio that loses `cluster`;
+  - an SLI over every route;
+  - a Degraded alert with `for: 1m`;
+  - an alert with no firing test;
+  - a rule file without tests.
+- 6.1c, live on lab-multicluster (2026-11-18):
+  - All 15 rules were loaded and healthy.
+  - The Argo CD controller was scraped (`up=1`) and the three
+    applications appeared Healthy and Synced.
+  - Under ~1.7 requests/s of generated traffic, the recording series
+    existed for spoke-dev and spoke-uat with value 0.
+  - Every query on the four dashboards answered through Grafana.
+  - Fire test: the controller was scaled to 0.
+    `ArgoCDApplicationControllerDown` reached Alertmanager after 361 s
+    (`severity=page`, `cluster=hub`). It was resolved after scaling back
+    to 1, and the applications were still Synced and Healthy.
+- 6.1d: recorded here when it lands.

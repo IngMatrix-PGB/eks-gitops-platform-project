@@ -1,0 +1,141 @@
+# Phase 6.1c (ADR-0021): the smoke availability SLO.
+#
+# SLI: share of requests to the user-facing routes ("/" and "/api/info")
+# that the workload did not answer with a 5xx, per cluster (one spoke =
+# one environment). Objective: 99.5 % over 30 days, so the error budget
+# is 0.5 % (0.005).
+#
+# Recording rules: the error ratio over each window the alerts use. When
+# there are no errors the ratio is 0, not absent ("or 0 * ..."), so
+# dashboards show a value; with no traffic at all it is absent.
+#
+# Alerts: multi-window, multi-burn-rate. Each fires only when both its
+# long and its short window burn faster than its factor times the
+# budget; the short window makes it stop soon after the errors stop.
+# Every expression keeps the "cluster" label on both sides of "and", so
+# one spoke's errors never fire an alert for another.
+groups:
+  - name: slo-smoke-availability-recording
+    rules:
+      - record: cluster:smoke_http_errors:ratio_rate5m
+        expr: |
+          (
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[5m]))
+            or
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[5m]))
+          )
+          /
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[5m]))
+      - record: cluster:smoke_http_errors:ratio_rate30m
+        expr: |
+          (
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[30m]))
+            or
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[30m]))
+          )
+          /
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[30m]))
+      - record: cluster:smoke_http_errors:ratio_rate1h
+        expr: |
+          (
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[1h]))
+            or
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[1h]))
+          )
+          /
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[1h]))
+      - record: cluster:smoke_http_errors:ratio_rate2h
+        expr: |
+          (
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[2h]))
+            or
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[2h]))
+          )
+          /
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[2h]))
+      - record: cluster:smoke_http_errors:ratio_rate6h
+        expr: |
+          (
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[6h]))
+            or
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[6h]))
+          )
+          /
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[6h]))
+      - record: cluster:smoke_http_errors:ratio_rate1d
+        expr: |
+          (
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[1d]))
+            or
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[1d]))
+          )
+          /
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[1d]))
+      - record: cluster:smoke_http_errors:ratio_rate3d
+        expr: |
+          (
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[3d]))
+            or
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[3d]))
+          )
+          /
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[3d]))
+
+  - name: slo-smoke-availability-alerts
+    rules:
+      # 14.4x burn rate: at this pace the service spends 2 % of the 30-day budget in 1 hour.
+      - alert: SmokeAvailabilityBudgetBurnFast
+        expr: |
+          cluster:smoke_http_errors:ratio_rate1h > (14.4 * 0.005)
+          and
+          cluster:smoke_http_errors:ratio_rate5m > (14.4 * 0.005)
+        for: 2m
+        labels:
+          severity: page
+          slo: smoke-availability
+          burn_rate: "14.4"
+        annotations:
+          summary: "smoke availability in {{ $labels.cluster }} is burning its error budget at 14.4x or more"
+          description: "Error ratio over 1h is {{ $value | humanizePercentage }} (threshold 0.072), and the 5m window agrees. Objective 99.5 % over 30 days."
+      # 6x burn rate: at this pace the service spends 5 % of the 30-day budget in 6 hours.
+      - alert: SmokeAvailabilityBudgetBurnHigh
+        expr: |
+          cluster:smoke_http_errors:ratio_rate6h > (6 * 0.005)
+          and
+          cluster:smoke_http_errors:ratio_rate30m > (6 * 0.005)
+        for: 15m
+        labels:
+          severity: page
+          slo: smoke-availability
+          burn_rate: "6"
+        annotations:
+          summary: "smoke availability in {{ $labels.cluster }} is burning its error budget at 6x or more"
+          description: "Error ratio over 6h is {{ $value | humanizePercentage }} (threshold 0.03), and the 30m window agrees. Objective 99.5 % over 30 days."
+      # 3x burn rate: at this pace the service spends 10 % of the 30-day budget in 1 day.
+      - alert: SmokeAvailabilityBudgetBurnMedium
+        expr: |
+          cluster:smoke_http_errors:ratio_rate1d > (3 * 0.005)
+          and
+          cluster:smoke_http_errors:ratio_rate2h > (3 * 0.005)
+        for: 1h
+        labels:
+          severity: ticket
+          slo: smoke-availability
+          burn_rate: "3"
+        annotations:
+          summary: "smoke availability in {{ $labels.cluster }} is burning its error budget at 3x or more"
+          description: "Error ratio over 1d is {{ $value | humanizePercentage }} (threshold 0.015), and the 2h window agrees. Objective 99.5 % over 30 days."
+      # 1x burn rate: at this pace the service spends 10 % of the 30-day budget in 3 days.
+      - alert: SmokeAvailabilityBudgetBurnSlow
+        expr: |
+          cluster:smoke_http_errors:ratio_rate3d > (1 * 0.005)
+          and
+          cluster:smoke_http_errors:ratio_rate6h > (1 * 0.005)
+        for: 3h
+        labels:
+          severity: ticket
+          slo: smoke-availability
+          burn_rate: "1"
+        annotations:
+          summary: "smoke availability in {{ $labels.cluster }} is burning its error budget at 1x or more"
+          description: "Error ratio over 3d is {{ $value | humanizePercentage }} (threshold 0.005), and the 6h window agrees. Objective 99.5 % over 30 days."
