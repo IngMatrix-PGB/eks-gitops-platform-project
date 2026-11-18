@@ -70,7 +70,8 @@ for b in by_kind("ClusterRoleBinding") + by_kind("RoleBinding"):
 cr = by_kind("ClusterRole")[0]["rules"]
 want_cr = [(["secrets", "configmaps", "persistentvolumeclaims", "persistentvolumes"], ["get", "list", "watch", "create", "update", "patch"]),
            (["namespaces"], ["get", "list", "watch", "create"]), (["pods"], ["get", "list"]), (["events"], ["create", "patch"]),
-           (["customresourcedefinitions"], ["get", "list", "watch"]), (["clusterrolebindings"], ["get", "list"])]
+           (["customresourcedefinitions"], ["get", "list", "watch"]), (["clusterrolebindings"], ["get", "list"]),
+           (["roles", "rolebindings"], ["get", "list", "watch", "create", "update", "patch"])]
 if [(r["resources"], r["verbs"]) for r in cr] != want_cr: errs.append(f"ClusterRole rules {[(r['resources'], r['verbs']) for r in cr]}")
 role = by_kind("Role")[0]
 if role["metadata"].get("namespace") != "velero": errs.append("Role outside namespace velero")
@@ -82,7 +83,7 @@ sch = by_kind("Schedule")[0]["spec"]
 t = sch["template"]
 if sch["schedule"] != "0 */6 * * *" or t.get("ttl") != "72h": errs.append("schedule or TTL")
 if t.get("includedNamespaces") != nss.split(): errs.append(f"namespaces {t.get('includedNamespaces')}")
-if t.get("includedResources") != ["secrets", "configmaps", "persistentvolumeclaims", "persistentvolumes"]: errs.append("included kinds")
+if t.get("includedResources") != ["secrets", "configmaps", "roles.rbac.authorization.k8s.io", "rolebindings.rbac.authorization.k8s.io", "persistentvolumeclaims", "persistentvolumes"]: errs.append("included kinds")
 me = {(m["key"], m["operator"], tuple(m["values"])) for m in t.get("labelSelector", {}).get("matchExpressions", [])}
 if me != {("owner", "NotIn", ("helm",)), ("app.kubernetes.io/managed-by", "NotIn", ("Helm",))}: errs.append("Helm-owned objects not excluded")
 if t.get("snapshotVolumes") is not False: errs.append("volume snapshots on")

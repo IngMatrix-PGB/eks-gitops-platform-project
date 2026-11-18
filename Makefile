@@ -24,7 +24,7 @@
 	workload-hpa-handover \
 	check-observability check-observability-regression obs-chart-fetch obs-render obs-install obs-status obs-uninstall \
 	backup-chart-fetch backup-render backup-store-up backup-store-down backup-store-status backup-install backup-status \
-	backup-uninstall backup-now backup-restore-check
+	backup-uninstall backup-now backup-restore-check backup-drill-spoke backup-drill-hub
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
@@ -211,6 +211,12 @@ backup-now: ## Phase 6.2a: on-demand backup with the schedule's spec; fails unle
 
 backup-restore-check: ## Phase 6.2a: non-destructive - restore the newest backup into throwaway namespaces, compare Secrets by SHA-256, remove them (LAB_CLUSTER=)
 	@sh lab/backup/restore-check.sh
+
+backup-drill-spoke: ## Phase 6.2b: DESTRUCTIVE drill - delete SPOKE=<dev|uat|prod>, rebuild it from Git plus its newest backup, verify by hashes, print the RTO (needs CONFIRM=yes)
+	@sh lab/backup/drill-spoke.sh "$(SPOKE)" $(if $(filter yes,$(CONFIRM)),--confirm,)
+
+backup-drill-hub: ## Phase 6.2b: DESTRUCTIVE drill - delete the hub, rebuild it, restore argocd and monitoring, verify the spokes reconnect and keep writing, print the RTO (needs CONFIRM=yes)
+	@sh lab/backup/drill-hub.sh $(if $(filter yes,$(CONFIRM)),--confirm,)
 
 workload-hpa-handover: ## Phase 2.8.2: before Git enables an HPA for an existing Deployment, give its current spec.replicas a second field owner so Argo CD letting go never drops it to 1 (NS= DEPLOYMENT=, LAB_CLUSTER=)
 	@sh lab/workload/hpa-handover.sh $(NS) $(DEPLOYMENT)
