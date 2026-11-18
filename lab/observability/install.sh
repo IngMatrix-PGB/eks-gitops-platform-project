@@ -32,6 +32,7 @@ role="$(obs_role)"
 require_tools
 require_helm
 require_obs_charts
+require_obs_log_charts
 require_htpasswd
 check_cluster_identity >/dev/null || { echo "FAIL: cluster '$PROJECT_CLUSTER_NAME' is missing or does not match its expected identity ($IDENTITY_CASE)" >&2; exit 1; }
 
@@ -45,10 +46,18 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT INT TERM
 umask 077
 
-# --- memory gate (first install only) ------------------------------------
-release_present() { phelm status "$1" -n "$OBS_NAMESPACE" >/dev/null 2>&1; }
-if ! release_present "$OBS_RELEASE"; then
-  need="$OBS_SPOKE_MIB"; [ "$role" = hub ] && need="$OBS_HUB_MIB"
+# --- memory gate (each piece's first install only) ------------------------
+# release_present <name> [namespace]
+release_present() { phelm status "$1" -n "${2:-$OBS_NAMESPACE}" >/dev/null 2>&1; }
+need=0
+if [ "$role" = hub ]; then
+  release_present "$OBS_RELEASE" || need=$((need + OBS_HUB_MIB))
+  release_present "$OBS_LOKI_RELEASE" || need=$((need + OBS_HUB_LOGS_MIB))
+else
+  release_present "$OBS_RELEASE" || need=$((need + OBS_SPOKE_MIB))
+  release_present "$OBS_LOGS_RELEASE" "$OBS_LOGS_NAMESPACE" || need=$((need + OBS_SPOKE_LOGS_MIB))
+fi
+if [ "$need" -gt 0 ]; then
   free_mib="$(lab_mc_docker_free_mib)" || { echo "FAIL: could not read Docker memory" >&2; exit 1; }
   if [ "${OBS_SKIP_MEMORY_CHECK:-}" = "1" ]; then
     echo "obs-install: WARNING - memory check skipped by OBS_SKIP_MEMORY_CHECK=1 (~${free_mib} MiB free, floor ${need} MiB)"
@@ -76,14 +85,14 @@ ensure_password() {
   return 10
 }
 
-# upgrade_release <name> <chart-tgz> <chart-name-version> <values-sha> <helm args...>
+# upgrade_release <namespace> <name> <chart-tgz> <chart-name-version> <values-sha> <helm args...>
 upgrade_release() {
-  ur_name="$1"; ur_tgz="$2"; ur_chart="$3"; ur_sha="$4"; shift 4
-  if release_present "$ur_name"; then
-    ur_json="$(phelm status "$ur_name" -n "$OBS_NAMESPACE" -o json 2>/dev/null | sed 's/,"notes":.*//')"
+  ur_ns="$1"; ur_name="$2"; ur_tgz="$3"; ur_chart="$4"; ur_sha="$5"; shift 5
+  if release_present "$ur_name" "$ur_ns"; then
+    ur_json="$(phelm status "$ur_name" -n "$ur_ns" -o json 2>/dev/null | sed 's/,"notes":.*//')"
     ur_status="$(printf '%s' "$ur_json" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')"
     ur_desc="$(printf '%s' "$ur_json" | sed -n 's/.*"description":"\([^"]*\)".*/\1/p')"
-    ur_have="$(phelm list -n "$OBS_NAMESPACE" -o json 2>/dev/null | tr '{' '\n' | grep "\"name\":\"${ur_name}\"" | sed -n 's/.*"chart":"\([^"]*\)".*/\1/p')"
+    ur_have="$(phelm list -n "$ur_ns" -o json 2>/dev/null | tr '{' '\n' | grep "\"name\":\"${ur_name}\"" | sed -n 's/.*"chart":"\([^"]*\)".*/\1/p')"
     [ "$ur_have" = "$ur_chart" ] || { echo "FAIL: release '$ur_name' runs chart '$ur_have', not $ur_chart - refusing to reconcile automatically" >&2; exit 1; }
     [ "$ur_status" = "deployed" ] || { echo "FAIL: release '$ur_name' status '$ur_status' is not 'deployed' - refusing to reconcile automatically" >&2; exit 1; }
     if [ "$ur_desc" = "values-sha256:${ur_sha}" ]; then
@@ -94,7 +103,7 @@ upgrade_release() {
   else
     echo "obs-install: installing release '$ur_name' ($ur_chart) on '$PROJECT_CLUSTER_NAME'"
   fi
-  phelm upgrade --install "$ur_name" "$ur_tgz" --namespace "$OBS_NAMESPACE" "$@" \
+  phelm upgrade --install "$ur_name" "$ur_tgz" --namespace "$ur_ns" "$@" \
     --description "values-sha256:${ur_sha}" --wait --timeout 5m >/dev/null
   echo "OK: release '$ur_name' deployed and Ready"
 }
@@ -119,16 +128,26 @@ if [ "$role" = hub ]; then
 
   obs_write_prom_config hub - "$work/prometheus.yml"
   obs_write_prom_values hub - "$work/prometheus.yml" "$work/values.yaml"
-  upgrade_release "$OBS_RELEASE" "$OBS_PROM_CHART_TGZ" "prometheus-${OBS_PROM_CHART_VERSION}" \
+  upgrade_release "$OBS_NAMESPACE" "$OBS_RELEASE" "$OBS_PROM_CHART_TGZ" "prometheus-${OBS_PROM_CHART_VERSION}" \
     "$(shasum -a 256 "$work/values.yaml" | awk '{print $1}')" -f "$work/values.yaml"
 
   obs_write_grafana_values "$work/grafana.yaml"
   # Dashboards are mounted from the ConfigMap; their sha256 rolls the pod.
   dash_sha="$(cat platform/observability/dashboards/*.json | shasum -a 256 | awk '{print $1}')"
   printf 'podAnnotations:\n  platform.observability/dashboards-sha256: "%s"\n' "$dash_sha" > "$work/grafana-pod.yaml"
-  upgrade_release "$OBS_GRAFANA_RELEASE" "$OBS_GRAFANA_CHART_TGZ" "grafana-${OBS_GRAFANA_CHART_VERSION}" \
+  upgrade_release "$OBS_NAMESPACE" "$OBS_GRAFANA_RELEASE" "$OBS_GRAFANA_CHART_TGZ" "grafana-${OBS_GRAFANA_CHART_VERSION}" \
     "$(cat "$work/grafana.yaml" "$work/grafana-pod.yaml" | shasum -a 256 | awk '{print $1}')" \
     -f "$work/grafana.yaml" -f "$work/grafana-pod.yaml"
+
+  # Phase 6.1d: Loki behind its gateway. The gateway's .htpasswd lives in
+  # the web config Secret; a hub installed before 6.1d gets it here.
+  if ! obs_secret_key hk "$OBS_SECRET_WEB" .htpasswd >/dev/null 2>&1; then
+    obs_hub_rewrite_web hk
+    echo "OK: Loki gateway credentials (.htpasswd) added to Secret $OBS_SECRET_WEB from the existing users"
+  fi
+  obs_write_loki_values "$work/loki.yaml"
+  upgrade_release "$OBS_NAMESPACE" "$OBS_LOKI_RELEASE" "$OBS_LOKI_CHART_TGZ" "loki-${OBS_LOKI_CHART_VERSION}" \
+    "$(shasum -a 256 "$work/loki.yaml" | awk '{print $1}')" -f "$work/loki.yaml"
 else
   env="$LAB_CLUSTER"; user="spoke-${env}"
   rc=0; ensure_password pkubectl "$OBS_SECRET_REMOTE_WRITE" password "$work/pw" || rc=$?
@@ -139,12 +158,22 @@ else
   else
     echo "OK: remote-write credential for '$user' already present on the spoke and the hub - kept"
   fi
-  obs_hub_wait hk "$user" "$work/pw" accept
+  obs_hub_wait hk "$user" "$work/pw" accept 180 prometheus
+  obs_hub_wait hk "$user" "$work/pw" accept 180 loki
+  # Phase 6.1d: the same password for the log agent, in its own namespace.
+  obs_ensure_logs_namespace pkubectl
+  mkdir -p "$work/logs-push"; cp "$work/pw" "$work/logs-push/password"
+  pkubectl -n "$OBS_LOGS_NAMESPACE" create secret generic "$OBS_SECRET_LOGS_PUSH" --from-file="$work/logs-push" --dry-run=client -o yaml \
+    | pkubectl apply -f - >/dev/null
+  rm -rf "$work/logs-push"
   rm -f "$work/pw"
   obs_write_prom_config spoke "$env" "$work/prometheus.yml"
   obs_write_prom_values spoke "$env" "$work/prometheus.yml" "$work/values.yaml"
-  upgrade_release "$OBS_RELEASE" "$OBS_PROM_CHART_TGZ" "prometheus-${OBS_PROM_CHART_VERSION}" \
+  upgrade_release "$OBS_NAMESPACE" "$OBS_RELEASE" "$OBS_PROM_CHART_TGZ" "prometheus-${OBS_PROM_CHART_VERSION}" \
     "$(shasum -a 256 "$work/values.yaml" | awk '{print $1}')" -f "$work/values.yaml"
+  obs_write_logs_values "$env" "$work/logs.yaml"
+  upgrade_release "$OBS_LOGS_NAMESPACE" "$OBS_LOGS_RELEASE" "$OBS_FB_CHART_TGZ" "fluent-bit-${OBS_FB_CHART_VERSION}" \
+    "$(shasum -a 256 "$work/logs.yaml" | awk '{print $1}')" -f "$work/logs.yaml"
 fi
 
 echo "obs-install: OK ($role on '$PROJECT_CLUSTER_NAME')"

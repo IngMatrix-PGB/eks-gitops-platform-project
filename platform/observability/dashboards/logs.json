@@ -1,0 +1,161 @@
+{
+  "uid": "platform-logs",
+  "title": "Platform / Logs",
+  "description": "Phase 6.1d: container logs of each spoke's environment namespace, collected by Fluent Bit and stored in the hub's Loki (72 h).",
+  "tags": [
+    "platform",
+    "phase-6.1"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "timezone": "utc",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "cluster",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "hub-loki"
+        },
+        "query": "label_values(cluster)",
+        "definition": "label_values(cluster)",
+        "multi": true,
+        "includeAll": true,
+        "current": {},
+        "refresh": 2,
+        "sort": 1
+      },
+      {
+        "name": "namespace",
+        "label": "namespace",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "hub-loki"
+        },
+        "query": "label_values(namespace)",
+        "definition": "label_values(namespace)",
+        "multi": true,
+        "includeAll": true,
+        "current": {},
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Log lines per minute, by cluster",
+      "datasource": {
+        "type": "loki",
+        "uid": "hub-loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "hub-loki"
+          },
+          "expr": "sum by (cluster) (count_over_time({cluster=~\"$cluster\", namespace=~\"$namespace\"}[1m]))",
+          "legendFormat": "{{cluster}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Warning and error lines per 5 minutes, by cluster",
+      "datasource": {
+        "type": "loki",
+        "uid": "hub-loki"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "hub-loki"
+          },
+          "expr": "sum by (cluster) (count_over_time({cluster=~\"$cluster\", namespace=~\"$namespace\"} | json | level=~\"WARN|ERROR\" [5m]))",
+          "legendFormat": "{{cluster}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 3,
+      "type": "logs",
+      "title": "Logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "hub-loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 14
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "hub-loki"
+          },
+          "expr": "{cluster=~\"$cluster\", namespace=~\"$namespace\"}",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      }
+    }
+  ]
+}

@@ -32,6 +32,7 @@ require_repo_root
 . scripts/observability/_lib.sh
 require_helm
 require_obs_charts
+require_obs_log_charts
 # eso_check_no_rbac_wildcards: the structural RBAC scanner ESO and
 # metrics-server use.
 # shellcheck source=../../scripts/eso/_lib.sh
@@ -123,7 +124,7 @@ obs_write_grafana_values "$work/values-grafana.yaml"
 "$HELM_BIN" lint "$OBS_GRAFANA_CHART_TGZ" -n "$OBS_NAMESPACE" -f "$work/values-grafana.yaml" >/dev/null || bad "grafana: helm lint failed"
 "$HELM_BIN" template "$OBS_GRAFANA_RELEASE" "$OBS_GRAFANA_CHART_TGZ" -n "$OBS_NAMESPACE" -f "$work/values-grafana.yaml" > "$work/grafana.yaml"
 h="$work/hub.yaml"; g="$work/grafana.yaml"
-check_kinds "hub" "$h" "ConfigMapx2 Deploymentx1 NetworkPolicyx3 Servicex4 ServiceAccountx2 StatefulSetx1 "
+check_kinds "hub" "$h" "ConfigMapx2 Deploymentx1 NetworkPolicyx5 Servicex4 ServiceAccountx2 StatefulSetx1 "
 check_kinds "grafana" "$g" "ConfigMapx1 Deploymentx1 Servicex1 ServiceAccountx1 "
 check_images "hub" "$h" "$prom_img" "$am_img"
 check_images "grafana" "$g" "$graf_img"
@@ -163,6 +164,53 @@ outside="$(grep -E '^  namespace: ' "$h" | sort -u | tr -d ' ' | tr '\n' ' ')"
 for ns_render in "$s" "$h"; do
   grep -q 'name: obs-default-deny-ingress' "$ns_render" || bad "default-deny ingress NetworkPolicy missing"
 done
+
+# --- Phase 6.1d: logs ------------------------------------------------------------
+obs_write_loki_values "$work/values-loki.yaml"
+"$HELM_BIN" lint "$OBS_LOKI_CHART_TGZ" -n "$OBS_NAMESPACE" -f "$work/values-loki.yaml" >/dev/null || bad "loki: helm lint failed"
+"$HELM_BIN" template "$OBS_LOKI_RELEASE" "$OBS_LOKI_CHART_TGZ" -n "$OBS_NAMESPACE" -f "$work/values-loki.yaml" > "$work/loki.yaml"
+l="$work/loki.yaml"
+check_kinds "loki" "$l" "ClusterRolex1 ClusterRoleBindingx1 ConfigMapx3 Deploymentx1 Servicex4 ServiceAccountx1 StatefulSetx1 "
+check_images "loki" "$l" "${OBS_LOKI_IMAGE_REGISTRY}/${OBS_LOKI_IMAGE_REPOSITORY}@${OBS_LOKI_IMAGE_DIGEST}" "${OBS_GW_IMAGE_REGISTRY}/${OBS_GW_IMAGE_REPOSITORY}@${OBS_GW_IMAGE_DIGEST}"
+check_security "loki" "$l"
+# The chart always renders a ClusterRole; it must grant nothing.
+awk '/^kind: ClusterRole$/{f=1} f&&/^---/{f=0} f' "$l" | grep -qE '^rules: \[\]$' && ok "loki: its ClusterRole grants nothing (rules: [])" || bad "loki: ClusterRole grants permissions"
+if grep -qE '^kind: PersistentVolumeClaim$|volumeClaimTemplates:' "$l"; then bad "loki: renders persistent storage (uninstall would delete a volume)"; else ok "loki: no PersistentVolumeClaim (emptyDir storage, LAB-ONLY)"; fi
+grep -qE 'retention_period: 72h' "$l" && grep -qE 'retention_enabled: true' "$l" && grep -qE 'auth_enabled: false' "$l" \
+  && ok "loki: 72h retention enforced by the compactor; one tenant" || bad "loki: retention or tenancy not as designed"
+[ "$(grep -c 'nodePort:' "$l")" -eq 1 ] && grep -qE "nodePort: ${OBS_LOKI_NODEPORT}$" "$l" \
+  && ok "loki: one NodePort (${OBS_LOKI_NODEPORT}), on the gateway" || bad "loki: unexpected NodePort set"
+grep -qF "secretName: ${OBS_SECRET_WEB}" "$l" && grep -q 'auth_basic_user_file' "$l" \
+  && ok "loki: the gateway enforces basic auth from Secret ${OBS_SECRET_WEB}" || bad "loki: gateway basic auth not wired"
+grep -q 'name: obs-loki-gateway$' "$h" && grep -q 'name: obs-loki$' "$h" && ok "hub: NetworkPolicies for the Loki gateway and Loki" || bad "hub: Loki NetworkPolicies missing"
+
+for env in dev uat prod; do
+  obs_write_logs_values "$env" "$work/values-logs-$env.yaml"
+  "$HELM_BIN" lint "$OBS_FB_CHART_TGZ" -n "$OBS_LOGS_NAMESPACE" -f "$work/values-logs-$env.yaml" >/dev/null || bad "logs-$env: helm lint failed"
+  "$HELM_BIN" template "$OBS_LOGS_RELEASE" "$OBS_FB_CHART_TGZ" -n "$OBS_LOGS_NAMESPACE" -f "$work/values-logs-$env.yaml" > "$work/logs-$env.yaml"
+  f="$work/logs-$env.yaml"
+  grep -qF "Path /var/log/containers/*_${env}_*.log" "$f" && grep -qF "labels cluster=spoke-${env}, environment=${env}" "$f" \
+    && grep -qF "http_user spoke-${env}" "$f" || bad "logs-$env: not scoped to namespace '$env' or not labeled spoke-$env"
+done
+f="$work/logs-dev.yaml"
+check_kinds "logs" "$f" "ConfigMapx1 DaemonSetx1 Servicex1 ServiceAccountx1 "
+check_images "logs" "$f" "${OBS_FB_IMAGE_REPOSITORY}:${OBS_FB_IMAGE_TAG}@${OBS_FB_IMAGE_DIGEST}"
+# The agent is the one exception to "restricted": exactly these host and
+# user settings, nothing more.
+awk '/^kind: DaemonSet$/{f=1} f' "$f" > "$work/ds.yaml"
+hp="$(grep -A1 'hostPath:' "$work/ds.yaml" | sed -n 's/^[[:space:]]*path: //p' | tr '\n' ' ')"
+[ "$hp" = "/var/log " ] && ok "logs: the only hostPath is /var/log" || bad "logs: hostPath set is '$hp', want '/var/log '"
+grep -A2 'mountPath: /var/log$' "$work/ds.yaml" | grep -q 'readOnly: true' \
+  && ok "logs: /var/log mounted read-only" || bad "logs: /var/log not mounted read-only"
+for needle in 'runAsUser: 0' 'readOnlyRootFilesystem: true' 'allowPrivilegeEscalation: false' 'type: RuntimeDefault' 'automountServiceAccountToken: false'; do
+  grep -qF -- "$needle" "$work/ds.yaml" || bad "logs: '$needle' missing"
+done
+grep -qE -- '- (ALL|"ALL")$|drop: \["ALL"\]' "$work/ds.yaml" || bad "logs: capabilities not dropped"
+if grep -qE 'privileged: true|hostNetwork: true|hostPID: true|add:' "$work/ds.yaml"; then bad "logs: privileged, host network, host PID or added capabilities"; fi
+if grep -qE '^kind: (Secret|ClusterRole|Role|ClusterRoleBinding|RoleBinding)$' "$f"; then bad "logs: renders a Secret or RBAC"; fi
+grep -qF 'http_passwd ${LOKI_PASSWORD}' "$f" && grep -qF "name: ${OBS_SECRET_LOGS_PUSH}" "$f" \
+  && ok "logs: root with a read-only root filesystem, no capabilities, no escalation, no token, no RBAC, no Secret; push password from ${OBS_SECRET_LOGS_PUSH}" || bad "logs: push credential wiring missing"
+[ "$fail" -eq 0 ] && ok "logs: dev, uat and prod each tail only their own namespace, labeled cluster=spoke-<env>, user spoke-<env>"
 
 if [ "$fail" -ne 0 ]; then echo "obs-render: FAILED"; exit 1; fi
 echo "obs-render: OK"

@@ -72,6 +72,14 @@ run_case "a rule file without unit tests is rejected" reject no_tests
 not_loaded() { mutate "$1/prometheus-hub.yml" 's|  - /etc/config/\*.rules.yml|  - /etc/config/none.yml|'; }
 run_case "a hub config that does not load the rule files is rejected" reject not_loaded
 
+# --- Phase 6.1d: the logs dashboard --------------------------------------------
+loki_mixed() { mutate_dash "$1/dashboards/logs.json" '.panels[0].targets[0].datasource.uid = "hub-prometheus"'; }
+run_case "a query on another datasource than its panel is rejected" reject loki_mixed
+loki_any() { mutate_dash "$1/dashboards/logs.json" '.panels[2].targets[0].expr = "{namespace=~\"$namespace\"}"'; }
+run_case "a LogQL query without the cluster selector is rejected" reject loki_any
+loki_foreign() { mutate_dash "$1/dashboards/logs.json" '.panels[2].datasource.uid = "elsewhere" | .panels[2].targets[0].datasource.uid = "elsewhere"'; }
+run_case "a logs panel on a datasource that is not provisioned is rejected" reject loki_foreign
+
 echo ""
 echo "test-check-observability: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || { echo "test-check-observability: FAILED"; exit 1; }

@@ -71,6 +71,11 @@ OBS_GRAFANA_DASHBOARDS_CM="obs-grafana-dashboards"
 # and kube-state-metrics ~65Mi; the spoke floor is their memory limits.
 OBS_HUB_MIB=900
 OBS_SPOKE_MIB=350
+# Phase 6.1d, the log stack: Loki and its gateway on the hub, Fluent Bit
+# on a spoke. Floors are their memory limits. Measured 2026-11-18: the hub
+# node grew ~290 MiB (Loki 96Mi, gateway 12Mi); Fluent Bit 4Mi.
+OBS_HUB_LOGS_MIB=600
+OBS_SPOKE_LOGS_MIB=100
 
 HELM_BIN=".tools/bin/helm"
 PROMTOOL_BIN=".tools/bin/promtool"
@@ -476,6 +481,49 @@ EOF
               protocol: TCP
             - port: 3000
               protocol: TCP
+  # Phase 6.1d: the Loki gateway from anywhere (spokes push through its
+  # NodePort; basic auth gates every request); Loki itself only from the
+  # gateway and from its own pod (memberlist, gRPC).
+  - |
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: obs-loki-gateway
+      namespace: ${OBS_NAMESPACE}
+    spec:
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: loki
+          app.kubernetes.io/component: gateway
+      policyTypes: [Ingress]
+      ingress:
+        - ports:
+            - port: 8080
+              protocol: TCP
+  - |
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: obs-loki
+      namespace: ${OBS_NAMESPACE}
+    spec:
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: loki
+          app.kubernetes.io/component: single-binary
+      policyTypes: [Ingress]
+      ingress:
+        - from:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: loki
+          ports:
+            - port: 3100
+              protocol: TCP
+            - port: 9095
+              protocol: TCP
+            - port: 7946
+              protocol: TCP
 EOF
     fi
   } > "$owv_out"
@@ -549,6 +597,17 @@ datasources:
         access: proxy
         url: http://${OBS_HUB_QUERY_SVC}.${OBS_NAMESPACE}.svc
         isDefault: true
+        editable: false
+        basicAuth: true
+        basicAuthUser: grafana
+        secureJsonData:
+          basicAuthPassword: \$__env{OBS_PROM_PASSWORD}
+      # Phase 6.1d: the hub's Loki, through its gateway, same user.
+      - name: Loki (hub)
+        uid: ${OBS_GRAFANA_LOKI_DS_UID}
+        type: loki
+        access: proxy
+        url: http://${OBS_LOKI_GATEWAY_SVC}.${OBS_NAMESPACE}.svc
         editable: false
         basicAuth: true
         basicAuthUser: grafana
@@ -639,6 +698,14 @@ obs_hub_remove_user() {
   _obs_hub_write_web "$1" "$ohr_dir" "$ohr_dir/users.new"
 }
 
+# obs_hub_rewrite_web <hub-kubectl-fn> - rewrites web.yml and .htpasswd
+# from the stored user list, changing no user (Phase 6.1d migration).
+obs_hub_rewrite_web() {
+  ohw_dir="$(mktemp -d)"
+  obs_secret_key "$1" "$OBS_SECRET_WEB" users > "$ohw_dir/users.old" || { rm -rf "$ohw_dir"; return 1; }
+  _obs_hub_write_web "$1" "$ohw_dir" "$ohw_dir/users.old"
+}
+
 # obs_hub_has_user <hub-kubectl-fn> <user>
 obs_hub_has_user() {
   obs_secret_key "$1" "$OBS_SECRET_WEB" users 2>/dev/null | awk -v u="$2" '$1 == u { f = 1 } END { exit !f }'
@@ -652,30 +719,37 @@ _obs_hub_write_web() {
     echo "basic_auth_users:"
     awk '{ printf "  %s: \"%s\"\n", $1, $2 }' "$2/secret/users"
   } > "$2/secret/web.yml"
+  # Phase 6.1d: the same hashes for the Loki gateway's nginx basic auth.
+  awk '{ printf "%s:%s\n", $1, $2 }' "$2/secret/users" > "$2/secret/.htpasswd"
   obs_apply_secret "$1" "$OBS_SECRET_WEB" "$2/secret"
   rm -rf "$2"
 }
 
-# obs_hub_wait <hub-kubectl-fn> <user> <password-file> <accept|refuse> [timeout-s]
-# - waits until the hub's Prometheus accepts (or refuses) <user>'s
-# credential. The kubelet refreshes the mounted web config about a minute
+# obs_hub_wait <hub-kubectl-fn> <user> <password-file> <accept|refuse> [timeout-s] [prometheus|loki]
+# - waits until the hub's Prometheus (or, Phase 6.1d, the Loki gateway)
+# accepts (or refuses) <user>'s credential. The kubelet refreshes the mounted web config about a minute
 # after a change, so a new user is not accepted, and a removed one not
 # refused, right away. Probes with a remote write whose body is not
 # valid: 401 means refused; 400 means authenticated (nothing is written).
 # Without the accept wait, an agent started at once has its first samples
 # refused with 401, which Prometheus does not retry.
 obs_hub_wait() {
-  ow_kc="$1"; ow_user="$2"; ow_pw="$3"; ow_want="$4"; ow_timeout="${5:-180}"
+  ow_kc="$1"; ow_user="$2"; ow_pw="$3"; ow_want="$4"; ow_timeout="${5:-180}"; ow_target="${6:-prometheus}"
+  case "$ow_target" in
+    prometheus) ow_svc="$OBS_HUB_QUERY_SVC"; ow_path="/api/v1/write" ;;
+    loki) ow_svc="$OBS_LOKI_GATEWAY_SVC"; ow_path="/loki/api/v1/push" ;;
+    *) echo "FAIL: obs_hub_wait: unknown target '$ow_target'" >&2; return 1 ;;
+  esac
   ow_dir="$(mktemp -d)"
   ow_port="$(awk 'BEGIN { srand(); print 20000 + int(rand() * 20000) }')"
-  "$ow_kc" -n "$OBS_NAMESPACE" port-forward "svc/${OBS_HUB_QUERY_SVC}" "${ow_port}:80" >/dev/null 2>&1 &
+  "$ow_kc" -n "$OBS_NAMESPACE" port-forward "svc/${ow_svc}" "${ow_port}:80" >/dev/null 2>&1 &
   ow_pf=$!
   { printf 'machine 127.0.0.1 login %s password ' "$ow_user"; cat "$ow_pw"; printf '\n'; } > "$ow_dir/netrc"
   chmod 600 "$ow_dir/netrc"
   ow_start="$(date +%s)"; ow_code=""; ow_done=1
   while [ $(( $(date +%s) - ow_start )) -lt "$ow_timeout" ]; do
     ow_code="$(curl -s -o /dev/null -w '%{http_code}' --netrc-file "$ow_dir/netrc" -X POST \
-      -H 'Content-Type: application/x-protobuf' --data-binary 'x' "http://127.0.0.1:${ow_port}/api/v1/write" 2>/dev/null || true)"
+      -H 'Content-Type: application/x-protobuf' --data-binary 'x' "http://127.0.0.1:${ow_port}${ow_path}" 2>/dev/null || true)"
     case "$ow_want:$ow_code" in
       accept:2??|accept:400|accept:415|refuse:401) ow_done=0; break ;;
     esac
@@ -685,9 +759,330 @@ obs_hub_wait() {
   wait "$ow_pf" 2>/dev/null || true
   rm -rf "$ow_dir"
   if [ "$ow_done" -eq 0 ]; then
-    echo "OK: the hub ${ow_want}s '$ow_user' (probe answered $ow_code after $(( $(date +%s) - ow_start ))s)"
+    echo "OK: the hub's ${ow_target} ${ow_want}s '$ow_user' (probe answered $ow_code after $(( $(date +%s) - ow_start ))s)"
     return 0
   fi
-  echo "FAIL: the hub does not ${ow_want} '$ow_user' after ${ow_timeout}s (last answer: ${ow_code:-none})" >&2
+  echo "FAIL: the hub's ${ow_target} does not ${ow_want} '$ow_user' after ${ow_timeout}s (last answer: ${ow_code:-none})" >&2
   return 1
+}
+
+# --- logs (Phase 6.1d) -----------------------------------------------------
+# Hub: Loki, single binary, behind the chart's nginx gateway (basic auth
+# from the same per-user hashes as the Prometheus web config). Spokes:
+# Fluent Bit, a DaemonSet in its own namespace, tailing only the
+# environment namespace's container logs.
+OBS_LOKI_CHART_VERSION="7.5.0"
+OBS_LOKI_CHART_URL="https://github.com/grafana/helm-charts/releases/download/helm-loki-7.5.0/loki-7.5.0.tgz"
+OBS_LOKI_CHART_SHA256="bb8b254a57afc6b31ab23a6061216760c91c8ad3499d340442398b88ec603ca8"
+OBS_LOKI_CHART_TGZ=".tools/charts/loki-${OBS_LOKI_CHART_VERSION}.tgz"
+OBS_FB_CHART_VERSION="0.58.3"
+OBS_FB_CHART_URL="https://github.com/fluent/helm-charts/releases/download/fluent-bit-0.58.3/fluent-bit-0.58.3.tgz"
+OBS_FB_CHART_SHA256="99e025e461fa080e68dcfe65b8bc0bf64dd74d2c04b87cb910f9192fbf954f20"
+OBS_FB_CHART_TGZ=".tools/charts/fluent-bit-${OBS_FB_CHART_VERSION}.tgz"
+
+OBS_LOKI_IMAGE_REGISTRY="docker.io"
+OBS_LOKI_IMAGE_REPOSITORY="grafana/loki"
+OBS_LOKI_IMAGE_TAG="3.6.16"
+OBS_LOKI_IMAGE_DIGEST="sha256:79f3fbf2a3eca97dd735e2aa0871a2fc15365a81c68dea67f639b092c301f454"
+OBS_GW_IMAGE_REGISTRY="docker.io"
+OBS_GW_IMAGE_REPOSITORY="nginxinc/nginx-unprivileged"
+OBS_GW_IMAGE_TAG="1.29-alpine"
+OBS_GW_IMAGE_DIGEST="sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6"
+OBS_FB_IMAGE_REPOSITORY="cr.fluentbit.io/fluent/fluent-bit"
+OBS_FB_IMAGE_TAG="5.1.3"
+OBS_FB_IMAGE_DIGEST="sha256:c5542543523c9678398dd78d927c05e8425ec15b038f226b67b3b019b1a70845"
+
+OBS_LOKI_RELEASE="obs-loki"
+OBS_LOGS_RELEASE="obs-logs"
+OBS_LOGS_NAMESPACE="logging"
+OBS_LOKI_NODEPORT=30100
+OBS_LOKI_PUSH_URL_HOST="eks-gitops-hub-control-plane"
+OBS_LOKI_GATEWAY_SVC="obs-loki-gateway"
+OBS_GRAFANA_LOKI_DS_UID="hub-loki"
+# Spoke: its push password, copied from obs-remote-write into the logging
+# namespace (a pod reads Secrets of its own namespace only).
+OBS_SECRET_LOGS_PUSH="obs-logs-push"
+
+require_obs_log_charts() {
+  for roc in "$OBS_LOKI_CHART_TGZ:$OBS_LOKI_CHART_SHA256" "$OBS_FB_CHART_TGZ:$OBS_FB_CHART_SHA256"; do
+    roc_f="${roc%%:*}"; roc_sum="${roc##*:}"
+    [ -f "$roc_f" ] || { echo "FAIL: $roc_f not found - run 'make obs-chart-fetch' first" >&2; exit 1; }
+    [ "$(shasum -a 256 "$roc_f" | awk '{print $1}')" = "$roc_sum" ] || { echo "FAIL: $roc_f does not match the pinned checksum - run 'make obs-chart-fetch' again" >&2; exit 1; }
+  done
+}
+
+# obs_write_loki_values <out> - hub only.
+obs_write_loki_values() {
+  cat > "$1" <<EOF
+# Generated by scripts/observability/_lib.sh (Phase 6.1d).
+deploymentMode: SingleBinary
+loki:
+  image:
+    registry: ${OBS_LOKI_IMAGE_REGISTRY}
+    repository: ${OBS_LOKI_IMAGE_REPOSITORY}
+    tag: "${OBS_LOKI_IMAGE_TAG}"
+    digest: "${OBS_LOKI_IMAGE_DIGEST}"
+  # One tenant; authentication is the gateway's basic auth.
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2026-11-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  limits_config:
+    retention_period: 72h
+    ingestion_rate_mb: 4
+    ingestion_burst_size_mb: 8
+    per_stream_rate_limit: 1MB
+    per_stream_rate_limit_burst: 2MB
+    max_line_size: 64KB
+    max_global_streams_per_user: 2000
+    reject_old_samples: true
+    reject_old_samples_max_age: 24h
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+  pattern_ingester:
+    enabled: false
+  ui:
+    enabled: false
+  podSecurityContext:
+    runAsUser: 10001
+    runAsGroup: 10001
+    runAsNonRoot: true
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+$(_obs_container_sc "    ")
+singleBinary:
+  replicas: 1
+  # LAB-ONLY: logs live on an emptyDir and are lost when the pod restarts;
+  # no PersistentVolumeClaim, so removing the stack never deletes a volume.
+  persistence:
+    enabled: false
+  extraVolumes:
+    - name: storage
+      emptyDir:
+        sizeLimit: 2Gi
+  extraVolumeMounts:
+    - name: storage
+      mountPath: /var/loki
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      memory: 512Mi
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+gateway:
+  enabled: true
+  replicas: 1
+  verboseLogging: false
+  image:
+    registry: ${OBS_GW_IMAGE_REGISTRY}
+    repository: ${OBS_GW_IMAGE_REPOSITORY}
+    tag: "${OBS_GW_IMAGE_TAG}"
+    digest: "${OBS_GW_IMAGE_DIGEST}"
+  # LAB-ONLY plain HTTP; spokes push through this NodePort.
+  service:
+    type: NodePort
+    nodePort: ${OBS_LOKI_NODEPORT}
+  basicAuth:
+    enabled: true
+    existingSecret: ${OBS_SECRET_WEB}
+  podSecurityContext:
+    runAsUser: 101
+    runAsGroup: 101
+    runAsNonRoot: true
+    fsGroup: 101
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+$(_obs_container_sc "    ")
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      memory: 64Mi
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+minio:
+  enabled: false
+sidecar:
+  rules:
+    enabled: false
+monitoring:
+  dashboards:
+    enabled: false
+  rules:
+    enabled: false
+  serviceMonitor:
+    enabled: false
+  selfMonitoring:
+    enabled: false
+EOF
+}
+
+# obs_write_logs_values <env> <out> - spoke only. Fluent Bit tails only
+# /var/log/containers/*_<env>_*.log; namespace, pod and container come from
+# the file name, so it needs no Kubernetes API access (no RBAC, no token).
+obs_write_logs_values() {
+  owl_env="$1"
+  cat > "$2" <<EOF
+# Generated by scripts/observability/_lib.sh (Phase 6.1d).
+kind: DaemonSet
+image:
+  repository: ${OBS_FB_IMAGE_REPOSITORY}
+  tag: "${OBS_FB_IMAGE_TAG}"
+  digest: "${OBS_FB_IMAGE_DIGEST}"
+testFramework:
+  enabled: false
+rbac:
+  create: false
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+hostNetwork: false
+# The one exception to Pod Security "restricted" in the lab (namespace
+# ${OBS_LOGS_NAMESPACE} is "privileged"): root, to read the node's
+# root-owned log files through a read-only hostPath. Everything else stays
+# locked down.
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  runAsUser: 0
+  runAsNonRoot: false
+$(_obs_container_sc "  ")
+daemonSetVolumes:
+  - name: varlog
+    hostPath:
+      path: /var/log
+      type: Directory
+  - name: state
+    emptyDir:
+      sizeLimit: 64Mi
+daemonSetVolumeMounts:
+  - name: varlog
+    mountPath: /var/log
+    readOnly: true
+  - name: state
+    mountPath: /fluent-bit/state
+env:
+  - name: LOKI_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: ${OBS_SECRET_LOGS_PUSH}
+        key: password
+resources:
+  requests:
+    cpu: 10m
+    memory: 24Mi
+  limits:
+    memory: 96Mi
+config:
+  service: |
+    [SERVICE]
+        Daemon Off
+        Flush 5
+        Log_Level warn
+        Parsers_File /fluent-bit/etc/parsers.conf
+        Parsers_File /fluent-bit/etc/conf/custom_parsers.conf
+        HTTP_Server On
+        HTTP_Listen 0.0.0.0
+        HTTP_Port 2020
+        Health_Check On
+  inputs: |
+    [INPUT]
+        Name tail
+        Path /var/log/containers/*_${owl_env}_*.log
+        Path_Key path
+        multiline.parser cri
+        Tag workload.*
+        DB /fluent-bit/state/tail.db
+        # Files found at start are read from the beginning: the workload
+        # logs little after it starts. On a restart (the DB is on an
+        # emptyDir) lines are sent again; Loki drops exact duplicates and
+        # rejects lines older than 24h.
+        Read_from_Head On
+        Mem_Buf_Limit 16MB
+        Skip_Long_Lines On
+        Refresh_Interval 10
+  filters: |
+    [FILTER]
+        Name parser
+        Match workload.*
+        Key_Name path
+        Parser obs_container_path
+        Reserve_Data On
+        Preserve_Key Off
+  outputs: |
+    [OUTPUT]
+        Name loki
+        Match workload.*
+        # LAB-ONLY plain HTTP to the hub's gateway NodePort.
+        Host ${OBS_LOKI_PUSH_URL_HOST}
+        Port ${OBS_LOKI_NODEPORT}
+        http_user spoke-${owl_env}
+        http_passwd \${LOKI_PASSWORD}
+        labels cluster=spoke-${owl_env}, environment=${owl_env}
+        label_keys \$namespace, \$pod, \$container
+        remove_keys namespace, pod, container, stream, _p, time
+        line_format key_value
+        drop_single_key On
+  customParsers: |
+    [PARSER]
+        Name obs_container_path
+        Format regex
+        Regex ^/var/log/containers/(?<pod>[^_]+)_(?<namespace>[^_]+)_(?<container>.+)-[0-9a-f]{64}\.log$
+EOF
+}
+
+# obs_ensure_logs_namespace <kubectl-fn> - the spoke's logging namespace:
+# Pod Security "privileged" enforced (the log agent's read-only hostPath),
+# "restricted" audited and warned, and a NetworkPolicy denying all ingress.
+obs_ensure_logs_namespace() {
+  "$1" apply -f - >/dev/null <<YAML
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${OBS_LOGS_NAMESPACE}
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: obs-default-deny-ingress
+  namespace: ${OBS_LOGS_NAMESPACE}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+YAML
 }
