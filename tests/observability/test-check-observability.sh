@@ -80,6 +80,12 @@ run_case "a LogQL query without the cluster selector is rejected" reject loki_an
 loki_foreign() { mutate_dash "$1/dashboards/logs.json" '.panels[2].datasource.uid = "elsewhere" | .panels[2].targets[0].datasource.uid = "elsewhere"'; }
 run_case "a logs panel on a datasource that is not provisioned is rejected" reject loki_foreign
 
+# --- Phase 6.2a: backup health rules ------------------------------------------
+stale_early() { mutate "$1/rules/backup.rules.yml" 's/> 13 \* 3600/> 1 * 3600/'; }
+run_case "a stale-backup alert after 1 hour instead of 13 fails its unit tests" reject stale_early
+any_cluster() { mutate "$1/rules/backup.rules.yml" 's/expr: max by (cluster) (velero_backup_last_status/expr: max (velero_backup_last_status/'; }
+run_case "a failed-backup alert that loses the cluster label fails its unit tests" reject any_cluster
+
 echo ""
 echo "test-check-observability: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || { echo "test-check-observability: FAILED"; exit 1; }

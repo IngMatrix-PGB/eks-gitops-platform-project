@@ -22,7 +22,9 @@
 	metrics-server-chart-fetch metrics-server-render check-metrics-server-chart metrics-server-install \
 	metrics-server-status metrics-server-uninstall mc-spoke-metrics-server workload-test-autoscaling \
 	workload-hpa-handover \
-	check-observability check-observability-regression obs-chart-fetch obs-render obs-install obs-status obs-uninstall
+	check-observability check-observability-regression obs-chart-fetch obs-render obs-install obs-status obs-uninstall \
+	backup-chart-fetch backup-render backup-store-up backup-store-down backup-store-status backup-install backup-status \
+	backup-uninstall backup-now backup-restore-check
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
@@ -179,6 +181,36 @@ obs-status: ## Phase 6.1b: read-only health; hub: 401 without credentials, serie
 
 obs-uninstall: ## Phase 6.1b: idempotent removal (LAB_CLUSTER=); a spoke also loses its user on the hub
 	@sh lab/observability/uninstall.sh
+
+backup-chart-fetch: ## Phase 6.2a: download and checksum-verify the pinned velero chart into .tools/charts/
+	@sh lab/backup/chart-fetch.sh
+
+backup-render: ## Phase 6.2a: fully offline render of Velero for hub/dev/uat/prod; pinned images, least RBAC (no cluster-admin), restricted pod, own bucket, schedule scope (needs the chart; not in validate)
+	@sh lab/backup/render.sh
+
+backup-store-up: ## Phase 6.2a: start the lab backup store (versitygw on the kind network, S3 port only, data under .local/backups)
+	@sh lab/backup/store.sh up
+
+backup-store-down: ## Phase 6.2a: remove the store container; backups, metadata and keys stay in .local/backups
+	@sh lab/backup/store.sh down
+
+backup-store-status: ## Phase 6.2a: store running; buckets and owners
+	@sh lab/backup/store.sh status
+
+backup-install: ## Phase 6.2a: fail-closed idempotent Velero install on LAB_CLUSTER=hub|dev|uat|prod; own bucket and key in the store
+	@sh lab/backup/install.sh
+
+backup-status: ## Phase 6.2a: read-only - release, Velero, BackupStorageLocation Available, newest completed backup under 13h (LAB_CLUSTER=)
+	@sh lab/backup/status.sh
+
+backup-uninstall: ## Phase 6.2a: remove Velero from LAB_CLUSTER=; its backups and key stay in the store
+	@sh lab/backup/uninstall.sh
+
+backup-now: ## Phase 6.2a: on-demand backup with the schedule's spec; fails unless Completed with no error (LAB_CLUSTER=)
+	@sh lab/backup/now.sh
+
+backup-restore-check: ## Phase 6.2a: non-destructive - restore the newest backup into throwaway namespaces, compare Secrets by SHA-256, remove them (LAB_CLUSTER=)
+	@sh lab/backup/restore-check.sh
 
 workload-hpa-handover: ## Phase 2.8.2: before Git enables an HPA for an existing Deployment, give its current spec.replicas a second field owner so Argo CD letting go never drops it to 1 (NS= DEPLOYMENT=, LAB_CLUSTER=)
 	@sh lab/workload/hpa-handover.sh $(NS) $(DEPLOYMENT)

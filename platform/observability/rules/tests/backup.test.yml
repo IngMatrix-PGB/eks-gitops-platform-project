@@ -1,0 +1,105 @@
+# Unit tests for backup.rules.yml (promtool test rules, Phase 6.2a; run by
+# make check-observability). Times: the schedule runs every 6h; stale is
+# 13h without a successful backup.
+rule_files:
+  - ../backup.rules.yml
+evaluation_interval: 1m
+
+tests:
+  # dev's last run failed; uat's succeeded. Only dev fires.
+  - name: a failed last backup fires for its cluster only
+    interval: 1m
+    input_series:
+      - series: 'velero_backup_last_status{cluster="spoke-dev",job="velero",schedule="velero-platform-state"}'
+        values: '1x10 0x10'
+      - series: 'velero_backup_last_status{cluster="spoke-uat",job="velero",schedule="velero-platform-state"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: VeleroBackupFailed
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: VeleroBackupFailed
+        exp_alerts:
+          - exp_labels: {severity: ticket, cluster: spoke-dev}
+            exp_annotations:
+              summary: "The last scheduled backup of spoke-dev did not complete"
+              description: "Velero reports the last run of schedule velero-platform-state as failed or partially failed. Check the Backup's status and logs in namespace velero."
+
+  # The last success is a fixed timestamp (0 s); it goes stale past 13h
+  # plus the 15m "for", never before.
+  - name: no successful backup in 13 hours fires, 12 hours does not
+    interval: 1m
+    input_series:
+      - series: 'velero_backup_last_successful_timestamp{cluster="hub",job="velero",schedule="velero-platform-state"}'
+        values: '0x900'
+    alert_rule_test:
+      - eval_time: 12h
+        alertname: VeleroBackupStale
+        exp_alerts: []
+      - eval_time: 13h30m
+        alertname: VeleroBackupStale
+        exp_alerts:
+          - exp_labels: {severity: ticket, cluster: hub}
+            exp_annotations:
+              summary: "hub has no successful backup in 13 hours"
+              description: "The last successful backup is 13h 30m 0s old; the schedule runs every 6 hours."
+
+  # Velero is up on dev with no success recorded; on uat a success exists.
+  - name: Velero up without any successful backup fires after 13 hours
+    interval: 1m
+    input_series:
+      - series: 'up{cluster="spoke-dev",job="velero"}'
+        values: '1x900'
+      - series: 'up{cluster="spoke-uat",job="velero"}'
+        values: '1x900'
+      - series: 'velero_backup_last_successful_timestamp{cluster="spoke-uat",job="velero",schedule="velero-platform-state"}'
+        values: '0+60x900'
+    alert_rule_test:
+      - eval_time: 12h
+        alertname: VeleroNoSuccessfulBackup
+        exp_alerts: []
+      - eval_time: 14h
+        alertname: VeleroNoSuccessfulBackup
+        exp_alerts:
+          - exp_labels: {severity: ticket, cluster: spoke-dev}
+            exp_annotations:
+              summary: "Velero on spoke-dev has run for 13 hours without one successful backup"
+              description: "Velero is up and scraped, but reports no successful backup of schedule velero-platform-state."
+      - eval_time: 14h
+        alertname: VeleroBackupStale
+        exp_alerts: []
+
+  - name: the backup store unavailable for 10 minutes fires
+    interval: 1m
+    input_series:
+      - series: 'velero_backup_location_status_gauge{cluster="spoke-uat",job="velero",backup_location_name="default"}'
+        values: '1x5 0x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: VeleroBackupStorageUnavailable
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: VeleroBackupStorageUnavailable
+        exp_alerts:
+          - exp_labels: {severity: ticket, cluster: spoke-uat}
+            exp_annotations:
+              summary: "The backup store is unavailable to spoke-uat"
+              description: "Velero's BackupStorageLocation has not been Available for 10 minutes: the store is down, unreachable, or refuses this cluster's key."
+
+  - name: Velero not scraped for 10 minutes fires
+    interval: 1m
+    input_series:
+      - series: 'up{cluster="hub",job="velero"}'
+        values: '1x5 0x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: VeleroDown
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: VeleroDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, cluster: hub}
+            exp_annotations:
+              summary: "Velero on hub has not been scraped for 10 minutes"
+              description: "No backup runs while Velero is down, and the other backup alerts go blind for this cluster."
