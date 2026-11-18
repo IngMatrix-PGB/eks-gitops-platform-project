@@ -1,0 +1,80 @@
+# Phase 6.1b (ADR-0021): Prometheus in agent mode on one workload spoke.
+# Scrapes, then remote-writes everything to the hub; it keeps no local
+# storage beyond its WAL and answers no queries.
+#
+# lab/observability/install.sh replaces the three @...@ placeholders.
+# They hold no credential: the remote-write password is mounted from the
+# Secret obs-remote-write, which only that spoke and the install script
+# ever hold.
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  external_labels:
+    cluster: "@CLUSTER@"
+    environment: "@ENVIRONMENT@"
+
+remote_write:
+  - url: "@HUB_WRITE_URL@"
+    # LAB-ONLY: plain HTTP on the local kind docker network. The AWS
+    # design (TLS, private endpoint, SigV4) belongs to Phase 6.4.
+    basic_auth:
+      username: "@CLUSTER@"
+      password_file: /etc/remote-write/password
+    queue_config:
+      max_samples_per_send: 2000
+
+scrape_configs:
+  # The agent itself.
+  - job_name: prometheus-agent
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Container CPU and memory from each kubelet's cAdvisor endpoint.
+  # LAB-ONLY: kind kubelets serve self-signed certificates, as for
+  # metrics-server's --kubelet-insecure-tls.
+  - job_name: kubelet-cadvisor
+    scheme: https
+    metrics_path: /metrics/cadvisor
+    authorization:
+      credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    tls_config:
+      insecure_skip_verify: true
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_node_name]
+        target_label: node
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_cpu_cfs_throttled_periods_total|container_cpu_cfs_periods_total
+        action: keep
+      - source_labels: [container]
+        regex: ""
+        action: drop
+
+  # Object state (Deployments, Pods, HPA) of the environment namespace.
+  - job_name: kube-state-metrics
+    static_configs:
+      - targets: ["obs-kube-state-metrics.monitoring.svc:8080"]
+
+  # The workload's own metrics port (apps/smoke, Phase 6.1a), only in
+  # this spoke's environment namespace and only on the port named
+  # "metrics".
+  - job_name: workload
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: ["@ENVIRONMENT@"]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        regex: metrics
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_phase]
+        regex: Running
+        action: keep
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        target_label: app

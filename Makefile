@@ -21,13 +21,14 @@
 	workload-test-resilience \
 	metrics-server-chart-fetch metrics-server-render check-metrics-server-chart metrics-server-install \
 	metrics-server-status metrics-server-uninstall mc-spoke-metrics-server workload-test-autoscaling \
-	workload-hpa-handover
+	workload-hpa-handover \
+	check-observability check-observability-regression obs-chart-fetch obs-render obs-install obs-status obs-uninstall
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -58,6 +59,12 @@ check-standard-workload-chart: ## Offline lint/render/schema/PSS/dry-run validat
 
 check-spoke-access: ## Phase 3.4.4a: the shared spoke Role (platform/spoke-access/role.yaml) grants exactly the AppProject's namespaced kinds - no ClusterRole, no secrets, no wildcard
 	@bash scripts/validate/check-spoke-access.sh
+
+check-observability: ## Phase 6.1b: offline - promtool on the hub and every spoke Prometheus config (agent mode), per-environment scoping, no inline credential, dashboards valid with one datasource and parseable queries
+	@sh scripts/validate/check-observability.sh
+
+check-observability-regression: ## Phase 6.1b: offline - check-observability against mutated copies of platform/observability
+	@sh tests/observability/test-check-observability.sh
 
 check-supply-chain: ## Phase 5.1a: SHA-pinned GitHub-owned actions only, no write permissions, digest-pinned non-root Dockerfiles, scan threshold, dated .trivyignore, Dependabot coverage
 	@bash scripts/validate/check-supply-chain.sh
@@ -157,6 +164,21 @@ metrics-server-uninstall: ## Phase 2.8.2: idempotent removal of the metrics-serv
 mc-spoke-metrics-server: ## Phase 2.8.2: install metrics-server on SPOKE=<dev|uat|prod>
 	@case "$(SPOKE)" in dev|uat|prod) ;; *) echo "FAIL: SPOKE must be exactly one of: dev uat prod (got '$(SPOKE)')" >&2; exit 1 ;; esac
 	@LAB_CLUSTER=$(SPOKE) sh lab/metrics-server/install.sh
+
+obs-chart-fetch: ## Phase 6.1b: download and checksum-verify the pinned prometheus and grafana charts into .tools/charts/
+	@sh lab/observability/chart-fetch.sh
+
+obs-render: ## Phase 6.1b: fully offline render of hub and spoke stacks; proves object sets, pinned digests, restricted pods, least RBAC, no Secret, NetworkPolicy, agent/receiver wiring (needs the charts; not in validate)
+	@sh lab/observability/render.sh
+
+obs-install: ## Phase 6.1b: fail-closed idempotent install, LAB_CLUSTER=hub first, then dev|uat|prod; generates per-spoke remote-write credentials; LAB-ONLY plain HTTP
+	@sh lab/observability/install.sh
+
+obs-status: ## Phase 6.1b: read-only health; hub: 401 without credentials, series by cluster (EXPECT_CLUSTERS=), Grafana datasource and dashboards; spoke: samples sent, none failed
+	@sh lab/observability/status.sh
+
+obs-uninstall: ## Phase 6.1b: idempotent removal (LAB_CLUSTER=); a spoke also loses its user on the hub
+	@sh lab/observability/uninstall.sh
 
 workload-hpa-handover: ## Phase 2.8.2: before Git enables an HPA for an existing Deployment, give its current spec.replicas a second field owner so Argo CD letting go never drops it to 1 (NS= DEPLOYMENT=, LAB_CLUSTER=)
 	@sh lab/workload/hpa-handover.sh $(NS) $(DEPLOYMENT)
