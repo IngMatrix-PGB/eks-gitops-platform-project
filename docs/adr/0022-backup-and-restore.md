@@ -29,8 +29,11 @@ storage, and a scripted restore drill with recorded evidence. Measured on
 - **Velero backs up only the state that is not in Git.**
   - Velero 1.18.2 (`vmware-tanzu/velero` chart 12.2.3) runs on every
     member, with the AWS plugin v1.14.4 for S3.
-  - Each backup holds Secrets, ConfigMaps, PersistentVolumeClaims and
-    PersistentVolumes of that member's platform namespaces:
+  - Each backup holds Secrets, ConfigMaps, Roles, RoleBindings,
+    PersistentVolumeClaims and PersistentVolumes of that member's platform
+    namespaces. Roles and RoleBindings were added by the 6.2b drill: the
+    ESO source Secret's reader RBAC is created by the same imperative
+    script as the Secret, so it is outside Git too:
     - hub: `argocd`, `monitoring`;
     - spoke: `eso-source-<env>`, `monitoring`, `logging`.
   - A label selector excludes what Helm owns (release records and chart
@@ -68,6 +71,9 @@ storage, and a scripted restore drill with recorded evidence. Measured on
     and restore), namespaces (create, for restores), events, and
     read-only pods, CustomResourceDefinitions and ClusterRoleBindings. A
     backup or restore fails without these last three, as measured.
+  - Roles and RoleBindings are among the kinds it restores. Kubernetes
+    refuses to create one that would grant more than Velero itself holds,
+    so restoring RBAC cannot escalate.
   - It also gets a Role in its own namespace that names its resources one
     by one, plus leases and reading its own Deployment.
   - Pods are restricted, and a NetworkPolicy admits only `monitoring` on
@@ -86,8 +92,34 @@ storage, and a scripted restore drill with recorded evidence. Measured on
   backup-restore-check` restores the newest backup into throwaway
   namespaces. It compares every Secret by SHA-256 and removes those
   namespaces.
-- **The destructive drills are 6.2b.** Losing a spoke and losing the hub
-  are separate drills that need their own authorization.
+- **Two scripted, destructive drills (6.2b).** Each needs `CONFIRM=yes`.
+  - **`make backup-drill-spoke SPOKE=<env>`.** It deletes the spoke and
+    rebuilds it in this order:
+    1. cluster;
+    2. registration;
+    3. ESO and metrics-server;
+    4. Velero, with the same store key;
+    5. restore of the backup;
+    6. a refresh of Argo CD's cluster cache;
+    7. observability.
+
+    The restore comes before anything could generate a new source value
+    or credential. The cache refresh is needed because the spoke was
+    registered before ESO's CRDs existed. With it, the SecretStore is
+    created only after its source and RBAC exist.
+  - **`make backup-drill-hub`.** It deletes the hub and rebuilds it in this
+    order:
+    1. cluster;
+    2. Argo CD;
+    3. Velero;
+    4. restore of `argocd` and `monitoring`;
+    5. observability;
+    6. bootstrap.
+
+    It needs `gh` acting as the repository owner, as `make mc-up` does,
+    because the bootstrap re-checks the deploy key on GitHub. It checks
+    this before deleting anything.
+  - Both verify by SHA-256 and print the RTO.
 
 ## Alternatives Considered
 
@@ -162,4 +194,66 @@ storage, and a scripted restore drill with recorded evidence. Measured on
     restored identical, new backups completed, and the alerts resolved
     after 81 s.
   - Memory: Velero 42–81 Mi per member, the store 17 MiB.
-- **6.2b:** recorded here when the drills run.
+- **6.2b, live on lab-multicluster (2026-11-18):**
+  - **Spoke drill (uat), RTO 556 s.**
+    - Times per step:
+
+      | Step | Time |
+      |---|---|
+      | Cluster | 37 s |
+      | Registration | 3 s |
+      | ESO | 120 s |
+      | metrics-server | 28 s |
+      | Velero, up to the backup being visible | 82 s |
+      | Restore | 4 s |
+      | Observability | 57 s |
+      | Argo CD convergence and workload Ready | 223 s |
+
+    - The ESO source Secret and the workload's ESO-built Secret were
+      identical by SHA-256.
+    - The hub's user list was unchanged, so the spoke got no new
+      credential.
+    - dev kept the same pods.
+    - Metrics and logs flowed with the restored credential, and backups
+      with the same key.
+    - A later `make mc-up SPOKES=uat` left the source Secret as restored.
+  - **Hub drill, RTO 350 s.**
+    - Times per step:
+
+      | Step | Time |
+      |---|---|
+      | Cluster | 38 s |
+      | Argo CD | 45 s |
+      | Velero | 85 s |
+      | Restore | 4 s |
+      | Observability | 149 s |
+      | Bootstrap | 6 s |
+      | Convergence | 20 s |
+
+    - The repository Secret and the hub's user list were identical.
+    - Both spokes' cluster Secrets were identical: Argo CD reconnected
+      without re-registration, with the 24 h tokens still valid.
+    - The spokes' pods were unchanged, and nothing was reinstalled on a
+      spoke.
+    - Both agents sent to the rebuilt hub with nothing refused, and the
+      rebuilt Loki gateway accepted both unchanged log credentials.
+    - Hub metrics from all three clusters; rules healthy.
+    - The rebuilt Loki started empty (`emptyDir`, as accepted in
+      ADR-0021).
+  - **Found by the drills and fixed before they passed:**
+    - The source Secret's reader RBAC was not in the backup; the
+      SecretStore stayed InvalidProviderConfig until it was recreated by
+      hand in that run.
+    - Argo CD's cluster cache missed ESO's schema after
+      re-registration, which gave a ComparisonError.
+    - Two credential probes started in the same second could pick the
+      same local port; a Loki probe then reached Prometheus and got 404.
+      The probe now uses a port per call and requires a 401 from the
+      intended service first.
+    - The hub bootstrap needs the GitHub owner account, which the hub
+      drill now checks first.
+    - A hub rebuild leaves Loki empty: `obs-status` has
+      `EXPECT_LOG_CLUSTERS`, and the drill checks that Loki accepts each
+      credential instead.
+    - The failed runs were not counted; each drill was rerun from
+      scratch.

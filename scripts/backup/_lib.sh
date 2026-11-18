@@ -217,9 +217,14 @@ schedules:
       snapshotVolumes: false
       includedNamespaces:
 ${bwv_ns_list}
+      # Roles and RoleBindings too (6.2b drill): the ESO source Secret's
+      # reader RBAC is created by the same imperative script as the
+      # Secret, outside Git, and a restored Secret is useless without it.
       includedResources:
         - secrets
         - configmaps
+        - roles.rbac.authorization.k8s.io
+        - rolebindings.rbac.authorization.k8s.io
         - persistentvolumeclaims
         - persistentvolumes
       # Not what a chart owns (its objects and Helm's release records):
@@ -294,6 +299,12 @@ extraObjects:
       - apiGroups: ["rbac.authorization.k8s.io"]
         resources: [clusterrolebindings]
         verbs: [get, list]
+      # Namespaced RBAC outside Git (the ESO source reader). Restoring a
+      # Role or RoleBinding never grants more than Velero already holds:
+      # Kubernetes refuses to create one that would escalate.
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: [roles, rolebindings]
+        verbs: [get, list, watch, create, update, patch]
   - apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:

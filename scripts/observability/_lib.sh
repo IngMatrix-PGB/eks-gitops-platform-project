@@ -741,13 +741,21 @@ obs_hub_wait() {
     *) echo "FAIL: obs_hub_wait: unknown target '$ow_target'" >&2; return 1 ;;
   esac
   ow_dir="$(mktemp -d)"
-  ow_port="$(awk 'BEGIN { srand(); print 20000 + int(rand() * 20000) }')"
+  # A port per call (awk's srand() alone repeats within one second, and
+  # two calls a second apart once probed Prometheus for Loki).
+  ow_seq=$(( ${ow_seq:-0} + 1 ))
+  ow_port="$(awk -v s="$$" -v n="$ow_seq" -v t="$ow_target" 'BEGIN { srand(s * 31 + n * 7 + length(t)); print 20000 + int(rand() * 20000) }')"
   "$ow_kc" -n "$OBS_NAMESPACE" port-forward "svc/${ow_svc}" "${ow_port}:80" >/dev/null 2>&1 &
   ow_pf=$!
   { printf 'machine 127.0.0.1 login %s password ' "$ow_user"; cat "$ow_pw"; printf '\n'; } > "$ow_dir/netrc"
   chmod 600 "$ow_dir/netrc"
   ow_start="$(date +%s)"; ow_code=""; ow_done=1
   while [ $(( $(date +%s) - ow_start )) -lt "$ow_timeout" ]; do
+    # Only trust an answer from the intended service: without credentials
+    # both the hub Prometheus and the Loki gateway answer 401.
+    ow_anon="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/x-protobuf' \
+      --data-binary 'x' "http://127.0.0.1:${ow_port}${ow_path}" 2>/dev/null || true)"
+    if [ "$ow_anon" != 401 ]; then sleep 2; continue; fi
     ow_code="$(curl -s -o /dev/null -w '%{http_code}' --netrc-file "$ow_dir/netrc" -X POST \
       -H 'Content-Type: application/x-protobuf' --data-binary 'x' "http://127.0.0.1:${ow_port}${ow_path}" 2>/dev/null || true)"
     case "$ow_want:$ow_code" in

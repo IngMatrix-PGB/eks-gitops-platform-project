@@ -7,7 +7,8 @@
 #          Prometheus: a request without credentials gets 401 (query and
 #          remote write); with the self-scrape user, which clusters have
 #          series (`count by (cluster) (up)`); EXPECT_CLUSTERS="hub spoke-dev
-#          ..." makes each listed cluster mandatory; every rule loaded and
+#          ..." makes each listed cluster mandatory (metrics; logs too, unless
+#          EXPECT_LOG_CLUSTERS says otherwise); every rule loaded and
 #          healthy; the Argo CD application controller scraped. Grafana: healthy, its
 #          provisioned datasource answers, the platform dashboards exist.
 #   spoke  release deployed and Ready; over STATUS_WINDOW seconds (default
@@ -107,9 +108,15 @@ if [ "$role" = hub ]; then
   code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{"streams":[]}' "$lbase/loki/api/v1/push")"
   [ "$code" = 401 ] && ok "log push without credentials: 401" || bad "log push without credentials: $code (want 401)"
   log_clusters="$(curl -s --netrc-file "$work/netrc" "$lbase/loki/api/v1/label/cluster/values" | jq -r '.data[]?' | sort | tr '\n' ' ')"
-  if [ -n "$log_clusters" ]; then ok "log streams by cluster: $log_clusters"; else bad "no log streams in Loki"; fi
-  for want in ${EXPECT_CLUSTERS:-}; do
-    case "$want" in hub) continue ;; esac
+  # EXPECT_LOG_CLUSTERS (default: EXPECT_CLUSTERS without the hub) names
+  # the clusters that must already have log streams. Set it empty after a
+  # hub rebuild: Loki's emptyDir starts empty and a spoke only sends new
+  # lines (ADR-0021).
+  log_expect="${EXPECT_LOG_CLUSTERS-$(for c in ${EXPECT_CLUSTERS:-}; do [ "$c" = hub ] || printf '%s ' "$c"; done)}"
+  if [ -n "$log_clusters" ]; then ok "log streams by cluster: $log_clusters"
+  elif [ -z "$(echo "$log_expect" | tr -d ' ')" ]; then ok "no log streams yet (none expected)"
+  else bad "no log streams in Loki"; fi
+  for want in $log_expect; do
     case " $log_clusters" in *" $want "*) ok "cluster '$want' has logs" ;; *) bad "cluster '$want' has no logs in Loki" ;; esac
   done
 
