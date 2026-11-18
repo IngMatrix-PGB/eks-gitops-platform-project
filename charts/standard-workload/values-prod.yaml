@@ -7,7 +7,7 @@
 # always hold the same reference; check-promotion enforces it.
 image:
   repository: ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke
-  digest: "sha256:34a4c2b272dbced5f7656b8f938881a411d84061de2d6aecbfe5696f179e174d"
+  digest: "sha256:b9ab7c7bf576f323212162dc42d7833ea1ae2e396f18827ccc3a29e38d746fbb"
 
 replicaCount: 2
 
