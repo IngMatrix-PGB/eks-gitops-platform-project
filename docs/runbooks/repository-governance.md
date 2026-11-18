@@ -68,3 +68,5 @@ Never delete the ruleset to get around it.
   again. The previous live version, for reference, is in
   `.tools/out/governance/ruleset-before.json`.
 - Turn protection off entirely: `enforcement disabled --confirm`.
+
+Test line for the Phase 5.3b docs-only check (never merged).
