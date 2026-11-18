@@ -1,0 +1,244 @@
+{
+  "uid": "platform-clusters",
+  "title": "Platform / Clusters",
+  "description": "Phase 6.1b: every cluster's scrape health, container CPU and memory, pod state and remote write, grouped by cluster.",
+  "tags": [
+    "platform",
+    "phase-6.1"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "timezone": "utc",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "cluster",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "hub-prometheus"
+        },
+        "query": {
+          "query": "label_values(up, cluster)",
+          "refId": "cluster"
+        },
+        "definition": "label_values(up, cluster)",
+        "multi": true,
+        "includeAll": true,
+        "current": {},
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Targets up, by cluster and job",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "sum by (cluster, job) (up{cluster=~\"$cluster\"})",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Remote write samples sent per second (spoke agents)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "sum by (cluster) (rate(prometheus_remote_storage_samples_total{cluster=~\"$cluster\"}[5m]))",
+          "legendFormat": "{{cluster}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Container CPU, by cluster and namespace",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "sum by (cluster, namespace) (rate(container_cpu_usage_seconds_total{cluster=~\"$cluster\"}[5m]))",
+          "legendFormat": "{{cluster}} {{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Container memory working set, by cluster and namespace",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "sum by (cluster, namespace) (container_memory_working_set_bytes{cluster=~\"$cluster\"})",
+          "legendFormat": "{{cluster}} {{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Pods not Running or Succeeded",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "sum by (cluster, namespace, phase) (kube_pod_status_phase{cluster=~\"$cluster\",phase!~\"Running|Succeeded\"}) > 0",
+          "legendFormat": "{{cluster}} {{namespace}} {{phase}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Container restarts over 1h",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "sum by (cluster, namespace, pod) (increase(kube_pod_container_status_restarts_total{cluster=~\"$cluster\"}[1h])) > 0",
+          "legendFormat": "{{cluster}} {{pod}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    }
+  ]
+}

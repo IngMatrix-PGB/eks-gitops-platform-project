@@ -1,0 +1,46 @@
+# Phase 6.1b (ADR-0021): the hub's Prometheus. It receives every spoke's
+# series by remote write (--web.enable-remote-write-receiver) and scrapes
+# only the hub's own monitoring components.
+#
+# No external_labels here: they would apply only to what the hub sends
+# out, never to stored series. The hub's own series get cluster="hub"
+# from the relabeling below; each spoke's series arrive already labeled
+# cluster="spoke-<env>" by that spoke's agent.
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["obs-alertmanager.monitoring.svc:9093"]
+
+# Recording and alerting rules arrive with Phase 6.1c.
+
+scrape_configs:
+  # Every endpoint of this Prometheus needs basic auth (web config), its
+  # own metrics included; the "hub" user exists for this job only.
+  - job_name: prometheus
+    basic_auth:
+      username: hub
+      password_file: /etc/prometheus-self/password
+    static_configs:
+      - targets: ["localhost:9090"]
+    relabel_configs:
+      - target_label: cluster
+        replacement: hub
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["obs-alertmanager.monitoring.svc:9093"]
+    relabel_configs:
+      - target_label: cluster
+        replacement: hub
+
+  - job_name: grafana
+    static_configs:
+      - targets: ["obs-grafana.monitoring.svc:80"]
+    relabel_configs:
+      - target_label: cluster
+        replacement: hub

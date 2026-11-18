@@ -99,8 +99,9 @@ delivery roadmap for what exists versus what is proposed.
 | 5.2c | `terraform` workflow: every root against the emulator on Terraform PRs and `main`, each result compared with `terraform/emulator-coverage.tsv` (`make tf-emulator-ci`); read-only, no AWS credentials (ADR-0018 amendment) | Implemented |
 | 5.3a | Ruleset for `main` as code (`.github/rulesets/main.json`: PR required, no force push or deletion, four strict required checks pinned to GitHub Actions, no bypass); `terraform`/`image`/`promotion` run on every PR with a paths job so their checks always report; `check-repo-governance`, `make governance-diff` (ADR-0020, `docs/runbooks/repository-governance.md`) | Implemented |
 | 5.3b | Ruleset applied (`make governance-diff` OK), "Update branch", secret scanning and push protection on; verified with a docs-only PR (path-scoped checks skipped, mergeable) and a rejected direct push and force push | Implemented |
-| 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | `PROPOSED` |
-| 6.1a | `apps/smoke` serves request counts and durations in the Prometheus format on its own port (9090, standard library only); the chart renders the `metrics` port and opens it only to the `monitoring` namespace (ADR-0021) | Implemented (code; takes effect per environment when the new image is promoted) |
+| 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | In progress |
+| 6.1a | `apps/smoke` serves request counts and durations in the Prometheus format on its own port (9090, standard library only); the chart renders the `metrics` port and opens it only to the `monitoring` namespace (ADR-0021) | Implemented; running in dev, uat and prod (#50–#52) |
+| 6.1b | Metrics pipeline: Prometheus agent and kube-state-metrics per spoke, remote write with one credential per spoke to the hub's Prometheus; Alertmanager and Grafana (dashboards as code) on the hub; `make obs-install` / `obs-status`; configs and dashboards checked by promtool in `make validate` | Implemented (code, offline-tested; lab install pending) |
 | 6.2 | Backup and restore drill | `PROPOSED` |
 | 6.3 | Multi-language reference application with a data store, growing `apps/smoke` | `PROPOSED` |
 

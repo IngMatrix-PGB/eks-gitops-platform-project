@@ -1,0 +1,59 @@
+#!/bin/sh
+# Idempotent removal of the observability stack from one lab-multicluster
+# member (Phase 6.1b). Backs `make obs-uninstall LAB_CLUSTER=hub|dev|uat|prod`.
+#
+#   spoke  uninstalls release obs, deletes its Secret obs-remote-write and,
+#          when the hub is up, removes user spoke-<env> from the hub's web
+#          config, so the removed spoke can no longer write.
+#   hub    uninstalls obs-grafana and obs, deletes the dashboards ConfigMap
+#          and the Secrets this stack created. Spokes still installed then
+#          fail their remote writes until they are removed too.
+# Deletes only objects this stack created, by name; the namespace stays.
+set -eu
+
+if [ ! -f "scripts/lab/_lib.sh" ]; then
+  echo "FAIL: must be run from the repository root (scripts/lab/_lib.sh not found)" >&2
+  exit 1
+fi
+. scripts/lab/_lib.sh
+require_repo_root
+. lab/multicluster/_lib.sh
+. scripts/observability/_lib.sh
+role="$(obs_role)"
+require_tools
+require_helm
+check_cluster_identity >/dev/null || { echo "FAIL: cluster '$PROJECT_CLUSTER_NAME' is missing or does not match its expected identity ($IDENTITY_CASE)" >&2; exit 1; }
+
+uninstall_release() {
+  if phelm status "$1" -n "$OBS_NAMESPACE" >/dev/null 2>&1; then
+    phelm uninstall "$1" -n "$OBS_NAMESPACE" --wait --timeout 5m >/dev/null
+    echo "OK: release '$1' uninstalled from '$PROJECT_CLUSTER_NAME'"
+  else
+    echo "OK: release '$1' already absent on '$PROJECT_CLUSTER_NAME' - no-op"
+  fi
+}
+
+delete_named() { # $1=kind $2=name
+  pkubectl -n "$OBS_NAMESPACE" delete "$1" "$2" --ignore-not-found >/dev/null
+  echo "OK: $1/$2 absent"
+}
+
+if [ "$role" = spoke ]; then
+  uninstall_release "$OBS_RELEASE"
+  delete_named secret "$OBS_SECRET_REMOTE_WRITE"
+  hk() { ckubectl hub "$@"; }
+  if lab_mc_identity hub; then
+    obs_hub_remove_user hk "spoke-${LAB_CLUSTER}"
+    echo "OK: user 'spoke-${LAB_CLUSTER}' absent from the hub's web config"
+  else
+    echo "obs-uninstall: hub not up ($LAB_MC_IDENTITY_CASE) - nothing to remove there"
+  fi
+else
+  uninstall_release "$OBS_GRAFANA_RELEASE"
+  uninstall_release "$OBS_RELEASE"
+  delete_named configmap "$OBS_GRAFANA_DASHBOARDS_CM"
+  for s in "$OBS_SECRET_WEB" "$OBS_SECRET_SELF" "$OBS_SECRET_GRAFANA_ADMIN" "$OBS_SECRET_GRAFANA_DS"; do
+    delete_named secret "$s"
+  done
+fi
+echo "obs-uninstall: OK ($role on '$PROJECT_CLUSTER_NAME')"
