@@ -126,7 +126,44 @@ decides how much of it runs locally.
     its recording series existing for every spoke.
 - **Logs (6.1d)** only if the measured lab leaves at least 1.5 GiB free
   with the hub, dev and uat; otherwise deferred to the AWS phase by an
-  amendment here.
+  amendment here. Measured 2.75 GiB free, so built:
+  - **Hub:** Loki 3.6.16 in single-binary mode (`grafana` chart 7.5.0, the
+    line Grafana Labs maintains) on an `emptyDir`.
+    - Retention is 72 h through the compactor, with explicit ingestion
+      limits and one tenant.
+    - It renders no PersistentVolumeClaim, so removing it never deletes a
+      volume.
+    - Loki is reachable only through the chart's nginx gateway. The
+      gateway enforces basic auth from the same per-user bcrypt hashes as
+      the Prometheus web config (an `.htpasswd` key in the same Secret)
+      and sits on NodePort 30100.
+  - **Spokes:** Fluent Bit 5.1.3 (`fluent-bit` chart 0.58.3), a
+    DaemonSet in its own namespace, `logging`.
+    - It tails only `/var/log/containers/*_<env>_*.log` and reads
+      namespace, pod and container from the file name. That needs no
+      Kubernetes API access, so it has no RBAC and no service account
+      token.
+    - It pushes with the spoke's existing credential (`spoke-<env>`). The
+      same password covers metrics and logs; removing the spoke revokes
+      both, and the uninstall waits until both refuse it.
+  - **The one exception to `restricted`:** reading node log files needs a
+    read-only `hostPath` of `/var/log` and the root user. `logging` is
+    therefore enforced at `privileged` (with `restricted` audited and
+    warned).
+    - The pod is otherwise locked down: read-only root filesystem, every
+      capability dropped, no privilege escalation, RuntimeDefault seccomp,
+      no token, no host network. Ingress to `logging` is denied.
+    - `obs-render` enforces exactly this (TAD R-17).
+    - On EKS the log path is decided at 6.4.
+  - **Grafana:** a second provisioned datasource, `hub-loki`, and the
+    dashboard "Platform / Logs". `check-observability` accepts exactly
+    the two datasource UIDs, one per panel, and requires every LogQL
+    query to select on `cluster`.
+  - **Changed from the plan:** the agent's position database is on an
+    `emptyDir`, not the host, so there are fewer host writes. Files are
+    read from the start on first sight, because the workload logs little
+    after it starts. On a restart lines are sent again; Loki drops exact
+    duplicates and rejects lines older than 24 h.
 
 ## Alternatives Considered
 
@@ -229,4 +266,36 @@ decides how much of it runs locally.
     `ArgoCDApplicationControllerDown` reached Alertmanager after 361 s
     (`severity=page`, `cluster=hub`). It was resolved after scaling back
     to 1, and the applications were still Synced and Healthy.
-- 6.1d: recorded here when it lands.
+- 6.1d, offline: `make obs-render`.
+  - **Loki:** object set, pinned digests, restricted pods, a ClusterRole
+    with no rules, no PersistentVolumeClaim, retention and tenancy, one
+    NodePort, gateway basic auth.
+  - **Fluent Bit, for each of dev, uat and prod:** scoped to its own
+    namespace, labeled and authenticated as its spoke, `hostPath` exactly
+    `/var/log` read-only, root with everything else locked down, no
+    token, no RBAC, no Secret.
+
+  `make check-observability` covers the dashboards' two datasources and
+  LogQL selectors, with 3 more regression mutations.
+- 6.1d, live on lab-multicluster (2026-11-18):
+  - Loki, its gateway and Fluent Bit run on hub, dev and uat.
+  - The hub has log streams for spoke-dev and spoke-uat, labeled
+    `cluster`, `environment`, `namespace`, `pod` and `container`, from
+    namespaces `dev` and `uat` only. The lines are the workload's own
+    JSON.
+  - A push without credentials gets 401, and the Grafana Loki datasource
+    is healthy. Every query on the logs dashboard answers through Grafana.
+  - NetworkPolicy: from another namespace, Loki itself and the agent's
+    port time out, and the gateway answers 401.
+  - Removing uat: the hub refused its old credential on Prometheus after
+    10 s and on the Loki gateway after 41 s. Reinstalling waited for both
+    to accept the new one.
+  - Memory: the hub node grew +0.28 GiB (Loki 96Mi, gateway 12Mi);
+    Fluent Bit used 4Mi per spoke. About 2.5 GiB stay free with hub, dev
+    and uat.
+  - Found and fixed live:
+    - the custom parser file was not loaded;
+    - nothing was sent from files that existed before the agent started;
+    - lines were wrapped as `time=... log=...`;
+    - the agent mounted a service account token. `obs-render` now checks
+      for that last one.

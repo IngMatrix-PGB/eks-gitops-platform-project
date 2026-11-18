@@ -1,6 +1,6 @@
 #!/bin/sh
-# Downloads and checksum-verifies the pinned prometheus and grafana charts
-# into .tools/charts/ (Phase 6.1b). The only script allowed to fetch
+# Downloads and checksum-verifies the pinned prometheus, grafana (6.1b),
+# loki and fluent-bit (6.1d) charts into .tools/charts/. The only script allowed to fetch
 # them. Backs `make obs-chart-fetch`. Idempotent.
 set -eu
 
@@ -36,3 +36,5 @@ fetch_chart() {
 
 fetch_chart "$OBS_PROM_CHART_TGZ" "$OBS_PROM_CHART_URL" "$OBS_PROM_CHART_SHA256"
 fetch_chart "$OBS_GRAFANA_CHART_TGZ" "$OBS_GRAFANA_CHART_URL" "$OBS_GRAFANA_CHART_SHA256"
+fetch_chart "$OBS_LOKI_CHART_TGZ" "$OBS_LOKI_CHART_URL" "$OBS_LOKI_CHART_SHA256"
+fetch_chart "$OBS_FB_CHART_TGZ" "$OBS_FB_CHART_URL" "$OBS_FB_CHART_SHA256"

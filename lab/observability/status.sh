@@ -100,6 +100,19 @@ if [ "$role" = hub ]; then
     case " $clusters" in *" ${want}="*) ok "cluster '$want' present" ;; *) bad "cluster '$want' has no series in the hub" ;; esac
   done
 
+  # Phase 6.1d: Loki through its gateway. Without credentials a push gets
+  # 401; with the "hub" user, which clusters have log streams.
+  port_forward "svc/${OBS_LOKI_GATEWAY_SVC}" 80
+  lbase="http://127.0.0.1:${local_port}"
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{"streams":[]}' "$lbase/loki/api/v1/push")"
+  [ "$code" = 401 ] && ok "log push without credentials: 401" || bad "log push without credentials: $code (want 401)"
+  log_clusters="$(curl -s --netrc-file "$work/netrc" "$lbase/loki/api/v1/label/cluster/values" | jq -r '.data[]?' | sort | tr '\n' ' ')"
+  if [ -n "$log_clusters" ]; then ok "log streams by cluster: $log_clusters"; else bad "no log streams in Loki"; fi
+  for want in ${EXPECT_CLUSTERS:-}; do
+    case "$want" in hub) continue ;; esac
+    case " $log_clusters" in *" $want "*) ok "cluster '$want' has logs" ;; *) bad "cluster '$want' has no logs in Loki" ;; esac
+  done
+
   port_forward "svc/${OBS_GRAFANA_RELEASE}" 80
   gbase="http://127.0.0.1:${local_port}"
   curl -s "$gbase/api/health" | jq -e '.database == "ok"' >/dev/null && ok "Grafana healthy" || bad "Grafana not healthy"
@@ -109,6 +122,8 @@ if [ "$role" = hub ]; then
   [ "$code" = 401 ] && ok "Grafana API without credentials: 401 (no anonymous access)" || bad "Grafana API without credentials: $code (want 401)"
   ds="$(curl -s --netrc-file "$work/netrc" "$gbase/api/datasources/uid/${OBS_GRAFANA_DS_UID}/health" | jq -r '.status // empty')"
   [ "$ds" = OK ] && ok "Grafana datasource '${OBS_GRAFANA_DS_UID}' reaches the hub Prometheus" || bad "Grafana datasource health: '${ds}'"
+  lds="$(curl -s --netrc-file "$work/netrc" "$gbase/api/datasources/uid/${OBS_GRAFANA_LOKI_DS_UID}/health" | jq -r '.status // empty')"
+  [ "$lds" = OK ] && ok "Grafana datasource '${OBS_GRAFANA_LOKI_DS_UID}' reaches Loki" || bad "Grafana Loki datasource health: '${lds}'"
   n="$(curl -s --netrc-file "$work/netrc" "$gbase/api/search?tag=platform" | jq 'length')"
   want_n="$(ls platform/observability/dashboards/*.json | wc -l | tr -d ' ')"
   [ "$n" = "$want_n" ] && ok "Grafana has the $want_n platform dashboards" || bad "Grafana platform dashboards: $n (want $want_n)"
@@ -129,6 +144,22 @@ else
   sent0="${c0% *}"; failed0="${c0#* }"; sent1="${c1% *}"; failed1="${c1#* }"
   if [ $((sent1 - sent0)) -gt 0 ]; then ok "agent sent $((sent1 - sent0)) samples to the hub in the last ${window}s ($sent1 in total)"; else bad "agent sent no samples in the last ${window}s"; fi
   if [ $((failed1 - failed0)) -eq 0 ]; then ok "no remote-write sample refused in the window ($failed1 refused since the agent started)"; else bad "$((failed1 - failed0)) remote-write samples refused in the window (credential or hub address?)"; fi
+
+  # Phase 6.1d: the log agent. Release deployed, the DaemonSet's pod Ready,
+  # and its own counters: no output error and no dropped retry, totals
+  # since it started (it only sends when the workload logs).
+  if phelm status "$OBS_LOGS_RELEASE" -n "$OBS_LOGS_NAMESPACE" -o json 2>/dev/null | grep -q '"status":"deployed"'; then ok "release '$OBS_LOGS_RELEASE' deployed"; else bad "release '$OBS_LOGS_RELEASE' not deployed"; fi
+  lr="$(pkubectl -n "$OBS_LOGS_NAMESPACE" get daemonset "$OBS_LOGS_RELEASE-fluent-bit" -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}' 2>/dev/null || true)"
+  case "$lr" in ""|0/*|*/0) bad "log agent DaemonSet not ready ($lr)" ;; *) [ "${lr%/*}" = "${lr#*/}" ] && ok "log agent Ready on every node ($lr)" || bad "log agent DaemonSet $lr Ready" ;; esac
+  pkubectl -n "$OBS_LOGS_NAMESPACE" port-forward "daemonset/$OBS_LOGS_RELEASE-fluent-bit" "$((local_port + 1)):2020" >/dev/null 2>&1 &
+  lpf=$!
+  i=0; until curl -s -o /dev/null "http://127.0.0.1:$((local_port + 1))/" || [ $i -gt 30 ]; do i=$((i + 1)); sleep 1; done
+  curl -s "http://127.0.0.1:$((local_port + 1))/api/v2/metrics/prometheus" > "$work/fb"
+  kill "$lpf" 2>/dev/null || true; wait "$lpf" 2>/dev/null || true
+  fb_sent="$(awk '/^fluentbit_output_proc_records_total[{ ]/ { s += $NF } END { printf "%d", s }' "$work/fb")"
+  fb_err="$(awk '/^fluentbit_output_(errors|retries_failed)_total[{ ]/ { s += $NF } END { printf "%d", s }' "$work/fb")"
+  ok "log agent sent $fb_sent records to the hub"
+  [ "${fb_err:-0}" -eq 0 ] && ok "log agent: no output error or dropped retry" || bad "log agent: $fb_err output errors or dropped retries (credential or hub address?)"
 fi
 
 if [ "$fail" -ne 0 ]; then echo "obs-status: FAILED ($role on '$PROJECT_CLUSTER_NAME')"; exit 1; fi

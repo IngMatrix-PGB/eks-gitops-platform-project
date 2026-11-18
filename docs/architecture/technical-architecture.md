@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Document | eks-gitops-platform-project Technical Architecture |
-| Version | 0.30.0 |
+| Version | 0.31.0 |
 | Status | Implementation in progress |
 | Phase | Phase 2.7 implemented (hub-and-spoke `lab-multicluster`, runtime-tested in `kind`); Phase 2.8 implemented (workload resilience and HPA, runtime-tested in `kind`); Phase 3.4.1–3.4.4b implemented as offline-tested code (AWS organization, guardrails, account baseline, per-environment EKS, Karpenter, ECR, per-spoke ESO identity, hub-to-spoke Argo CD identity, aws-eks GitOps profile in hub-and-spoke form); Phase 3.1–3.3.5 implemented as offline-validated code; roadmap realigned to the hub-and-spoke model (ADR-0015) |
 | Last updated | 2026-11-18 |
@@ -684,7 +684,13 @@ Phase 6.1 (ADR-0021) builds the stack in the hub-and-spoke shape.
   long, failed sync, controller down. All of them are unit-tested with
   `promtool test rules` in `make validate`. Alertmanager delivers to no
   external receiver in the lab.
-- **Still to come:** logs (6.1d). Measured memory allows them.
+- **Logs (6.1d):** Fluent Bit on each spoke, in its own namespace
+  `logging`, tails only the environment namespace's container logs and
+  pushes them to Loki on the hub, behind a basic-auth gateway with the
+  same per-spoke credential as metrics. Retention is 72 h on an
+  `emptyDir`. Grafana has a Loki datasource and a logs dashboard. Reading
+  node log files is the lab's one exception to Pod Security `restricted`
+  (R-17).
 
 ## Availability and Recovery
 
@@ -737,7 +743,7 @@ a fresh, explicit authorization.**
 | [ADR-0018](../adr/0018-terraform-against-a-local-aws-emulator.md) | Terraform against a local AWS emulator | Accepted |
 | [ADR-0019](../adr/0019-terraform-static-analysis.md) | Static analysis of the Terraform code | Accepted |
 | [ADR-0020](../adr/0020-main-branch-ruleset.md) | Ruleset for the main branch (supersedes ADR-0009's branch protection gap) | Accepted |
-| [ADR-0021](../adr/0021-observability.md) | Observability for the hub and the spokes | Accepted (6.1a–6.1c implemented) |
+| [ADR-0021](../adr/0021-observability.md) | Observability for the hub and the spokes | Accepted (6.1a–6.1d implemented) |
 
 Each ADR above records an **approved decision**, not an implemented one
 — every capability it describes is tracked honestly in "Evidence and
@@ -763,6 +769,7 @@ Implementation Status" below.
 | R-14 | EKS add-ons the workload chart depends on are not in Terraform: a `NetworkPolicy` is only enforced when the VPC CNI's network-policy agent is enabled, and an HPA needs metrics-server; the EKS root installs only `eks-pod-identity-agent` | Medium (a policy would look like protection while enforcing nothing; an HPA would never scale) | The aws overlays keep `networkPolicy.enabled: false` and `autoscaling.enabled: false`, and `check-standard-workload-chart` asserts no aws overlay renders either. Phase 3.4 adds the VPC CNI (network policy) and metrics-server add-ons in Terraform, then the overlays turn both on | Closed as code in Phase 3.4.3a: `terraform/envs/eks` runs the VPC CNI with `enableNetworkPolicy` and the `metrics-server` add-on, and the aws overlays turn NetworkPolicy and the prod HPA on (ADR-0006 and ADR-0012 amendments). Enforcement on a real cluster is verified in Phase 6.4 |
 | R-15 | Spoke → hub metrics travel over plain HTTP, and Prometheus basic auth has no per-user authorization: any spoke's credential can also query every cluster's series | Low in the lab (local docker bridge, metrics only, no Secret values in any series) | LAB-ONLY and documented as such (ADR-0021). One credential per spoke, generated at install, only its bcrypt hash on the hub, removed with the spoke; unauthenticated reads and writes return 401 (`make obs-status`). TLS, a private endpoint and per-identity write access (SigV4) are the AWS design, decided at 6.4 | Accepted for the lab |
 | R-16 | The SLO alerts are proven by unit tests only: `apps/smoke` never answers 5xx on its user routes, and lab traffic is sparse | Low (the alert logic is tested case by case; what is untested live is the end-to-end firing of an SLO alert) | 12 `promtool` test cases, including thresholds, both windows, per-cluster isolation and excluded routes; live, the recording series exist per spoke and an Argo CD alert was fired end to end through the same Prometheus → Alertmanager path. A failure-injection mode for the workload would close it | Accepted |
+| R-17 | The log agent needs read access to node log files: a read-only `hostPath` of `/var/log` and the root user, the one exception to Pod Security `restricted` in the lab | Medium (a compromised agent could read every container's logs on its node) | Confined to its own namespace `logging` (enforced `privileged`, `restricted` audited and warned, ingress denied). Inside it: read-only root filesystem, all capabilities dropped, no escalation, RuntimeDefault seccomp, no service account token, no RBAC, no host network. It collects only its environment namespace's files; `obs-render` enforces every one of these settings. EKS uses its own log path (decided at 6.4) | Accepted for the lab |
 
 ## Evidence and Implementation Status
 
@@ -800,6 +807,7 @@ Implementation Status" below.
 | Workload metrics (ADR-0021, Phase 6.1a) | `CODE-CONFIRMED`, unit-tested; promoted and running in dev, uat and prod (#50–#52) | `go test -race` in `apps/smoke` (route/code counts, cumulative buckets, escaping, unmatched paths never labelled, `/metrics` only on its listener, clean shutdown of both servers); `check-standard-workload-chart` (metrics port and `METRICS_PORT` in every environment, never on the Service, NetworkPolicy from `monitoring` only, off when disabled, colliding ports fail); on lab-lite after each promotion: `/metrics` 404 on the application port and served on 9090, the port reachable from a pod in `monitoring` and from no other namespace, `gitops-test`, and for prod `workload-test-resilience` and `workload-test-autoscaling` |
 | Metrics pipeline (ADR-0021, Phase 6.1b) | `CODE-CONFIRMED` and runtime-tested on lab-multicluster (hub, dev, uat), 2026-11-18 | `make obs-render` (exact object sets per role, pinned digests, restricted pods, no Secret in any release, cluster-wide RBAC limited to nodes and nodes/metrics, pods only in the environment namespace, no RBAC on the hub, TCP probes on the hub, one NodePort); `make check-observability` (promtool on the hub and every spoke config, per-environment scoping, no inline credential, dashboards with one datasource and parseable queries) and its regression (11 cases); live: `make obs-status` on every member (11 targets up, 401 without credentials, per-spoke labels and namespaces, Grafana datasource and dashboards), NetworkPolicy probes from other namespaces, idempotent re-run, spoke removal refused by the hub within 40 s, hub node +0.77 GiB and ~65 Mi per spoke |
 | SLO and alerts (ADR-0021, Phase 6.1c) | `CODE-CONFIRMED`, unit-tested, and runtime-tested on lab-multicluster, 2026-11-18 | `make check-observability`: `promtool check rules` and `promtool test rules`, 12 cases; every alert has a firing case, every SLO alert a silent one; regression rejects 7 more mutations. Live: 15 rules loaded and healthy, recording series per spoke under generated traffic, the Argo CD controller scraped, all four dashboards answer through Grafana, `ArgoCDApplicationControllerDown` fired to Alertmanager after 361 s with the controller scaled to 0 and resolved after it returned |
+| Logs (ADR-0021, Phase 6.1d) | `CODE-CONFIRMED`, offline-tested, and runtime-tested on lab-multicluster, 2026-11-18 | `make obs-render` (Loki: pinned digests, restricted pods, ClusterRole with no rules, no PVC, 72h retention, gateway basic auth, one NodePort; Fluent Bit per environment: own-namespace path, spoke labels and user, `hostPath` exactly `/var/log` read-only, no token, no RBAC, no Secret); `make check-observability` (two datasources one per panel, LogQL selects on `cluster`) with 3 more regression mutations. Live: log streams for spoke-dev and spoke-uat from their own namespaces only, 401 without credentials, NetworkPolicy probes, a removed spoke refused by Loki within 41 s, Grafana Loki datasource and logs dashboard; hub +0.28 GiB, Fluent Bit 4 Mi per spoke, ~2.5 GiB free |
 | Argo CD's production AWS identity provider | `UNKNOWN` | Explicitly undecided pending Phase 3/4 (ADR-0005) |
 | Crossplane-based self-service infrastructure | `OUT OF SCOPE` | Deferred past the MVP (ADR-0001) |
 | Progressive Delivery as primary production gate | `OUT OF SCOPE` | Not the design (see "Application Delivery and Promotion") |
@@ -885,8 +893,9 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
     - **5.3b — Apply:** implemented 2026-11-17. Ruleset `main` created and matching the file (`make governance-diff`); "Update branch", secret scanning and push protection on. A docs-only PR became mergeable with the three path-scoped required jobs skipped; a direct push and a force push to `main` were rejected.
     - **5.3c — Evidence:** this record, TAD 0.27.0, README.
 - **Phase 6 — Hardening and operations:**
-  - **6.1 — Observability (ADR-0021):** in progress. Per-spoke metrics shipped to the hub; dashboards and logs in the hub; one SLO with unit-tested multi-window burn-rate alerts; Argo CD health alerts.
+  - **6.1 — Observability (ADR-0021):** implemented (6.1a–6.1d). Per-spoke metrics shipped to the hub; dashboards and logs in the hub; one SLO with unit-tested multi-window burn-rate alerts; Argo CD health alerts.
     - **6.1a — Workload metrics:** implemented and running in dev, uat and prod (promoted in #50–#52). `apps/smoke` serves `http_requests_total{route,code}`, `http_request_duration_seconds{route}` and `smoke_build_info` on `METRICS_PORT` (9090), standard library only, `route` bounded to declared routes; the chart renders the `metrics` port (never on the Service) and a NetworkPolicy rule from `monitoring` only.
+    - **6.1d — Logs:** implemented. Loki (single binary, 72 h, basic-auth gateway) on the hub; Fluent Bit per spoke in namespace `logging`, own-namespace files only, same per-spoke credential; Grafana Loki datasource and logs dashboard; verified on lab-multicluster. Phase 6.1 is complete.
     - **6.1c — SLO and alerts:** implemented. SLO recording rules and four burn-rate alerts; Argo CD health alerts from the hub's application controller; unit tests in `make validate`; SLO and Argo CD dashboards; Argo CD alert fired end to end on lab-multicluster.
     - **6.1b — Metrics pipeline:** implemented as code. Prometheus agent and kube-state-metrics per spoke, remote write with one basic-auth credential per spoke to the hub's Prometheus; Alertmanager and Grafana with dashboards as code on the hub; `make obs-install|obs-status|obs-uninstall|obs-render`, `make check-observability` in `validate`. Installed and verified on lab-multicluster (hub, dev, uat); measured memory leaves about 2.8 GiB free, so 6.1d (logs) proceeds.
   - **6.2 — Backup and restore:** not started. Cluster-resource and volume backup to object storage, with a scripted restore drill whose result is recorded as evidence.

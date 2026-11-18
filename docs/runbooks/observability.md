@@ -135,6 +135,36 @@ Removing the hub removes its releases, Secrets and dashboards ConfigMap.
 Remove the spokes first, or their remote writes fail until you do.
 Neither command deletes the namespace.
 
+## Logs
+
+**On each spoke.** Fluent Bit, the release `obs-logs`, runs as a DaemonSet in the namespace
+`logging`.
+- It tails only that spoke's environment namespace, for example
+  `/var/log/containers/*_dev_*.log`.
+- It pushes to Loki on the hub through the gateway, NodePort 30100.
+- It uses the spoke's same credential as metrics, copied into the Secret
+  `obs-logs-push` in `logging`.
+
+**On the hub.** Loki, the release `obs-loki`, keeps 72 hours of logs on an
+`emptyDir`. They are lost when its pod restarts.
+
+**Reading logs.** In Grafana, open "Platform / Logs", or use the "Loki (hub)"
+datasource in Explore, for example with `{cluster="spoke-dev"}`.
+
+**Why `logging` is `privileged`.** The agent reads node log files through
+a read-only `hostPath` and runs as root, so its namespace enforces Pod
+Security `privileged`. That is the only such namespace in the lab (TAD
+R-17). Everything else in the pod is locked down, and `make obs-render`
+checks it.
+
+**When a log release is left `failed`.** This happens if an install times
+out. `make obs-install` refuses to touch it; remove that one release, then
+install again:
+
+```bash
+LAB_CLUSTER=dev sh -c '. scripts/lab/_lib.sh; . scripts/observability/_lib.sh; phelm uninstall obs-logs -n logging --wait'
+```
+
 ## Alerts
 
 The hub loads the rules in `platform/observability/rules/`:

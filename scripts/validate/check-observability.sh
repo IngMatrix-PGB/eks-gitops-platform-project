@@ -11,9 +11,10 @@
 #   - neither config carries a credential inline (no "password:" or
 #     "credentials:" value; files only);
 #   - every dashboard is valid JSON with a unique uid and a "Platform / "
-#     title, uses only the provisioned datasource UID (dashboard, panels,
-#     targets, variables), and every query parses (promtool check rules on
-#     the expressions, with $cluster replaced).
+#     title, uses only the provisioned datasource UIDs (Prometheus, and
+#     Loki since 6.1d; one per panel), every PromQL query parses (promtool
+#     check rules on the expressions, with $cluster replaced) and every
+#     LogQL query selects on $cluster.
 #
 #   - Phase 6.1c: every rule file passes `promtool check rules` and has a
 #     unit-test file that passes `promtool test rules`; every alert is
@@ -38,6 +39,8 @@ bad() { echo "FAIL: $*" >&2; fail=1; }
 
 DS_UID="$(sed -n 's/^OBS_GRAFANA_DS_UID="\(.*\)"$/\1/p' "$here/scripts/observability/_lib.sh")"
 [ -n "$DS_UID" ] || { echo "FAIL: OBS_GRAFANA_DS_UID not found in scripts/observability/_lib.sh" >&2; exit 1; }
+LOKI_UID="$(sed -n 's/^OBS_GRAFANA_LOKI_DS_UID="\(.*\)"$/\1/p' "$here/scripts/observability/_lib.sh")"
+[ -n "$LOKI_UID" ] || { echo "FAIL: OBS_GRAFANA_LOKI_DS_UID not found in scripts/observability/_lib.sh" >&2; exit 1; }
 cfg_dir="$root/platform/observability"
 dash_dir="$cfg_dir/dashboards"
 
@@ -111,18 +114,25 @@ for d in "$dash_dir"/*.json; do
   if ! jq -e . "$d" >/dev/null 2>&1; then bad "$b: not valid JSON"; continue; fi
   jq -r '.uid // ""' "$d" >> "$work/uids"
   jq -e '.uid and (.title | startswith("Platform / "))' "$d" >/dev/null || bad "$b: needs a uid and a title starting 'Platform / '"
-  others="$(jq -r --arg u "$DS_UID" '[.. | objects | select(has("datasource")) | .datasource | if type == "object" then .uid else . end | select(. != $u)] | unique | join(",")' "$d")"
-  [ -z "$others" ] || bad "$b: datasource other than '$DS_UID': $others"
+  # Phase 6.1d: two provisioned datasources. A panel uses one, and each of
+  # its queries the same one.
+  others="$(jq -r --arg u "$DS_UID" --arg l "$LOKI_UID" '[.. | objects | select(has("datasource")) | .datasource | if type == "object" then .uid else . end | select(. != $u and . != $l)] | unique | join(",")' "$d")"
+  [ -z "$others" ] || bad "$b: datasource other than '$DS_UID' or '$LOKI_UID': $others"
+  jq -e '[.panels[] | .datasource.uid as $p | (.targets // [])[] | .datasource.uid == $p] | all' "$d" >/dev/null || bad "$b: a query on another datasource than its panel"
   jq -e '[.panels[] | .targets // [] | length] | all(. > 0)' "$d" >/dev/null || bad "$b: a panel without a query"
-  # Each query becomes a recording rule, so promtool parses it.
-  jq -r '.panels[].targets[]?.expr' "$d" | sed 's/\$cluster/.+/g' | awk -v n="$n" '
+  # Loki (LogQL) queries: every one selects on cluster; promtool cannot
+  # parse LogQL, the live check runs them.
+  jq -r --arg l "$LOKI_UID" '.panels[] | select(.datasource.uid == $l) | .targets[].expr' "$d" > "$work/logql"
+  if [ -s "$work/logql" ] && grep -v 'cluster=~"\$cluster"' "$work/logql" | grep -q .; then bad "$b: a LogQL query without the cluster selector"; fi
+  # Prometheus queries become recording rules, so promtool parses them.
+  jq -r --arg u "$DS_UID" '.panels[] | select(.datasource.uid == $u) | .targets[].expr' "$d" | sed 's/\$cluster/.+/g' | awk -v n="$n" '
     { gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); printf "      - record: dashboard_query_%d_%d\n        expr: \"%s\"\n", n, NR, $0 }' >> "$work/rules.yml"
 done
 [ "$n" -gt 0 ] || bad "no dashboard in $dash_dir"
 dup="$(sort "$work/uids" | uniq -d | tr '\n' ' ')"
 [ -z "$dup" ] || bad "duplicate dashboard uid(s): $dup"
 if "$promtool" check rules --lint=none "$work/rules.yml" > "$work/out" 2>&1; then
-  ok "$n dashboards: valid JSON, unique uids, only datasource '$DS_UID', every query parses ($(grep -c 'record:' "$work/rules.yml") queries)"
+  ok "$n dashboards: valid JSON, unique uids, only datasources '$DS_UID' and '$LOKI_UID' (one per panel), every PromQL query parses ($(grep -c 'record:' "$work/rules.yml") queries)"
 else
   bad "dashboard queries do not parse: $(grep -iE 'error|failed' "$work/out" | head -3 | tr '\n' ' ')"
 fi
