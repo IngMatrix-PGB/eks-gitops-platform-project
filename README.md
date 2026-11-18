@@ -102,6 +102,7 @@ delivery roadmap for what exists versus what is proposed.
 | 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | In progress |
 | 6.1a | `apps/smoke` serves request counts and durations in the Prometheus format on its own port (9090, standard library only); the chart renders the `metrics` port and opens it only to the `monitoring` namespace (ADR-0021) | Implemented; running in dev, uat and prod (#50–#52) |
 | 6.1b | Metrics pipeline: Prometheus agent and kube-state-metrics per spoke, remote write with one credential per spoke to the hub's Prometheus; Alertmanager and Grafana (dashboards as code) on the hub; `make obs-install` / `obs-status`; configs and dashboards checked by promtool in `make validate` | Implemented; verified on lab-multicluster (hub, dev, uat) |
+| 6.1c | Smoke availability SLO (99.5 % / 30 days) with recording rules and four multi-window burn-rate alerts; Argo CD alerts (Degraded, OutOfSync, failed sync, controller down); unit tests with `promtool test rules` in `make validate`; SLO and Argo CD dashboards | Implemented; Argo CD alert fired live on lab-multicluster |
 | 6.2 | Backup and restore drill | `PROPOSED` |
 | 6.3 | Multi-language reference application with a data store, growing `apps/smoke` | `PROPOSED` |
 

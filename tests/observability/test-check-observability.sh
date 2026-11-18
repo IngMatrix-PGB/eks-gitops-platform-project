@@ -56,6 +56,22 @@ run_case "a hub config promtool rejects is rejected" reject hub_bad
 no_label() { mutate "$1/prometheus-spoke.yml" '/^    environment: "@ENVIRONMENT@"$/d'; }
 run_case "a spoke without the environment label is rejected" reject no_label
 
+# --- Phase 6.1c: rules and their unit tests ----------------------------------
+long_only() { mutate "$1/rules/slo-smoke.rules.yml" 's/cluster:smoke_http_errors:ratio_rate5m > (14.4 \* 0.005)/cluster:smoke_http_errors:ratio_rate1h > (14.4 * 0.005)/'; }
+run_case "a fast-burn alert without its short window fails its unit tests" reject long_only
+no_cluster() { mutate "$1/rules/slo-smoke.rules.yml" 's/sum by (cluster) \(.*code=~"5.."}\[5m\]\)/sum \1/'; }
+run_case "an error ratio that drops the cluster label fails its unit tests" reject no_cluster
+any_route() { mutate "$1/rules/slo-smoke.rules.yml" 's/route=~"\/|\/api\/info",code=~"5.."/code=~"5.."/g'; }
+run_case "an SLI that counts errors on every route fails its unit tests" reject any_route
+short_for() { mutate "$1/rules/argocd.rules.yml" 's/for: 10m/for: 1m/'; }
+run_case "a Degraded alert that fires after 1 minute fails its unit tests" reject short_for
+untested() { printf '      - alert: ArgoCDUntested\n        expr: vector(1)\n' >> "$1/rules/argocd.rules.yml"; }
+run_case "an alert no test expects to fire is rejected" reject untested
+no_tests() { rm "$1/rules/tests/argocd.test.yml"; }
+run_case "a rule file without unit tests is rejected" reject no_tests
+not_loaded() { mutate "$1/prometheus-hub.yml" 's|  - /etc/config/\*.rules.yml|  - /etc/config/none.yml|'; }
+run_case "a hub config that does not load the rule files is rejected" reject not_loaded
+
 echo ""
 echo "test-check-observability: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || { echo "test-check-observability: FAILED"; exit 1; }

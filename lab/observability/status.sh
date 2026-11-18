@@ -7,7 +7,8 @@
 #          Prometheus: a request without credentials gets 401 (query and
 #          remote write); with the self-scrape user, which clusters have
 #          series (`count by (cluster) (up)`); EXPECT_CLUSTERS="hub spoke-dev
-#          ..." makes each listed cluster mandatory. Grafana: healthy, its
+#          ..." makes each listed cluster mandatory; every rule loaded and
+#          healthy; the Argo CD application controller scraped. Grafana: healthy, its
 #          provisioned datasource answers, the platform dashboards exist.
 #   spoke  release deployed and Ready; over STATUS_WINDOW seconds (default
 #          75) the agent sent samples to the hub and none was refused.
@@ -86,6 +87,15 @@ if [ "$role" = hub ]; then
   curl -s --netrc-file "$work/netrc" -G "$base/api/v1/query" --data-urlencode 'query=count by (cluster) (up)' > "$work/q.json"
   clusters="$(jq -r '.data.result[] | "\(.metric.cluster)=\(.value[1])"' "$work/q.json" 2>/dev/null | sort | tr '\n' ' ')"
   if [ -n "$clusters" ]; then ok "series by cluster (targets): $clusters"; else bad "no series by cluster (response: $(head -c 200 "$work/q.json"))"; fi
+  # Phase 6.1c: every rule file in platform/observability/rules is loaded
+  # and every rule evaluates without error.
+  curl -s --netrc-file "$work/netrc" "$base/api/v1/rules" > "$work/rules.json"
+  n_rules="$(jq '[.data.groups[].rules[]] | length' "$work/rules.json" 2>/dev/null || echo 0)"
+  n_bad="$(jq '[.data.groups[].rules[] | select(.health != "ok")] | length' "$work/rules.json" 2>/dev/null || echo 1)"
+  want_rules="$(cat platform/observability/rules/*.rules.yml | grep -cE '^[[:space:]]+- (record|alert): ')"
+  [ "$n_rules" = "$want_rules" ] && [ "$n_bad" = 0 ] && ok "$n_rules rules loaded, all healthy" || bad "rules loaded: $n_rules (want $want_rules), unhealthy: $n_bad"
+  curl -s --netrc-file "$work/netrc" -G "$base/api/v1/query" --data-urlencode 'query=up{job="argocd-application-controller"}' \
+    | jq -e '.data.result[0].value[1] == "1"' >/dev/null && ok "Argo CD application controller scraped (up=1)" || bad "Argo CD application controller not scraped"
   for want in ${EXPECT_CLUSTERS:-}; do
     case " $clusters" in *" ${want}="*) ok "cluster '$want' present" ;; *) bad "cluster '$want' has no series in the hub" ;; esac
   done

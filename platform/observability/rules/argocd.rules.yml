@@ -1,0 +1,44 @@
+# Phase 6.1c (ADR-0021): Argo CD health alerts, from the hub's own
+# application controller metrics (argocd_app_info, argocd_app_sync_total,
+# up). Grouped by application (name) and destination cluster
+# (dest_server).
+groups:
+  - name: argocd-health
+    rules:
+      - alert: ArgoCDApplicationDegraded
+        expr: max by (name, project, dest_server) (argocd_app_info{health_status="Degraded"}) == 1
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Argo CD application {{ $labels.name }} has been Degraded for 10 minutes"
+          description: "Destination {{ $labels.dest_server }}, project {{ $labels.project }}."
+
+      - alert: ArgoCDApplicationOutOfSync
+        expr: max by (name, project, dest_server) (argocd_app_info{sync_status="OutOfSync"}) == 1
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Argo CD application {{ $labels.name }} has been OutOfSync for 30 minutes"
+          description: "Destination {{ $labels.dest_server }}, project {{ $labels.project }}. Git and the cluster differ and automated sync has not closed the gap."
+
+      - alert: ArgoCDApplicationSyncFailed
+        expr: sum by (name, project, dest_server) (increase(argocd_app_sync_total{phase=~"Error|Failed"}[10m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Argo CD failed to sync application {{ $labels.name }}"
+          description: "{{ $value }} failed sync operation(s) in the last 10 minutes; destination {{ $labels.dest_server }}."
+
+      - alert: ArgoCDApplicationControllerDown
+        expr: |
+          up{job="argocd-application-controller"} == 0
+          or
+          absent(up{job="argocd-application-controller"})
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "The hub's Argo CD application controller has not been scraped for 5 minutes"
+          description: "No application is reconciled while it is down, and the other Argo CD alerts go blind."

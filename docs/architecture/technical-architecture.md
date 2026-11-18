@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Document | eks-gitops-platform-project Technical Architecture |
-| Version | 0.29.0 |
+| Version | 0.30.0 |
 | Status | Implementation in progress |
 | Phase | Phase 2.7 implemented (hub-and-spoke `lab-multicluster`, runtime-tested in `kind`); Phase 2.8 implemented (workload resilience and HPA, runtime-tested in `kind`); Phase 3.4.1–3.4.4b implemented as offline-tested code (AWS organization, guardrails, account baseline, per-environment EKS, Karpenter, ECR, per-spoke ESO identity, hub-to-spoke Argo CD identity, aws-eks GitOps profile in hub-and-spoke form); Phase 3.1–3.3.5 implemented as offline-validated code; roadmap realigned to the hub-and-spoke model (ADR-0015) |
 | Last updated | 2026-11-18 |
@@ -678,9 +678,13 @@ Phase 6.1 (ADR-0021) builds the stack in the hub-and-spoke shape.
   provisioned datasource and the dashboards in
   `platform/observability/dashboards/`. Installed by `make obs-install`,
   not by Argo CD; see the [runbook](../runbooks/observability.md).
-- **Still to come:** the SLO with unit-tested multi-window burn-rate
-  alerts and the Argo CD health alerts (6.1c), and logs (6.1d, gated on
-  measured memory).
+- **SLO and alerts (6.1c):** the smoke availability SLO (99.5 % over 30
+  days per environment). Recording rules for seven windows feed four
+  multi-window burn-rate alerts. Argo CD alerts: Degraded, OutOfSync too
+  long, failed sync, controller down. All of them are unit-tested with
+  `promtool test rules` in `make validate`. Alertmanager delivers to no
+  external receiver in the lab.
+- **Still to come:** logs (6.1d). Measured memory allows them.
 
 ## Availability and Recovery
 
@@ -733,7 +737,7 @@ a fresh, explicit authorization.**
 | [ADR-0018](../adr/0018-terraform-against-a-local-aws-emulator.md) | Terraform against a local AWS emulator | Accepted |
 | [ADR-0019](../adr/0019-terraform-static-analysis.md) | Static analysis of the Terraform code | Accepted |
 | [ADR-0020](../adr/0020-main-branch-ruleset.md) | Ruleset for the main branch (supersedes ADR-0009's branch protection gap) | Accepted |
-| [ADR-0021](../adr/0021-observability.md) | Observability for the hub and the spokes | Accepted (6.1a implemented; 6.1b as code) |
+| [ADR-0021](../adr/0021-observability.md) | Observability for the hub and the spokes | Accepted (6.1a–6.1c implemented) |
 
 Each ADR above records an **approved decision**, not an implemented one
 — every capability it describes is tracked honestly in "Evidence and
@@ -758,6 +762,7 @@ Implementation Status" below.
 | R-13 | Fresh-cluster bootstrap ordering: Argo CD cannot sync `charts/standard-workload` until the ESO CRDs exist, while `make eso-install` needs the workload namespaces Argo CD creates. Only clusters that kept the CRDs from an earlier install bootstrap cleanly | Medium (a new engineer following the README on a fresh cluster gets three `OutOfSync`/`Missing` Applications) | Found during Phase 2.7.1 testing on a fresh `lab-lite`; worked around by applying the 25 CRDs first with the same pinned render and field manager as `lab/eso/install.sh` step 1. Phase 2.7.4 regression testing showed the CRDs alone are not enough: when Argo CD syncs before the `eso-uat` webhook answers, the `ExternalSecret` is rejected (`connection refused`), the Deployment never becomes healthy without its Secret, and the automated sync operation waits on it indefinitely; recovery is to terminate the operation and sync again. Fixed by a CRD-only entry point, `make eso-crds-install` (`lab/eso/install-crds.sh`, also step 1 of `make eso-install`), run before `make gitops-bootstrap`: the first sync then finds the CRDs and no admission webhook yet, so it neither fails nor races a webhook that is not answering. `make gitops-bootstrap` refuses on lab-lite while any of the 25 CRDs is absent, and `make eso-install` refuses with zero mutation while a scoped workload namespace is absent (before, it left a `failed` `eso-uat` release that the next run refused to reconcile). Verified on a fresh `lab-lite`: the documented order converges to three Synced/Healthy Applications with no manual sync. Does not arise in `lab-multicluster` (Phase 2.7.4): `make mc-up` installs ESO on each spoke before the hub bootstrap | Resolved |
 | R-14 | EKS add-ons the workload chart depends on are not in Terraform: a `NetworkPolicy` is only enforced when the VPC CNI's network-policy agent is enabled, and an HPA needs metrics-server; the EKS root installs only `eks-pod-identity-agent` | Medium (a policy would look like protection while enforcing nothing; an HPA would never scale) | The aws overlays keep `networkPolicy.enabled: false` and `autoscaling.enabled: false`, and `check-standard-workload-chart` asserts no aws overlay renders either. Phase 3.4 adds the VPC CNI (network policy) and metrics-server add-ons in Terraform, then the overlays turn both on | Closed as code in Phase 3.4.3a: `terraform/envs/eks` runs the VPC CNI with `enableNetworkPolicy` and the `metrics-server` add-on, and the aws overlays turn NetworkPolicy and the prod HPA on (ADR-0006 and ADR-0012 amendments). Enforcement on a real cluster is verified in Phase 6.4 |
 | R-15 | Spoke → hub metrics travel over plain HTTP, and Prometheus basic auth has no per-user authorization: any spoke's credential can also query every cluster's series | Low in the lab (local docker bridge, metrics only, no Secret values in any series) | LAB-ONLY and documented as such (ADR-0021). One credential per spoke, generated at install, only its bcrypt hash on the hub, removed with the spoke; unauthenticated reads and writes return 401 (`make obs-status`). TLS, a private endpoint and per-identity write access (SigV4) are the AWS design, decided at 6.4 | Accepted for the lab |
+| R-16 | The SLO alerts are proven by unit tests only: `apps/smoke` never answers 5xx on its user routes, and lab traffic is sparse | Low (the alert logic is tested case by case; what is untested live is the end-to-end firing of an SLO alert) | 12 `promtool` test cases, including thresholds, both windows, per-cluster isolation and excluded routes; live, the recording series exist per spoke and an Argo CD alert was fired end to end through the same Prometheus → Alertmanager path. A failure-injection mode for the workload would close it | Accepted |
 
 ## Evidence and Implementation Status
 
@@ -794,6 +799,7 @@ Implementation Status" below.
 | Main branch ruleset (ADR-0020, Phase 5.3) | `VERIFIED` on GitHub, 2026-11-17 | `make check-repo-governance` and its regression (22 rejected mutations; `changed-paths.sh` fails closed to running the job); ruleset applied with `ruleset.sh apply`, `make governance-diff` OK; docs-only PR #47: `validate` ran, `emulator`, `build, scan, SBOM`, `verify promoted images` skipped by their paths jobs, PR `MERGEABLE`/`CLEAN` (closed unmerged); direct push and force push to `main` rejected with GH013; secret scanning and push protection enabled |
 | Workload metrics (ADR-0021, Phase 6.1a) | `CODE-CONFIRMED`, unit-tested; promoted and running in dev, uat and prod (#50–#52) | `go test -race` in `apps/smoke` (route/code counts, cumulative buckets, escaping, unmatched paths never labelled, `/metrics` only on its listener, clean shutdown of both servers); `check-standard-workload-chart` (metrics port and `METRICS_PORT` in every environment, never on the Service, NetworkPolicy from `monitoring` only, off when disabled, colliding ports fail); on lab-lite after each promotion: `/metrics` 404 on the application port and served on 9090, the port reachable from a pod in `monitoring` and from no other namespace, `gitops-test`, and for prod `workload-test-resilience` and `workload-test-autoscaling` |
 | Metrics pipeline (ADR-0021, Phase 6.1b) | `CODE-CONFIRMED` and runtime-tested on lab-multicluster (hub, dev, uat), 2026-11-18 | `make obs-render` (exact object sets per role, pinned digests, restricted pods, no Secret in any release, cluster-wide RBAC limited to nodes and nodes/metrics, pods only in the environment namespace, no RBAC on the hub, TCP probes on the hub, one NodePort); `make check-observability` (promtool on the hub and every spoke config, per-environment scoping, no inline credential, dashboards with one datasource and parseable queries) and its regression (11 cases); live: `make obs-status` on every member (11 targets up, 401 without credentials, per-spoke labels and namespaces, Grafana datasource and dashboards), NetworkPolicy probes from other namespaces, idempotent re-run, spoke removal refused by the hub within 40 s, hub node +0.77 GiB and ~65 Mi per spoke |
+| SLO and alerts (ADR-0021, Phase 6.1c) | `CODE-CONFIRMED`, unit-tested, and runtime-tested on lab-multicluster, 2026-11-18 | `make check-observability`: `promtool check rules` and `promtool test rules`, 12 cases; every alert has a firing case, every SLO alert a silent one; regression rejects 7 more mutations. Live: 15 rules loaded and healthy, recording series per spoke under generated traffic, the Argo CD controller scraped, all four dashboards answer through Grafana, `ArgoCDApplicationControllerDown` fired to Alertmanager after 361 s with the controller scaled to 0 and resolved after it returned |
 | Argo CD's production AWS identity provider | `UNKNOWN` | Explicitly undecided pending Phase 3/4 (ADR-0005) |
 | Crossplane-based self-service infrastructure | `OUT OF SCOPE` | Deferred past the MVP (ADR-0001) |
 | Progressive Delivery as primary production gate | `OUT OF SCOPE` | Not the design (see "Application Delivery and Promotion") |
@@ -881,6 +887,7 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
 - **Phase 6 — Hardening and operations:**
   - **6.1 — Observability (ADR-0021):** in progress. Per-spoke metrics shipped to the hub; dashboards and logs in the hub; one SLO with unit-tested multi-window burn-rate alerts; Argo CD health alerts.
     - **6.1a — Workload metrics:** implemented and running in dev, uat and prod (promoted in #50–#52). `apps/smoke` serves `http_requests_total{route,code}`, `http_request_duration_seconds{route}` and `smoke_build_info` on `METRICS_PORT` (9090), standard library only, `route` bounded to declared routes; the chart renders the `metrics` port (never on the Service) and a NetworkPolicy rule from `monitoring` only.
+    - **6.1c — SLO and alerts:** implemented. SLO recording rules and four burn-rate alerts; Argo CD health alerts from the hub's application controller; unit tests in `make validate`; SLO and Argo CD dashboards; Argo CD alert fired end to end on lab-multicluster.
     - **6.1b — Metrics pipeline:** implemented as code. Prometheus agent and kube-state-metrics per spoke, remote write with one basic-auth credential per spoke to the hub's Prometheus; Alertmanager and Grafana with dashboards as code on the hub; `make obs-install|obs-status|obs-uninstall|obs-render`, `make check-observability` in `validate`. Installed and verified on lab-multicluster (hub, dev, uat); measured memory leaves about 2.8 GiB free, so 6.1d (logs) proceeds.
   - **6.2 — Backup and restore:** not started. Cluster-resource and volume backup to object storage, with a scripted restore drill whose result is recorded as evidence.
   - **6.3 — Reference application:** not started. Grow `apps/smoke` into a small multi-language application (two or three services) and one data store whose credentials arrive through ESO, proving the standard chart across languages.

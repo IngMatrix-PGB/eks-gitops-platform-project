@@ -1,0 +1,102 @@
+# Unit tests for argocd.rules.yml (promtool test rules, Phase 6.1c; run
+# by make check-observability).
+rule_files:
+  - ../argocd.rules.yml
+evaluation_interval: 1m
+
+tests:
+  # Degraded must last 10 minutes; a healthy application never fires.
+  - name: an application Degraded for 10 minutes fires, a healthy one does not
+    interval: 1m
+    input_series:
+      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-smoke-dev",project="platform",dest_server="https://eks-gitops-dev-control-plane:6443",health_status="Degraded",sync_status="Synced"}'
+        values: '1x20'
+      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-smoke-uat",project="platform",dest_server="https://eks-gitops-uat-control-plane:6443",health_status="Healthy",sync_status="Synced"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ArgoCDApplicationDegraded
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ArgoCDApplicationDegraded
+        exp_alerts:
+          - exp_labels: {severity: page, name: platform-smoke-dev, project: platform, dest_server: "https://eks-gitops-dev-control-plane:6443"}
+            exp_annotations:
+              summary: "Argo CD application platform-smoke-dev has been Degraded for 10 minutes"
+              description: "Destination https://eks-gitops-dev-control-plane:6443, project platform."
+
+  # OutOfSync must last 30 minutes; recovering at 20m resets it.
+  - name: OutOfSync fires after 30 minutes, not when it recovers sooner
+    interval: 1m
+    input_series:
+      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-smoke-dev",project="platform",dest_server="https://eks-gitops-dev-control-plane:6443",health_status="Healthy",sync_status="OutOfSync"}'
+        values: '1x40'
+      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-smoke-uat",project="platform",dest_server="https://eks-gitops-uat-control-plane:6443",health_status="Healthy",sync_status="OutOfSync"}'
+        values: '1x20 _x20'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: ArgoCDApplicationOutOfSync
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: ArgoCDApplicationOutOfSync
+        exp_alerts:
+          - exp_labels: {severity: ticket, name: platform-smoke-dev, project: platform, dest_server: "https://eks-gitops-dev-control-plane:6443"}
+            exp_annotations:
+              summary: "Argo CD application platform-smoke-dev has been OutOfSync for 30 minutes"
+              description: "Destination https://eks-gitops-dev-control-plane:6443, project platform. Git and the cluster differ and automated sync has not closed the gap."
+
+  # A failed sync fires at once and clears 10 minutes after the last one;
+  # successful syncs never fire.
+  - name: a failed sync fires, successful syncs do not
+    interval: 1m
+    input_series:
+      - series: 'argocd_app_sync_total{job="argocd-application-controller",name="platform-smoke-dev",project="platform",dest_server="https://eks-gitops-dev-control-plane:6443",phase="Failed"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'argocd_app_sync_total{job="argocd-application-controller",name="platform-smoke-uat",project="platform",dest_server="https://eks-gitops-uat-control-plane:6443",phase="Succeeded"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ArgoCDApplicationSyncFailed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ArgoCDApplicationSyncFailed
+        exp_alerts:
+          - exp_labels: {severity: ticket, name: platform-smoke-dev, project: platform, dest_server: "https://eks-gitops-dev-control-plane:6443"}
+            exp_annotations:
+              summary: "Argo CD failed to sync application platform-smoke-dev"
+              description: "1 failed sync operation(s) in the last 10 minutes; destination https://eks-gitops-dev-control-plane:6443."
+      - eval_time: 18m
+        alertname: ArgoCDApplicationSyncFailed
+        exp_alerts: []
+
+  # The controller is down when its scrape fails, or when it is not
+  # scraped at all; up for 5 minutes, nothing fires.
+  - name: the controller is down when its scrape fails
+    interval: 1m
+    input_series:
+      - series: 'up{job="argocd-application-controller",cluster="hub"}'
+        values: '1x5 0x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ArgoCDApplicationControllerDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ArgoCDApplicationControllerDown
+        exp_alerts:
+          - exp_labels: {severity: page, job: argocd-application-controller, cluster: hub}
+            exp_annotations:
+              summary: "The hub's Argo CD application controller has not been scraped for 5 minutes"
+              description: "No application is reconciled while it is down, and the other Argo CD alerts go blind."
+  - name: the controller is down when it is not scraped at all
+    interval: 1m
+    input_series:
+      - series: 'up{job="prometheus",cluster="hub"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ArgoCDApplicationControllerDown
+        exp_alerts:
+          - exp_labels: {severity: page, job: argocd-application-controller}
+            exp_annotations:
+              summary: "The hub's Argo CD application controller has not been scraped for 5 minutes"
+              description: "No application is reconciled while it is down, and the other Argo CD alerts go blind."
