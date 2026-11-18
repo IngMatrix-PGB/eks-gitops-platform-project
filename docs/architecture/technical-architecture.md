@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Document | eks-gitops-platform-project Technical Architecture |
-| Version | 0.27.0 |
+| Version | 0.28.0 |
 | Status | Implementation in progress |
 | Phase | Phase 2.7 implemented (hub-and-spoke `lab-multicluster`, runtime-tested in `kind`); Phase 2.8 implemented (workload resilience and HPA, runtime-tested in `kind`); Phase 3.4.1–3.4.4b implemented as offline-tested code (AWS organization, guardrails, account baseline, per-environment EKS, Karpenter, ECR, per-spoke ESO identity, hub-to-spoke Argo CD identity, aws-eks GitOps profile in hub-and-spoke form); Phase 3.1–3.3.5 implemented as offline-validated code; roadmap realigned to the hub-and-spoke model (ADR-0015) |
 | Last updated | 2026-11-17 |
@@ -724,6 +724,7 @@ a fresh, explicit authorization.**
 | [ADR-0018](../adr/0018-terraform-against-a-local-aws-emulator.md) | Terraform against a local AWS emulator | Accepted |
 | [ADR-0019](../adr/0019-terraform-static-analysis.md) | Static analysis of the Terraform code | Accepted |
 | [ADR-0020](../adr/0020-main-branch-ruleset.md) | Ruleset for the main branch (supersedes ADR-0009's branch protection gap) | Accepted |
+| [ADR-0021](../adr/0021-observability.md) | Observability for the hub and the spokes | Accepted (6.1a implemented) |
 
 Each ADR above records an **approved decision**, not an implemented one
 — every capability it describes is tracked honestly in "Evidence and
@@ -781,6 +782,7 @@ Implementation Status" below.
 | Terraform against a local AWS emulator (ADR-0018, Phase 5.2a, 5.2c) | `CODE-CONFIRMED`, run locally and in the `terraform` workflow | `make tf-emulator-coverage` on all ten roots (`terraform/emulator-coverage.tsv`); `make tf-emulator-ci` compares each root with the table in CI; `make check-terraform-offline-regression` (one rejected mutation per emulator guard and per workflow rule); runtime refusals of a remote endpoint, a non-emulator loopback server, and an account other than the emulator's |
 | Terraform static analysis (ADR-0019, Phase 5.2b) | `CODE-CONFIRMED`, run locally and in the `validate` workflow | `make tf-static`: `trivy config` on the tracked Terraform, embedded rules of the pinned trivy, HIGH/CRITICAL gated, four dated single-file exceptions in `terraform/.trivyignore.yaml`; runtime mutations (expired, removed, glob, stale, short statement) fail; `check-terraform-offline` check 9d with seven rejected mutations; `terraform test` rejects open, wide, empty and IPv6 EKS public access lists |
 | Main branch ruleset (ADR-0020, Phase 5.3) | `VERIFIED` on GitHub, 2026-11-17 | `make check-repo-governance` and its regression (22 rejected mutations; `changed-paths.sh` fails closed to running the job); ruleset applied with `ruleset.sh apply`, `make governance-diff` OK; docs-only PR #47: `validate` ran, `emulator`, `build, scan, SBOM`, `verify promoted images` skipped by their paths jobs, PR `MERGEABLE`/`CLEAN` (closed unmerged); direct push and force push to `main` rejected with GH013; secret scanning and push protection enabled |
+| Workload metrics (ADR-0021, Phase 6.1a) | `CODE-CONFIRMED`, unit-tested; not yet running in any environment | `go test -race` in `apps/smoke` (route/code counts, cumulative buckets, escaping, unmatched paths never labelled, `/metrics` only on its listener, clean shutdown of both servers); `check-standard-workload-chart` (metrics port and `METRICS_PORT` in every environment, never on the Service, NetworkPolicy from `monitoring` only, off when disabled, colliding ports fail) |
 | Argo CD's production AWS identity provider | `UNKNOWN` | Explicitly undecided pending Phase 3/4 (ADR-0005) |
 | Crossplane-based self-service infrastructure | `OUT OF SCOPE` | Deferred past the MVP (ADR-0001) |
 | Progressive Delivery as primary production gate | `OUT OF SCOPE` | Not the design (see "Application Delivery and Promotion") |
@@ -866,7 +868,8 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
     - **5.3b — Apply:** implemented 2026-11-17. Ruleset `main` created and matching the file (`make governance-diff`); "Update branch", secret scanning and push protection on. A docs-only PR became mergeable with the three path-scoped required jobs skipped; a direct push and a force push to `main` were rejected.
     - **5.3c — Evidence:** this record, TAD 0.27.0, README.
 - **Phase 6 — Hardening and operations:**
-  - **6.1 — Observability:** not started. Per-spoke metrics shipped to the hub; dashboards and logs in the hub; one SLO with unit-tested multi-window burn-rate alerts; Argo CD health alerts.
+  - **6.1 — Observability (ADR-0021):** in progress. Per-spoke metrics shipped to the hub; dashboards and logs in the hub; one SLO with unit-tested multi-window burn-rate alerts; Argo CD health alerts.
+    - **6.1a — Workload metrics:** implemented as code. `apps/smoke` serves `http_requests_total{route,code}`, `http_request_duration_seconds{route}` and `smoke_build_info` on `METRICS_PORT` (9090), standard library only, `route` bounded to declared routes; the chart renders the `metrics` port (never on the Service) and a NetworkPolicy rule from `monitoring` only. Takes effect in each environment when the new image is promoted.
   - **6.2 — Backup and restore:** not started. Cluster-resource and volume backup to object storage, with a scripted restore drill whose result is recorded as evidence.
   - **6.3 — Reference application:** not started. Grow `apps/smoke` into a small multi-language application (two or three services) and one data store whose credentials arrive through ESO, proving the standard chart across languages.
   - **6.4 — First real AWS deployment:** not started. Hub plus one spoke in a single sandbox account, created and destroyed in one authorized session with a budget alert in place; measured cost and evidence recorded here.

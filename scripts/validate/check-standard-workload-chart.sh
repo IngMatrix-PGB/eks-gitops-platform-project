@@ -1207,21 +1207,47 @@ for render in "$render_dev" "$render_uat" "$render_prod" "$ov_dev" "$ov_uat" "$o
   [ "$np_sel" = "$(dep_selector "$render")" ] || ok=0
   printf '%s\n' "$np" | grep -qE '^    - Ingress$' && printf '%s\n' "$np" | grep -qE '^    - Egress$' || ok=0
   [ "$(printf '%s\n' "$np" | grep -cE '^\s+- port: 53$')" = "2" ] || ok=0
-  [ "$(printf '%s\n' "$np" | grep -cE '^\s+- port: ')" = "3" ] || ok=0
+  # Phase 6.1a: http, metrics and DNS (TCP+UDP) - four ports, metrics
+  # only from the monitoring namespace.
+  [ "$(printf '%s\n' "$np" | grep -cE '^\s+- port: ')" = "4" ] || ok=0
+  [ "$(printf '%s\n' "$np" | grep -cE '^\s+- port: metrics$')" = "1" ] || ok=0
+  metrics_from="$(printf '%s\n' "$np" | awk '/^    - from:/{blk=""} {blk=blk $0 "\n"} /- port: metrics$/{printf "%s", blk; exit}')"
+  [ "$(printf '%s' "$metrics_from" | grep -cE '^\s+- (namespaceSelector|podSelector):')" = "1" ] || ok=0
+  printf '%s' "$metrics_from" | grep -qE '^\s+kubernetes.io/metadata.name: monitoring$' || ok=0
   printf '%s\n' "$np" | grep -qE 'namespaceSelector: \{\}|ipBlock:|0\.0\.0\.0/0' && ok=0
-  [ "$ok" -eq 1 ] || { echo "FAIL: $render NetworkPolicy is not exactly: own pods, Ingress+Egress, http from this namespace, DNS-only egress" >&2; fail=1; }
+  [ "$ok" -eq 1 ] || { echo "FAIL: $render NetworkPolicy is not exactly: own pods, Ingress+Egress, http from this namespace, metrics from monitoring only, DNS-only egress" >&2; fail=1; }
 done
-[ "$fail" -eq 0 ] && echo "OK: prod PodDisruptionBudgets are maxUnavailable: 1 over the Deployment's own selector; every NetworkPolicy (local and aws) selects only its own pods, allows http from its namespace, DNS-only egress, no ipBlock or any-namespace rule"
+[ "$fail" -eq 0 ] && echo "OK: prod PodDisruptionBudgets are maxUnavailable: 1 over the Deployment's own selector; every NetworkPolicy (local and aws) selects only its own pods, allows http from its namespace and metrics from monitoring only, DNS-only egress, no ipBlock or any-namespace rule"
 
 # PDB appears only with >= 2 replicas; ingressFromNamespaces adds one selector each
 pdb1="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" | grep -c '^kind: PodDisruptionBudget$' || true)"
 pdb2="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" --set replicaCount=2 | grep -c '^kind: PodDisruptionBudget$' || true)"
 [ "$pdb1" = "0" ] && [ "$pdb2" = "1" ] || { echo "FAIL: PodDisruptionBudget must render only with replicaCount >= 2 (1 replica: $pdb1, 2 replicas: $pdb2)" >&2; fail=1; }
-extra_ns="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" --set 'networkPolicy.ingressFromNamespaces={monitoring}' | grep -c 'kubernetes.io/metadata.name: monitoring' || true)"
-[ "$extra_ns" = "1" ] || { echo "FAIL: networkPolicy.ingressFromNamespaces=[monitoring] did not add exactly one namespaceSelector (got $extra_ns)" >&2; fail=1; }
+extra_ns="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" --set 'networkPolicy.ingressFromNamespaces={gateway}' | grep -c 'kubernetes.io/metadata.name: gateway' || true)"
+[ "$extra_ns" = "1" ] || { echo "FAIL: networkPolicy.ingressFromNamespaces=[gateway] did not add exactly one namespaceSelector (got $extra_ns)" >&2; fail=1; }
 np_off="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" --set networkPolicy.enabled=false | grep -c '^kind: NetworkPolicy$' || true)"
 [ "$np_off" = "0" ] || { echo "FAIL: networkPolicy.enabled=false still renders a NetworkPolicy" >&2; fail=1; }
 [ "$fail" -eq 0 ] && echo "OK: PodDisruptionBudget renders only with replicaCount >= 2; ingressFromNamespaces adds exactly one selector per namespace; networkPolicy.enabled=false renders none"
+
+# Phase 6.1a (ADR-0021): metrics on their own port, never on the Service.
+for render in "$render_dev" "$render_uat" "$render_prod" "$ov_dev" "$ov_uat" "$ov_prod"; do
+  dep="$(yaml_doc "$render" Deployment)"
+  printf '%s\n' "$dep" | grep -A1 -E '^\s+- name: metrics$' | grep -qE '^\s+containerPort: 9090$' \
+    || { echo "FAIL: $render Deployment lacks the metrics container port 9090" >&2; fail=1; }
+  printf '%s\n' "$dep" | grep -A1 'name: METRICS_PORT' | grep -q 'value: "9090"' \
+    || { echo "FAIL: $render Deployment lacks METRICS_PORT=9090" >&2; fail=1; }
+  if yaml_doc "$render" Service | grep -qE 'metrics|9090'; then
+    echo "FAIL: $render Service exposes the metrics port - it must stay off the Service clients use" >&2; fail=1
+  fi
+done
+m_off="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" --set metrics.enabled=false)"
+if printf '%s\n' "$m_off" | grep -qE 'name: metrics$|METRICS_PORT|- port: metrics$'; then
+  echo "FAIL: metrics.enabled=false still renders the metrics port, METRICS_PORT or its NetworkPolicy rule" >&2; fail=1
+fi
+same_port="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" --set metrics.port=9898 2>&1 || true)"
+printf '%s' "$same_port" | grep -q 'metrics.port (9898) must differ from service.port' \
+  || { echo "FAIL: metrics.port equal to service.port rendered" >&2; fail=1; }
+[ "$fail" -eq 0 ] && echo "OK: every environment serves metrics on container port 9090 (METRICS_PORT), not on the Service; metrics.enabled=false removes port, variable and rule; metrics.port == service.port fails the render"
 
 # the shutdown budget is enforced by the template itself
 grace_out="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" --set gracefulShutdown.preStopSleepSeconds=25 2>&1 || true)"
@@ -1243,6 +1269,15 @@ run_negative_case "networkPolicy.ingressFromNamespaces with an invalid namespace
 run_negative_case "gracefulShutdown.preStopSleepSeconds negative" 'gracefulShutdown:
   preStopSleepSeconds: -1
   serverShutdownTimeoutSeconds: 5'
+run_negative_case "metrics.scrapeFromNamespaces with an invalid namespace name" 'metrics:
+  enabled: true
+  port: 9090
+  scrapeFromNamespaces: ["Not_A_Namespace"]'
+run_negative_case "unknown key under metrics" 'metrics:
+  enabled: true
+  port: 9090
+  scrapeFromNamespaces: ["monitoring"]
+  path: /metrics'
 run_negative_case "unknown key under networkPolicy" 'networkPolicy:
   enabled: true
   ingressFromNamespaces: []

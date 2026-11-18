@@ -22,7 +22,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.port != 9898 || c.uiMessage != "smoke" || c.shutdownTimeout != 5*time.Second {
+	if c.port != 9898 || c.metricsPort != 9090 || c.uiMessage != "smoke" || c.shutdownTimeout != 5*time.Second {
 		t.Fatalf("unexpected defaults: %+v", c)
 	}
 }
@@ -52,6 +52,10 @@ func TestLoadConfigRejectsInvalid(t *testing.T) {
 		{"SHUTDOWN_TIMEOUT": "forever"},
 		{"SHUTDOWN_TIMEOUT": "-1s"},
 		{"SHUTDOWN_TIMEOUT": "2m"},
+		{"METRICS_PORT": "0"},
+		{"METRICS_PORT": "x"},
+		{"METRICS_PORT": "9898"},
+		{"PORT": "8080", "METRICS_PORT": "8080"},
 	} {
 		if _, err := loadConfig(env(m)); err == nil {
 			t.Errorf("accepted invalid config %v", m)
@@ -101,10 +105,14 @@ func TestGracefulShutdownDrains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
 	c := config{uiMessage: "x", shutdownTimeout: 2 * time.Second}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, ln, c, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
+	go func() { done <- run(ctx, ln, mln, c, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
 
 	url := "http://" + ln.Addr().String()
 	deadline := time.Now().Add(2 * time.Second)
@@ -131,5 +139,8 @@ func TestGracefulShutdownDrains(t *testing.T) {
 	}
 	if _, err := http.Get(url + "/healthz"); err == nil {
 		t.Fatal("server still accepting connections after shutdown")
+	}
+	if _, err := http.Get("http://" + mln.Addr().String() + "/metrics"); err == nil {
+		t.Fatal("metrics server still accepting connections after shutdown")
 	}
 }

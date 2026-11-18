@@ -3,6 +3,9 @@
 {{- if and $as.enabled (lt (int $as.maxReplicas) (int $as.minReplicas)) }}
 {{- fail (printf "standard-workload: autoscaling.maxReplicas (%d) must be >= minReplicas (%d)" (int $as.maxReplicas) (int $as.minReplicas)) }}
 {{- end }}
+{{- if and .Values.metrics.enabled (eq (int .Values.metrics.port) (int .Values.service.port)) }}
+{{- fail (printf "standard-workload: metrics.port (%d) must differ from service.port" (int .Values.metrics.port)) }}
+{{- end }}
 {{- if gt (add $gs.preStopSleepSeconds $gs.serverShutdownTimeoutSeconds 5) (int .Values.terminationGracePeriodSeconds) }}
 {{- fail (printf "standard-workload: gracefulShutdown.preStopSleepSeconds (%d) + serverShutdownTimeoutSeconds (%d) + 5 must not exceed terminationGracePeriodSeconds (%d)" (int $gs.preStopSleepSeconds) (int $gs.serverShutdownTimeoutSeconds) (int .Values.terminationGracePeriodSeconds)) }}
 {{- end }}
@@ -87,6 +90,11 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: UI_MESSAGE
               valueFrom:
@@ -95,6 +103,10 @@ spec:
                   key: ui-message
             - name: SHUTDOWN_TIMEOUT
               value: "{{ $gs.serverShutdownTimeoutSeconds }}s"
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: "{{ .Values.metrics.port }}"
+            {{- end }}
           lifecycle:
             preStop:
               sleep:

@@ -29,5 +29,5 @@ LABEL org.opencontainers.image.source="https://github.com/IngMatrix-PGB/eks-gito
       org.opencontainers.image.description="apps/smoke - the platform's first-party reference workload"
 COPY --from=build /out/smoke /smoke
 USER 65532:65532
-EXPOSE 9898
+EXPOSE 9898 9090
 ENTRYPOINT ["/smoke"]

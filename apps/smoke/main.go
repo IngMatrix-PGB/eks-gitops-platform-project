@@ -13,7 +13,10 @@
 //     the version (/api/info keeps the shape the lab tests read from
 //     podinfo, so they work unchanged across the switch, Phase 5.1c-1);
 //   - on SIGTERM: stop accepting new connections and drain in-flight
-//     requests for at most SHUTDOWN_TIMEOUT (default 5s).
+//     requests for at most SHUTDOWN_TIMEOUT (default 5s);
+//   - Phase 6.1a: GET /metrics on METRICS_PORT (default 9090, the chart's
+//     metrics.port), never on PORT, with request counts and durations
+//     (metrics.go); it stops after the application server has drained.
 //
 // The podinfo-era variable names (PODINFO_UI_MESSAGE,
 // PODINFO_SERVER_SHUTDOWN_TIMEOUT) are read as fallbacks, so the chart
@@ -42,6 +45,7 @@ var version = "dev"
 
 type config struct {
 	port            int
+	metricsPort     int
 	uiMessage       string
 	shutdownTimeout time.Duration
 }
@@ -57,13 +61,23 @@ func lookup(getenv func(string) string, names ...string) string {
 }
 
 func loadConfig(getenv func(string) string) (config, error) {
-	c := config{port: 9898, uiMessage: "smoke", shutdownTimeout: 5 * time.Second}
+	c := config{port: 9898, metricsPort: 9090, uiMessage: "smoke", shutdownTimeout: 5 * time.Second}
 	if v := lookup(getenv, "PORT"); v != "" {
 		p, err := strconv.Atoi(v)
 		if err != nil || p < 1 || p > 65535 {
 			return c, errors.New("PORT must be an integer between 1 and 65535")
 		}
 		c.port = p
+	}
+	if v := lookup(getenv, "METRICS_PORT"); v != "" {
+		p, err := strconv.Atoi(v)
+		if err != nil || p < 1 || p > 65535 {
+			return c, errors.New("METRICS_PORT must be an integer between 1 and 65535")
+		}
+		c.metricsPort = p
+	}
+	if c.metricsPort == c.port {
+		return c, errors.New("METRICS_PORT must differ from PORT")
 	}
 	if v := lookup(getenv, "UI_MESSAGE", "PODINFO_UI_MESSAGE"); v != "" {
 		c.uiMessage = v
@@ -104,24 +118,37 @@ func newHandler(c config, ready *atomic.Bool) http.Handler {
 	return mux
 }
 
-// run serves until ctx is cancelled, then marks the service not ready
-// and drains in-flight requests for at most c.shutdownTimeout.
-func run(ctx context.Context, ln net.Listener, c config, log *slog.Logger) error {
-	var ready atomic.Bool
-	ready.Store(true)
-	srv := &http.Server{
-		Handler:           newHandler(c, &ready),
+func newServer(h http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+}
+
+// run serves the application on ln and its metrics on mln until ctx is
+// cancelled, then marks the service not ready, drains in-flight requests
+// for at most c.shutdownTimeout, and stops the metrics server last.
+func run(ctx context.Context, ln, mln net.Listener, c config, log *slog.Logger) error {
+	var ready atomic.Bool
+	ready.Store(true)
+	m := newMetrics()
+	srv := newServer(m.instrument(newHandler(c, &ready)))
+	msrv := newServer(m.handler())
 	errc := make(chan error, 1)
+	merrc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
-	log.Info("listening", "addr", ln.Addr().String(), "version", version)
+	go func() { merrc <- msrv.Serve(mln) }()
+	log.Info("listening", "addr", ln.Addr().String(), "metrics", mln.Addr().String(), "version", version)
 
 	select {
 	case err := <-errc:
+		_ = msrv.Close()
+		return err
+	case err := <-merrc:
+		_ = srv.Close()
 		return err
 	case <-ctx.Done():
 	}
@@ -130,9 +157,17 @@ func run(ctx context.Context, ln net.Listener, c config, log *slog.Logger) error
 	sctx, cancel := context.WithTimeout(context.Background(), c.shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(sctx); err != nil {
+		_ = msrv.Close()
 		return err
 	}
 	if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
+		_ = msrv.Close()
+		return err
+	}
+	if err := msrv.Shutdown(sctx); err != nil {
+		return err
+	}
+	if err := <-merrc; !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
@@ -150,9 +185,14 @@ func main() {
 		log.Error("listen failed", "error", err.Error())
 		os.Exit(1)
 	}
+	mln, err := net.Listen("tcp", ":"+strconv.Itoa(c.metricsPort))
+	if err != nil {
+		log.Error("metrics listen failed", "error", err.Error())
+		os.Exit(1)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
-	if err := run(ctx, ln, c, log); err != nil {
+	if err := run(ctx, ln, mln, c, log); err != nil {
 		log.Error("server error", "error", err.Error())
 		os.Exit(1)
 	}

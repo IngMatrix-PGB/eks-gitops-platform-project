@@ -2,8 +2,9 @@
 Phase 2.8.1: this workload's own pods only (podSelector = selectorLabels).
 Listing both policy types makes anything not allowed below denied.
 Ingress: the http port, from pods in this namespace and from any
-namespace named in networkPolicy.ingressFromNamespaces. Egress: DNS to
-kube-dns only.
+namespace named in networkPolicy.ingressFromNamespaces; Phase 6.1a: the
+metrics port, only from the namespaces in metrics.scrapeFromNamespaces.
+Egress: DNS to kube-dns only.
 */ -}}
 {{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
@@ -30,6 +31,17 @@ spec:
       ports:
         - port: http
           protocol: TCP
+    {{- if and .Values.metrics.enabled .Values.metrics.scrapeFromNamespaces }}
+    - from:
+        {{- range .Values.metrics.scrapeFromNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      ports:
+        - port: metrics
+          protocol: TCP
+    {{- end }}
   egress:
     - to:
         - namespaceSelector:
