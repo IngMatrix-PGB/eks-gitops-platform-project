@@ -64,11 +64,9 @@ yet — postponed, not rejected (ADR-0008).
 Manager IaC, dual-provider secret contract, GitOps profile mechanism, and
 the EKS identity boundary) exist as code, offline-validated only.** See
 "AWS EKS profile" below — none of it is deployed, and no AWS account
-exists to deploy it against. `main` currently
-relies on process (PR + a passing `validate` check), not GitHub-enforced
-branch protection. The repository is now public, so branch protection is
-available at no cost; applying it is a separately authorized step
-(ADR-0009). An `Accepted` ADR records an approved decision, not
+exists to deploy it against. `main` is protected by
+a GitHub ruleset: every change goes through a pull request whose required
+checks pass (ADR-0020). An `Accepted` ADR records an approved decision, not
 necessarily a fully implemented one. See the TAD's evidence table and
 delivery roadmap for what exists versus what is proposed.
 
@@ -99,7 +97,8 @@ delivery roadmap for what exists versus what is proposed.
 | 5.2a | Terraform against a local AWS emulator (moto, pinned by digest, loopback only): `make tf-emulator-plan`/`tf-emulator-apply` run plan, apply, an empty re-plan and destroy in scratch copies; measured coverage in `terraform/emulator-coverage.tsv`; guards enforced by `check-terraform-offline` (ADR-0018, `docs/runbooks/terraform-emulator.md`) | Implemented |
 | 5.2b | Terraform static analysis: `make tf-static` runs `trivy config` (pinned, embedded rules) on the tracked Terraform in `validate`; HIGH/CRITICAL fail unless accepted per file with an expiry in `terraform/.trivyignore.yaml` (ADR-0019) | Implemented |
 | 5.2c | `terraform` workflow: every root against the emulator on Terraform PRs and `main`, each result compared with `terraform/emulator-coverage.tsv` (`make tf-emulator-ci`); read-only, no AWS credentials (ADR-0018 amendment) | Implemented |
-| 5.3a | Ruleset for `main` as code (`.github/rulesets/main.json`: PR required, no force push or deletion, four strict required checks pinned to GitHub Actions, no bypass); `terraform`/`image`/`promotion` run on every PR with a paths job so their checks always report; `check-repo-governance`, `make governance-diff` (ADR-0020, `docs/runbooks/repository-governance.md`) | Implemented, not applied |
+| 5.3a | Ruleset for `main` as code (`.github/rulesets/main.json`: PR required, no force push or deletion, four strict required checks pinned to GitHub Actions, no bypass); `terraform`/`image`/`promotion` run on every PR with a paths job so their checks always report; `check-repo-governance`, `make governance-diff` (ADR-0020, `docs/runbooks/repository-governance.md`) | Implemented |
+| 5.3b | Ruleset applied (`make governance-diff` OK), "Update branch", secret scanning and push protection on; verified with a docs-only PR (path-scoped checks skipped, mergeable) and a rejected direct push and force push | Implemented |
 | 6.1 | Observability: per-spoke metrics shipped to the hub, dashboards, logs, one SLO with tested burn-rate alerts, Argo CD health alerts | `PROPOSED` |
 | 6.2 | Backup and restore drill | `PROPOSED` |
 | 6.3 | Multi-language reference application with a data store, growing `apps/smoke` | `PROPOSED` |
@@ -283,16 +282,16 @@ Actions are restricted to GitHub-owned actions with immutable SHA
 pinning required platform-side; and the merge button only offers a real
 merge commit (squash and rebase merging are disabled).
 
-**`main` is not GitHub-protected yet.** While the repository was
-private on GitHub Free, branch protection and rulesets were unavailable.
-The repository is now public, and as of 2026-11-10 the GitHub API
-reports `main` as available but `Branch not protected`. Until the
-ruleset is applied (a repository-settings change that needs its own
-explicit authorization), `main` is protected only by process: every
-change goes through a pull request, and a passing `validate` run is
-required before merge. The exact ruleset design is specified and ready
-to apply — see
-[ADR-0009](docs/adr/0009-repository-governance-baseline.md).
+**`main` is protected by a ruleset** kept as code in
+`.github/rulesets/main.json` and applied on 2026-11-17
+([ADR-0020](docs/adr/0020-main-branch-ruleset.md)): no direct push,
+force push or deletion; every change through a pull request with review
+threads resolved and the branch up to date; required checks `validate`,
+`emulator`, `build, scan, SBOM` and `verify promoted images`, each
+accepted only from GitHub Actions; no bypass, the owner included. Secret
+scanning and push protection are on. `make governance-diff` compares the
+live ruleset with the file; the break-glass is in
+`docs/runbooks/repository-governance.md`.
 
 ## Local lab: External Secrets Operator bootstrap
 
