@@ -263,5 +263,17 @@ languages. Measured on 2026-11-18:
   - memory: smoke 2 Mi, notes 40 Mi, postgres 51 Mi;
   - hub back to `main`: notes and postgres Applications and pods gone,
     PVC `data-platform-postgres-dev-0` retained.
-- **6.3c uat, prod:** recorded with their promotions.
+- **6.3c uat promotion, live (2026-11-19),** after
+  `make eso-provision-db-secret ENV=uat`, hub on the promotion branch:
+  - `platform-notes-uat` and `platform-postgres-uat` Synced/Healthy (no
+    OutOfSync this time: the PVC-template fix holds); dev's Applications
+    unaffected; all three ExternalSecrets in uat `SecretSynced`;
+  - through smoke: `POST /api/notes` 201 and read back, empty body 400;
+    role `notes` without superuser/createdb/createrole, owns the table;
+  - an unlabelled pod got no answer from postgres:5432; a pod with notes'
+    instance label was accepted;
+  - dev and uat app passwords differ (compared by SHA-256 prefix only);
+  - memory: smoke 1 Mi, notes 27 Mi, postgres 53 Mi;
+  - hub back to `main`: uat's notes/postgres removed, PVC retained.
+- **6.3c prod:** recorded with its promotion.
 - **6.3d–6.3e:** recorded here as each lands.
