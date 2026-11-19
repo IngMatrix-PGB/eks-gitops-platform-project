@@ -1355,6 +1355,56 @@ run_negative_case "unknown key under autoscaling" 'autoscaling:
   scaleDownStabilizationSeconds: 60
   targetMemoryUtilizationPercentage: 80'
 
+# Phase 6.3b (ADR-0023): extraEnv - plain settings only, never a secret,
+# never one of the chart's own variables; empty by default.
+ee="$root/extraenv.yaml"
+"$HELM" template t "$CHART" -f "$CHART/values-dev.yaml" --set-string extraEnv.NOTES_URL=http://notes:8080 --set-string extraEnv.DB_HOST=postgres > "$ee"
+if grep -A1 -- '- name: NOTES_URL' "$ee" | grep -q 'value: "http://notes:8080"' && grep -A1 -- '- name: DB_HOST' "$ee" | grep -q 'value: "postgres"'; then
+  echo "OK: extraEnv renders each variable as a plain value"
+else
+  echo "FAIL: extraEnv not rendered" >&2; fail=1
+fi
+for f in "$CHART"/values-*.yaml; do
+  if "$HELM" template t "$CHART" -f "$f" | grep -qE -- '- name: (NOTES_URL|DB_HOST)$' && ! grep -q '^extraEnv:' "$f"; then
+    echo "FAIL: $(basename "$f") renders an extraEnv variable it does not set" >&2; fail=1
+  fi
+done
+for name in DB_PASSWORD API_TOKEN AWS_SECRET_ACCESS_KEY SIGNING_KEY DB_CREDENTIALS lower_case UI_MESSAGE METRICS_PORT; do
+  if "$HELM" template t "$CHART" -f "$CHART/values-dev.yaml" --set-string "extraEnv.${name}=x" >/dev/null 2>&1; then
+    echo "FAIL: extraEnv accepted '$name'" >&2; fail=1
+  fi
+done
+[ "$fail" -eq 0 ] && echo "OK: extraEnv refuses secret-like names (PASSWORD/SECRET/TOKEN/KEY/CREDENTIAL), lower-case names and the chart's own variables"
+
+# Phase 6.3b: networkPolicy.egressToPods - one extra egress rule per entry,
+# same namespace, by pod labels, one TCP port; nothing by default.
+eg="$root/egress.yaml"
+printf 'networkPolicy:\n  egressToPods:\n    - podLabels: {app.kubernetes.io/instance: platform-postgres-dev}\n      port: 5432\n' > "$root/egress-values.yaml"
+"$HELM" template t "$CHART" -f "$CHART/values-dev.yaml" -f "$root/egress-values.yaml" > "$eg"
+np_eg="$(awk '/^kind: NetworkPolicy$/{f=1} f&&/^---/{f=0} f' "$eg")"
+if printf '%s\n' "$np_eg" | grep -q 'app.kubernetes.io/instance: platform-postgres-dev' && printf '%s\n' "$np_eg" | grep -qE '^ +- port: 5432$' \
+   && ! printf '%s\n' "$np_eg" | grep -q 'namespaceSelector: {}'; then
+  echo "OK: egressToPods adds one egress rule to labelled pods of the namespace on its port"
+else
+  echo "FAIL: egressToPods not rendered as expected" >&2; fail=1
+fi
+for f in "$CHART"/values-*.yaml; do
+  "$HELM" template t "$CHART" -f "$f" | awk '/^kind: NetworkPolicy$/{f=1} f&&/^---/{f=0} f' | grep -qE '^ +- port: (5432|8080)$' \
+    && { echo "FAIL: $(basename "$f") renders an egressToPods rule it does not set" >&2; fail=1; }
+done
+run_negative_case "egressToPods without labels" 'networkPolicy:
+  enabled: true
+  ingressFromNamespaces: []
+  egressToPods:
+    - podLabels: {}
+      port: 5432'
+run_negative_case "egressToPods port 0" 'networkPolicy:
+  enabled: true
+  ingressFromNamespaces: []
+  egressToPods:
+    - podLabels: {a: b}
+      port: 0'
+
 if [ "$fail" -ne 0 ]; then
   echo "check-standard-workload-chart: FAILED"
   exit 1

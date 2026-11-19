@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "postgres-lab values (Phase 6.3b, ADR-0023)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image", "database", "appUser", "storage", "resources", "credentials", "networkPolicy"],
+  "properties": {
+    "image": {
+      "type": "object", "additionalProperties": false, "required": ["repository", "digest"],
+      "properties": {
+        "repository": {"type": "string", "pattern": "^[a-z0-9.-]+(/[a-z0-9._-]+)+$"},
+        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
+      }
+    },
+    "database": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,30}$"},
+    "appUser": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,30}$", "not": {"enum": ["postgres"]}},
+    "storage": {
+      "type": "object", "additionalProperties": false, "required": ["size", "storageClassName"],
+      "properties": {
+        "size": {"type": "string", "pattern": "^[1-9][0-9]*(Mi|Gi)$"},
+        "storageClassName": {"type": "string"}
+      }
+    },
+    "resources": {
+      "type": "object", "additionalProperties": false, "required": ["requests", "limits"],
+      "properties": {
+        "requests": {"type": "object", "additionalProperties": false, "required": ["cpu", "memory"],
+          "properties": {"cpu": {"type": "string"}, "memory": {"type": "string"}}},
+        "limits": {"type": "object", "additionalProperties": false, "required": ["memory"],
+          "properties": {"memory": {"type": "string"}}}
+      }
+    },
+    "credentials": {
+      "type": "object", "additionalProperties": false,
+      "required": ["secretStoreName", "authServiceAccountName", "sourceNamespace", "sourceSecretName", "refreshInterval"],
+      "properties": {
+        "secretStoreName": {"type": "string", "minLength": 1},
+        "authServiceAccountName": {"type": "string", "minLength": 1},
+        "sourceNamespace": {"type": "string", "minLength": 1},
+        "sourceSecretName": {"type": "string", "minLength": 1},
+        "refreshInterval": {"type": "string", "pattern": "^[0-9]+[smh]$"}
+      }
+    },
+    "networkPolicy": {
+      "type": "object", "additionalProperties": false, "required": ["clientPodLabels"],
+      "properties": {
+        "clientPodLabels": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string"}}
+      }
+    }
+  }
+}

@@ -187,3 +187,17 @@ render the HPA.
 - `metrics.enabled: false` removes the port, the variable and the rule;
   a metrics port equal to `service.port` fails the render.
 - Decided in [ADR-0021](0021-observability.md).
+
+## Amendment (Phase 6.3b, 2026-11-18): plain configuration and egress to pods
+
+- `extraEnv` (default empty) adds plain environment variables, such as a
+  database host or another service's URL. The schema allows names in
+  `^[A-Z][A-Z0-9_]*$` only, rejects names containing `PASSWORD`,
+  `SECRET`, `TOKEN`, `KEY` or `CREDENTIAL`, and caps values at 512
+  characters; the render fails on the variables the chart owns
+  (`UI_MESSAGE`, `SHUTDOWN_TIMEOUT`, `METRICS_PORT`). Credentials keep
+  arriving only as ESO-mounted files.
+- `networkPolicy.egressToPods` (default empty) adds one egress rule per
+  entry: pods of the same namespace selected by labels, one TCP port.
+- The chart stays stateless: the data store has its own chart
+  (`charts/postgres-lab`, [ADR-0023](0023-reference-application.md)).

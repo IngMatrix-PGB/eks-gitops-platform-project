@@ -25,17 +25,24 @@
 #   verify         cosign verify + verify-attestation of IMAGE against the
 #                  exact signer identity below (never a regex)
 #
+# Phase 6.3b (ADR-0023): one first-party image per application.
+# IMAGE_APP selects it (smoke, the default, or notes); every name below
+# derives from it, so each app has its own repository, archives, SBOMs and
+# published reference, under the same signer identity.
+#
 # Tools come from .tools/bin (make tools-install, checksum-verified); no
 # third-party GitHub Action wraps them.
 set -eu
 
 [ -f scripts/lab/tool-versions.txt ] || { echo "FAIL: run from the repository root" >&2; exit 1; }
 
-IMAGE_APP_DIR="apps/smoke"
-IMAGE_NAME="eks-gitops-platform-smoke"
+IMAGE_APP="${IMAGE_APP:-smoke}"
+case "$IMAGE_APP" in smoke|notes) : ;; *) echo "FAIL: IMAGE_APP must be smoke or notes (got '$IMAGE_APP')" >&2; exit 1 ;; esac
+IMAGE_APP_DIR="apps/$IMAGE_APP"
+IMAGE_NAME="eks-gitops-platform-$IMAGE_APP"
 IMAGE_OUT=".tools/out/image"
-IMAGE_ARCHIVE="$IMAGE_OUT/smoke.tar"
-IMAGE_SBOM="$IMAGE_OUT/smoke.cdx.json"
+IMAGE_ARCHIVE="$IMAGE_OUT/$IMAGE_APP.tar"
+IMAGE_SBOM="$IMAGE_OUT/$IMAGE_APP.cdx.json"
 # The failing threshold (TAD roadmap 5.1): any HIGH or CRITICAL finding
 # with a fix available fails the build. Unfixed findings are reported,
 # never silently dropped, but cannot be acted on by this repository.
@@ -43,13 +50,14 @@ IMAGE_SCAN_SEVERITY="HIGH,CRITICAL"
 TRIVY_BIN=".tools/bin/trivy"
 SYFT_BIN=".tools/bin/syft"
 COSIGN_BIN="${COSIGN_BIN:-.tools/bin/cosign}"
-IMAGE_REPO="ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke"
+IMAGE_REPO="ghcr.io/ingmatrix-pgb/eks-gitops-platform-$IMAGE_APP"
 IMAGE_PLATFORMS="linux/amd64,linux/arm64"
-IMAGE_INDEX_ARCHIVE="$IMAGE_OUT/smoke-index.tar"
-IMAGE_PUBLISHED_REF="$IMAGE_OUT/published.ref"
+IMAGE_INDEX_ARCHIVE="$IMAGE_OUT/$IMAGE_APP-index.tar"
+# smoke keeps the historical name; other apps get their own file.
+if [ "$IMAGE_APP" = smoke ]; then IMAGE_PUBLISHED_REF="$IMAGE_OUT/published.ref"; else IMAGE_PUBLISHED_REF="$IMAGE_OUT/published-$IMAGE_APP.ref"; fi
 # Pinned BuildKit for multi-platform builds (a docker-container builder),
 # so neither CI nor a laptop builds with an unpinned builder image.
-IMAGE_BUILDER="smoke-builder"
+IMAGE_BUILDER="smoke-builder"  # shared by every app
 IMAGE_BUILDKIT="moby/buildkit:v0.34.1@sha256:99368f3e46177c6405b9740e4461d91cee004128daeecca78d4ceac50ec1da5c"
 # The only identity whose signatures this project trusts: the image
 # workflow on main, through GitHub's OIDC issuer. Exact match, never a
@@ -93,8 +101,11 @@ sbom() {
   need "$SYFT_BIN"
   [ -f "$IMAGE_ARCHIVE" ] || { echo "FAIL: $IMAGE_ARCHIVE missing - run 'make image-build' first" >&2; exit 1; }
   SYFT_CHECK_FOR_APP_UPDATE=false "$SYFT_BIN" scan "docker-archive:$IMAGE_ARCHIVE" -q -o "cyclonedx-json=$IMAGE_SBOM"
-  grep -q '"bomFormat"' "$IMAGE_SBOM" && grep -q '"name": *"stdlib"' "$IMAGE_SBOM" \
-    || { echo "FAIL: $IMAGE_SBOM is not a CycloneDX SBOM that lists the Go stdlib" >&2; exit 1; }
+  # Each app's SBOM must list what it is built from: the Go standard
+  # library for smoke, the pinned PostgreSQL driver for notes.
+  case "$IMAGE_APP" in smoke) must='"name": *"stdlib"' ;; notes) must='"name": *"pg8000"' ;; esac
+  grep -q '"bomFormat"' "$IMAGE_SBOM" && grep -qE "$must" "$IMAGE_SBOM" \
+    || { echo "FAIL: $IMAGE_SBOM is not a CycloneDX SBOM that lists $must" >&2; exit 1; }
   echo "OK: CycloneDX SBOM at $IMAGE_SBOM ($(grep -o '"bom-ref"' "$IMAGE_SBOM" | wc -l | tr -d ' ') entries)"
 }
 
@@ -183,7 +194,7 @@ sign() {
   [ "$(wc -l < "$IMAGE_OUT/platforms.txt" | tr -d ' ')" = "$(printf '%s\n' "$IMAGE_PLATFORMS" | tr ',' '\n' | wc -l | tr -d ' ')" ] \
     || { echo "FAIL: $ref does not hold exactly $IMAGE_PLATFORMS" >&2; exit 1; }
   while read -r plat pdigest; do
-    sbom_file="$IMAGE_OUT/smoke-$(printf '%s' "$plat" | tr '/' '-').cdx.json"
+    sbom_file="$IMAGE_OUT/$IMAGE_APP-$(printf '%s' "$plat" | tr '/' '-').cdx.json"
     SYFT_CHECK_FOR_APP_UPDATE=false "$SYFT_BIN" scan "registry:${IMAGE_REPO}@${pdigest}" -q -o "cyclonedx-json=$sbom_file"
     echo "image: cosign attest --type cyclonedx ${IMAGE_REPO}@${pdigest} ($plat) ..."
     "$COSIGN_BIN" attest --yes --type cyclonedx --predicate "$sbom_file" "${IMAGE_REPO}@${pdigest}"

@@ -78,6 +78,15 @@ volumes:
 configMap:
   uiMessage: "platform smoke — override per environment"
 
+# Phase 6.3b (ADR-0023): plain, non-secret environment variables (a peer
+# service's URL, a database host). Names are UPPER_SNAKE_CASE; names that
+# look like secrets (PASSWORD, SECRET, TOKEN, KEY, CREDENTIAL) are refused
+# by the schema - secrets reach a workload only through externalSecret,
+# as a file. The chart's own variables (UI_MESSAGE, SHUTDOWN_TIMEOUT,
+# METRICS_PORT) cannot be overridden here. Empty by default: renders are
+# unchanged unless an overlay sets it.
+extraEnv: {}
+
 # Phase 2.6.2: an externally-managed Secret this chart never creates,
 # read-only-mounted for the workload to consume. Disabled by default -
 # every environment that does not set externalSecret.enabled: true
@@ -170,6 +179,12 @@ topologySpread:
 networkPolicy:
   enabled: true
   ingressFromNamespaces: []
+  # Phase 6.3b (ADR-0023): egress beyond DNS, only to pods of this
+  # namespace selected by labels, on one port each (smoke -> notes,
+  # notes -> postgres). Empty by default: renders are unchanged.
+  #   - podLabels: {app.kubernetes.io/instance: platform-notes-dev}
+  #     port: 8080
+  egressToPods: []
 
 # Phase 2.8.2 (ADR-0006 amendment): HorizontalPodAutoscaler on CPU
 # utilization (needs metrics-server on the cluster - installed per

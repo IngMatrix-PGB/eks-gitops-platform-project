@@ -4,7 +4,8 @@ Listing both policy types makes anything not allowed below denied.
 Ingress: the http port, from pods in this namespace and from any
 namespace named in networkPolicy.ingressFromNamespaces; Phase 6.1a: the
 metrics port, only from the namespaces in metrics.scrapeFromNamespaces.
-Egress: DNS to kube-dns only.
+Egress: DNS to kube-dns only; Phase 6.3b: plus each networkPolicy.
+egressToPods entry (pods of this namespace, by labels, one TCP port).
 */ -}}
 {{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
@@ -55,4 +56,13 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
+    {{- range .Values.networkPolicy.egressToPods }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .podLabels | nindent 14 }}
+      ports:
+        - port: {{ .port }}
+          protocol: TCP
+    {{- end }}
 {{- end }}

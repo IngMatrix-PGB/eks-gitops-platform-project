@@ -1,0 +1,15 @@
+# Phase 6.3b (ADR-0023): the one direct dependency, pg8000 (BSD), and its
+# full transitive closure, each pinned to a wheel by version and SHA-256.
+# Installed with --require-hashes --no-deps --only-binary=:all: (all are
+# pure-Python wheels), so nothing outside this file can enter the image.
+# Versions were at least two weeks old when pinned (2026-11-18).
+pg8000==1.31.6 \
+    --hash=sha256:1ffe27af94fa5b37ce6885b98d591dc75562ff076859bf50ca7729af59345a80
+scramp==1.5.0 \
+    --hash=sha256:8280608f568e81da9e9c9d69cac1331b836622d9b48bf5c5e400e16129c6d1fa
+asn1crypto==1.5.1 \
+    --hash=sha256:db4e40728b728508912cbb3d44f19ce188f218e9eba635821bb4b68564f8fd67
+python-dateutil==4.0.0 \
+    --hash=sha256:a5e246f79eb80475e691bf93862cead98decd8a498cf53ba0516fcdc0f50dc1c
+tzdata==2026.6 \
+    --hash=sha256:0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec

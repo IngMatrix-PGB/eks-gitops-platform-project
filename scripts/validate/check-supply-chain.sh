@@ -62,8 +62,13 @@ if [ -f "$pub_wf" ] && grep -qE '^  publish:[[:space:]]*$' "$pub_wf"; then
     || bad "$pub_wf: job publish must be guarded by exactly: if: github.event_name == 'push' && github.ref == 'refs/heads/main'"
   printf '%s\n' "$pub_block" | grep -qxF "    needs: build-scan-sbom" \
     || bad "$pub_wf: job publish must need build-scan-sbom (no push without the PR-time scan)"
-  for step in image-publish image-scan-remote image-sign image-verify; do
-    printf '%s\n' "$pub_block" | grep -qE "run: make ${step}\$" || bad "$pub_wf: job publish must run make $step"
+  # Phase 6.3b: every first-party app goes through every step.
+  for step in image-publish image-scan-remote image-sign; do
+    printf '%s\n' "$pub_block" | grep -qF "run: for app in smoke notes; do IMAGE_APP=\$app make ${step}; done" \
+      || bad "$pub_wf: job publish must run make $step for smoke and notes"
+  done
+  for app in smoke notes; do
+    printf '%s\n' "$pub_block" | grep -qE "^ +IMAGE_APP=${app} .*make image-verify\$" || bad "$pub_wf: job publish must run make image-verify for $app"
   done
 fi
 grep -rnE --exclude=check-supply-chain.sh -- '--certificate-identity-regexp|--certificate-oidc-issuer-regexp' scripts .github Makefile tests >/dev/null 2>&1 \
@@ -85,8 +90,15 @@ for df in "${dfs[@]}"; do
     || bad "$df: the final stage must set a numeric non-root USER (got '${last_user:-none}')"
   app_dir="$(dirname "$df")"
   grep -qE "directory: \"?/${app_dir}\"?" .github/dependabot.yml || bad ".github/dependabot.yml does not watch /$app_dir"
-  for eco in docker gomod; do
+  for eco in docker gomod pip; do
     [ "$eco" = gomod ] && [ ! -f "$app_dir/go.mod" ] && continue
+    [ "$eco" = pip ] && [ ! -f "$app_dir/requirements.txt" ] && continue
+    # Phase 6.3b: a Python app's requirements are fully hash-pinned.
+    if [ "$eco" = pip ]; then
+      awk '/^[A-Za-z0-9_.-]+==/{n++} /--hash=sha256:[0-9a-f]{64}/{h++} END{exit !(n > 0 && n == h)}' "$app_dir/requirements.txt" \
+        || bad "$app_dir/requirements.txt: every requirement must be ==-pinned with one --hash=sha256"
+      grep -q -- '--require-hashes' "$df" || bad "$df: pip must install with --require-hashes"
+    fi
     awk -v e="$eco" -v d="/$app_dir" '/package-ecosystem:/{eco=$0} /directory:/{ if (index(eco, "\"" e "\"") && index($0, d)) found=1 } END{exit !found}' .github/dependabot.yml \
       || bad ".github/dependabot.yml has no '$eco' update for /$app_dir"
   done

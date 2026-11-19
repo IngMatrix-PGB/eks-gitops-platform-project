@@ -632,6 +632,32 @@
             "type": "string",
             "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
           }
+        },
+        "egressToPods": {
+          "description": "Phase 6.3b: egress to pods of this namespace, by labels, one TCP port each.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "podLabels",
+              "port"
+            ],
+            "properties": {
+              "podLabels": {
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              }
+            }
+          }
         }
       }
     },
@@ -700,6 +726,20 @@
             "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
           }
         }
+      }
+    },
+    "extraEnv": {
+      "description": "Phase 6.3b: plain, non-secret environment variables. Secret-like names are refused; secrets come only through externalSecret.",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Z][A-Z0-9_]*$",
+        "not": {
+          "pattern": "(PASSWORD|SECRET|TOKEN|KEY|CREDENTIAL)"
+        }
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 512
       }
     }
   }
