@@ -78,6 +78,10 @@ scrape_configs:
         target_label: pod
       - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
         target_label: app
+      # Phase 6.3e: smoke and notes share app=standard-workload; the
+      # release (Argo CD Application name) tells them apart.
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
+        target_label: release
 
   # Phase 6.2a: this spoke's Velero (backup health; its NetworkPolicy
   # admits the monitoring namespace on this port only).

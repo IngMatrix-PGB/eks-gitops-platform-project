@@ -40,6 +40,35 @@ tests:
               summary: "smoke availability in spoke-dev is burning its error budget at 14.4x or more"
               description: "Error ratio over 1h is 10% (threshold 0.072), and the 5m window agrees. Objective 99.5 % over 30 days."
 
+  # Phase 6.3e: /api/notes is part of the SLI. smoke's own routes are
+  # healthy; only /api/notes fails (notes or postgres down -> 502), and
+  # that alone burns the budget.
+  - name: a failing notes chain burns smoke's budget
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/api/info",code="200"}'
+        values: '0+80x120'
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/api/notes",code="201"}'
+        values: '0+10x120'
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/api/notes",code="502"}'
+        values: '0+10x120'
+      - series: 'http_requests_total{cluster="spoke-dev",job="workload",route="/notes",code="503"}'
+        values: '0+50x120'
+    promql_expr_test:
+      - expr: round(cluster:smoke_http_errors:ratio_rate5m, 0.0001)
+        eval_time: 30m
+        exp_samples:
+          - labels: '{cluster="spoke-dev"}'
+            value: 0.1
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: SmokeAvailabilityBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {severity: page, slo: smoke-availability, burn_rate: "14.4", cluster: spoke-dev}
+            exp_annotations:
+              summary: "smoke availability in spoke-dev is burning its error budget at 14.4x or more"
+              description: "Error ratio over 1h is 10% (threshold 0.072), and the 5m window agrees. Objective 99.5 % over 30 days."
+
   # Both windows are required: the errors stop at 60m. At 75m the 1h
   # window is still above 14.4x (7.6 %), the 5m window is at 0, and the
   # alert is resolved. At 55m, before they stop, it fires.

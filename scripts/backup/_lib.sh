@@ -88,7 +88,14 @@ bk_store_admin() {
 # The gateway reads its IAM file on every request (cache disabled), so no
 # restart is needed and no secret passes through argv.
 bk_store_ensure_cluster() {
-  bec_user="velero-$1"; bec_bucket="$(bk_bucket "$1")"
+  bk_store_ensure_user "velero-$1" "$(bk_bucket "$1")"
+}
+
+# bk_store_ensure_user <user> <bucket> - Phase 6.3d: the same for any user
+# and bucket (the database dumps get dumps-<env>, owned by user
+# dumps-<env>, so Velero's users cannot read them and the reverse).
+bk_store_ensure_user() {
+  bec_user="$1"; bec_bucket="$2"
   python3 -I - "$BK_STORE_IAM" "$bec_user" <<'PY' || return 1
 import json, os, secrets, string, sys
 path, user = sys.argv[1], sys.argv[2]
@@ -117,8 +124,13 @@ PY
 # bk_store_secret <cluster> - prints that cluster's S3 secret key (to be
 # piped into a file, never echoed).
 bk_store_secret() {
+  bk_store_user_secret "velero-$1"
+}
+
+# bk_store_user_secret <user> - the same for any store user (Phase 6.3d).
+bk_store_user_secret() {
   python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["accessAccounts"][sys.argv[2]]["secret"], end="")' \
-    "$BK_STORE_IAM" "velero-$1"
+    "$BK_STORE_IAM" "$1"
 }
 
 # bk_write_velero_values <cluster> <out> - values for the velero chart.

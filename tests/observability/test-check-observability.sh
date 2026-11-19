@@ -61,7 +61,7 @@ long_only() { mutate "$1/rules/slo-smoke.rules.yml" 's/cluster:smoke_http_errors
 run_case "a fast-burn alert without its short window fails its unit tests" reject long_only
 no_cluster() { mutate "$1/rules/slo-smoke.rules.yml" 's/sum by (cluster) \(.*code=~"5.."}\[5m\]\)/sum \1/'; }
 run_case "an error ratio that drops the cluster label fails its unit tests" reject no_cluster
-any_route() { mutate "$1/rules/slo-smoke.rules.yml" 's/route=~"\/|\/api\/info",code=~"5.."/code=~"5.."/g'; }
+any_route() { mutate "$1/rules/slo-smoke.rules.yml" 's/route=~"\/|\/api\/info|\/api\/notes",code=~"5.."/code=~"5.."/g'; }
 run_case "an SLI that counts errors on every route fails its unit tests" reject any_route
 short_for() { mutate "$1/rules/argocd.rules.yml" 's/for: 10m/for: 1m/'; }
 run_case "a Degraded alert that fires after 1 minute fails its unit tests" reject short_for

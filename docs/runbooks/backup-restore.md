@@ -79,6 +79,41 @@ In the hub, Grafana and Alertmanager show the backup alerts:
 - `VeleroBackupStorageUnavailable`
 - `VeleroDown`
 
+## Database dumps of the reference application (Phase 6.3d)
+
+Velero backs up Kubernetes objects. The notes rows are volume data, and a
+CronJob in `charts/postgres-lab` dumps them every 6 hours.
+
+1. Once per environment, with the store running and `eso-source-<env>`
+   present:
+
+   ```bash
+   make db-dump-key ENV=dev
+   ```
+
+   This creates store user and bucket `dumps-<env>` and the Secret
+   `eso-source-<env>/dumps-<env>`, which is never printed, plus its
+   reader Role. It refuses to run if the store's address is outside
+   `dump.storeCIDR`.
+2. To dump now instead of waiting for the schedule:
+
+   ```bash
+   .tools/bin/kubectl --kubeconfig .local/kubeconfig-dev -n dev create job --from=cronjob/platform-postgres-dev-dump dump-now
+   ```
+
+   The dump and its `.sha256` land in `.local/backups/data/dumps-dev/`.
+3. Prove that the newest dump restores, without touching the live
+   database:
+
+   ```bash
+   make db-restore-check ENV=dev
+   ```
+
+To restore for real, scale notes to zero first. Then drop the `notes`
+table and run `pg_restore` of the dump into database `notes` as the
+`postgres` user inside the postgres pod, and scale notes back. This is
+not scripted; it overwrites live data.
+
 ## Restore drills (destructive)
 
 Each drill deletes one member's cluster, rebuilds it from Git plus its

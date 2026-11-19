@@ -1,7 +1,8 @@
 {{- /*
 Ingress: 5432 only from the client pods named in
 networkPolicy.clientPodLabels (the notes service), same namespace.
-Egress: none - PostgreSQL calls nothing.
+Egress: none - PostgreSQL calls nothing. Phase 6.3d: ingress also from
+the dump Job's pods.
 */ -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -21,7 +22,60 @@ spec:
         - podSelector:
             matchLabels:
               {{- toYaml .Values.networkPolicy.clientPodLabels | nindent 14 }}
+        {{- if .Values.dump.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "postgres-lab.dumpSelectorLabels" . | nindent 14 }}
+        {{- end }}
       ports:
         - port: postgres
           protocol: TCP
   egress: []
+{{- if .Values.dump.enabled }}
+---
+{{- /*
+Phase 6.3d: the dump Job's pods. No ingress. Egress: DNS to kube-dns,
+postgres on 5432 (same namespace, by labels), and the lab store's port
+from the kind network's range (dump.storeCIDR) - nothing else.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-dump
+  labels:
+    {{- include "postgres-lab.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "postgres-lab.dumpSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "postgres-lab.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: 5432
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.dump.storeCIDR }}
+      ports:
+        - port: {{ .Values.dump.storePort }}
+          protocol: TCP
+{{- end }}

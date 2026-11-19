@@ -1,0 +1,70 @@
+# Phase 6.3e (ADR-0021, ADR-0023): the reference application beyond
+# smoke's SLO - notes, its PostgreSQL and the database dumps. notes is
+# scraped by the spoke agent (job "workload", release platform-notes-<env>);
+# the rest comes from each spoke's kube-state-metrics, scoped to the
+# environment namespace. smoke's SLO already counts a failing chain
+# (/api/notes answers 502); these alerts name the component.
+groups:
+  - name: reference-app
+    rules:
+      - alert: NotesDown
+        expr: max by (cluster, release) (up{job="workload",release=~"platform-notes-.+"}) == 0
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "notes ({{ $labels.release }}) in {{ $labels.cluster }} has not been scraped for 5 minutes"
+          description: "The spoke agent cannot reach notes' metrics port. /api/notes through smoke is likely failing too."
+
+      - alert: NotesNotReady
+        expr: max by (cluster, deployment) (kube_deployment_status_replicas_available{deployment=~"platform-notes-.+-standard-workload"}) < 1
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.deployment }} in {{ $labels.cluster }} has had no ready replica for 10 minutes"
+          description: "notes reports not ready while its table is missing or its database is unreachable; check PostgresDown and the notes logs."
+
+      - alert: PostgresDown
+        expr: max by (cluster, statefulset) (kube_statefulset_status_replicas_ready{statefulset=~"platform-postgres-.+"}) < 1
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.statefulset }} in {{ $labels.cluster }} has had no ready replica for 5 minutes"
+          description: "The reference application's database is down: notes cannot read or write, and no dump can run."
+
+      # The newest scheduled run has not succeeded 15 minutes after it was
+      # scheduled (the Job's deadline is 10 minutes). A later successful run
+      # resolves it.
+      - alert: NotesDumpFailed
+        expr: |
+          (
+            max by (cluster, cronjob) (kube_cronjob_status_last_schedule_time{cronjob=~"platform-postgres-.+-dump"})
+            - max by (cluster, cronjob) (kube_cronjob_status_last_successful_time{cronjob=~"platform-postgres-.+-dump"})
+          ) > 900
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The last scheduled database dump of {{ $labels.cluster }} did not succeed"
+          description: "{{ $labels.cronjob }}: the newest scheduled run has not completed successfully. Check its Job's logs (pg-dump and upload) and the dumps-<env> store key."
+
+      # Dumps run every 6 h; stale is two missed runs plus one hour, as for
+      # Velero. Also fires when the CronJob has existed for 13 h without one
+      # success.
+      - alert: NotesDumpMissing
+        expr: |
+          time() - max by (cluster, cronjob) (kube_cronjob_status_last_successful_time{cronjob=~"platform-postgres-.+-dump"}) > 13 * 3600
+          or
+          (
+            time() - max by (cluster, cronjob) (kube_cronjob_created{cronjob=~"platform-postgres-.+-dump"}) > 13 * 3600
+            unless on (cluster, cronjob)
+            max by (cluster, cronjob) (kube_cronjob_status_last_successful_time{cronjob=~"platform-postgres-.+-dump"})
+          )
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.cluster }} has no successful database dump in 13 hours"
+          description: "{{ $labels.cronjob }} has not completed a dump for {{ $value | humanizeDuration }}; a lost volume would lose the notes rows written since the last one (TAD R-19)."

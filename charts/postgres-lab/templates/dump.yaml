@@ -1,0 +1,158 @@
+{{- /*
+Phase 6.3d (ADR-0022 amendment, ADR-0023): logical dumps of the
+application's database to the lab object store.
+
+- One Job pod per run: init container `pg-dump` (this chart's postgres
+  image) dumps the database as the application role - the data owner,
+  never the superuser - into an emptyDir; container `upload` (rclone)
+  copies the dump and its SHA-256 to bucket dumps-<namespace> and deletes
+  objects older than dump.keep.
+- The store key arrives as files from eso-source-<env>/dumps-<env>
+  (make db-dump-key) through this chart's SecretStore; ESO writes the
+  target Secret, which this chart never renders.
+- Its own labels (component=dump), so the postgres Service and
+  NetworkPolicy never select it; its own NetworkPolicy (networkpolicy.yaml).
+*/ -}}
+{{- if .Values.dump.enabled }}
+{{- $d := .Values.dump }}
+{{- $c := .Values.credentials }}
+{{- $bucket := $d.bucket | default (printf "dumps-%s" .Release.Namespace) }}
+{{- $source := $d.sourceSecretName | default (printf "dumps-%s" .Release.Namespace) }}
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ .Release.Name }}-dump-credentials
+  labels:
+    {{- include "postgres-lab.labels" . | nindent 4 }}
+spec:
+  refreshInterval: {{ $c.refreshInterval }}
+  secretStoreRef:
+    kind: SecretStore
+    name: {{ $c.secretStoreName }}
+  target:
+    name: {{ .Release.Name }}-dump-credentials
+    creationPolicy: Owner
+    deletionPolicy: Retain
+  data:
+    - secretKey: access-key-id
+      remoteRef:
+        key: {{ $source }}
+        property: access-key-id
+    - secretKey: secret-access-key
+      remoteRef:
+        key: {{ $source }}
+        property: secret-access-key
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-dump
+  labels:
+    {{- include "postgres-lab.labels" . | nindent 4 }}
+spec:
+  schedule: {{ $d.schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            {{- include "postgres-lab.dumpSelectorLabels" . | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          securityContext:
+            runAsUser: 999
+            runAsGroup: 999
+            runAsNonRoot: true
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: pg-dump
+              image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  PGPASSWORD="$(cat /run/secrets/postgres/app-password)"; export PGPASSWORD
+                  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+                  f="{{ .Values.database }}-${ts}.dump"
+                  pg_dump -h {{ .Release.Name }} -U {{ .Values.appUser }} -d {{ .Values.database }} --format=custom --no-owner -f "/work/$f"
+                  cd /work && sha256sum "$f" > "$f.sha256"
+                  echo "dumped $f ($(wc -c < "$f") bytes)"
+              resources:
+                {{- toYaml $d.resources | nindent 16 }}
+              volumeMounts:
+                - name: work
+                  mountPath: /work
+                - name: credentials
+                  mountPath: /run/secrets/postgres
+                  readOnly: true
+          containers:
+            - name: upload
+              image: "{{ $d.image.repository }}@{{ $d.image.digest }}"
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  export HOME=/tmp RCLONE_CONFIG=/tmp/rclone.conf
+                  : > "$RCLONE_CONFIG"
+                  export RCLONE_CONFIG_STORE_TYPE=s3 RCLONE_CONFIG_STORE_PROVIDER=Other
+                  export RCLONE_CONFIG_STORE_ENDPOINT={{ $d.storeEndpoint | quote }} RCLONE_CONFIG_STORE_REGION=us-east-1
+                  RCLONE_CONFIG_STORE_ACCESS_KEY_ID="$(cat /run/secrets/dumps/access-key-id)"
+                  RCLONE_CONFIG_STORE_SECRET_ACCESS_KEY="$(cat /run/secrets/dumps/secret-access-key)"
+                  export RCLONE_CONFIG_STORE_ACCESS_KEY_ID RCLONE_CONFIG_STORE_SECRET_ACCESS_KEY
+                  rclone copy /work store:{{ $bucket }} --s3-no-check-bucket --no-traverse --exclude "lost+found/**"
+                  rclone delete store:{{ $bucket }} --min-age {{ $d.keep }}
+                  echo "uploaded: $(ls /work | tr '\n' ' '); objects now: $(rclone lsf store:{{ $bucket }} | wc -l)"
+              resources:
+                {{- toYaml $d.resources | nindent 16 }}
+              volumeMounts:
+                - name: work
+                  mountPath: /work
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+                - name: dump-credentials
+                  mountPath: /run/secrets/dumps
+                  readOnly: true
+          volumes:
+            - name: work
+              emptyDir:
+                sizeLimit: 512Mi
+            - name: tmp
+              emptyDir:
+                sizeLimit: 16Mi
+            - name: credentials
+              secret:
+                secretName: {{ .Release.Name }}-credentials
+                defaultMode: 0440
+                items:
+                  - key: app-password
+                    path: app-password
+            - name: dump-credentials
+              secret:
+                secretName: {{ .Release.Name }}-dump-credentials
+                defaultMode: 0440
+{{- end }}

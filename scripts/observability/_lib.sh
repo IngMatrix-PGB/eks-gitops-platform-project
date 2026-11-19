@@ -218,10 +218,15 @@ kube-state-metrics:
   namespaces: ${owv_env}
   rbac:
     useClusterRole: false
+  # Phase 6.3e: statefulsets, jobs and cronjobs for the reference
+  # application's postgres and its dump CronJob (read-only, own namespace).
   collectors:
     - deployments
     - pods
     - horizontalpodautoscalers
+    - statefulsets
+    - jobs
+    - cronjobs
   securityContext:
     enabled: true
     runAsUser: 65534

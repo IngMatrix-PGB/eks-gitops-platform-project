@@ -1,0 +1,128 @@
+# Unit tests for reference-app.rules.yml (promtool test rules, Phase
+# 6.3e; run by make check-observability). Each alert fires for the broken
+# cluster only and stays silent while healthy.
+rule_files:
+  - ../reference-app.rules.yml
+evaluation_interval: 1m
+
+tests:
+  - name: notes not scraped for 5 minutes fires for that release only
+    interval: 1m
+    input_series:
+      - series: 'up{cluster="spoke-dev",job="workload",release="platform-notes-dev"}'
+        values: '1x5 0x20'
+      - series: 'up{cluster="spoke-dev",job="workload",release="platform-smoke-dev"}'
+        values: '0x25'
+      - series: 'up{cluster="spoke-uat",job="workload",release="platform-notes-uat"}'
+        values: '1x25'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: NotesDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: NotesDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, cluster: spoke-dev, release: platform-notes-dev}
+            exp_annotations:
+              summary: "notes (platform-notes-dev) in spoke-dev has not been scraped for 5 minutes"
+              description: "The spoke agent cannot reach notes' metrics port. /api/notes through smoke is likely failing too."
+
+  - name: notes without a ready replica for 10 minutes fires, 5 minutes does not
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{cluster="spoke-uat",deployment="platform-notes-uat-standard-workload",namespace="uat"}'
+        values: '1x5 0x20'
+      - series: 'kube_deployment_status_replicas_available{cluster="spoke-uat",deployment="platform-smoke-uat-standard-workload",namespace="uat"}'
+        values: '0x25'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: NotesNotReady
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: NotesNotReady
+        exp_alerts:
+          - exp_labels: {severity: ticket, cluster: spoke-uat, deployment: platform-notes-uat-standard-workload}
+            exp_annotations:
+              summary: "platform-notes-uat-standard-workload in spoke-uat has had no ready replica for 10 minutes"
+              description: "notes reports not ready while its table is missing or its database is unreachable; check PostgresDown and the notes logs."
+
+  - name: postgres without a ready replica fires
+    interval: 1m
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{cluster="spoke-dev",statefulset="platform-postgres-dev",namespace="dev"}'
+        values: '1x5 0x10'
+      - series: 'kube_statefulset_status_replicas_ready{cluster="spoke-uat",statefulset="platform-postgres-uat",namespace="uat"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PostgresDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: PostgresDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, cluster: spoke-dev, statefulset: platform-postgres-dev}
+            exp_annotations:
+              summary: "platform-postgres-dev in spoke-dev has had no ready replica for 5 minutes"
+              description: "The reference application's database is down: notes cannot read or write, and no dump can run."
+
+  # dev: scheduled at 6h (21600 s), last success at 0 -> the newest run
+  # did not succeed. uat: scheduled and succeeded at 6h. A success at 7h
+  # (25200 s) resolves dev.
+  - name: a dump run that did not succeed fires until a later run succeeds
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_schedule_time{cluster="spoke-dev",cronjob="platform-postgres-dev-dump",namespace="dev"}'
+        values: '21600x480'
+      - series: 'kube_cronjob_status_last_successful_time{cluster="spoke-dev",cronjob="platform-postgres-dev-dump",namespace="dev"}'
+        values: '0x419 25200x60'
+      - series: 'kube_cronjob_status_last_schedule_time{cluster="spoke-uat",cronjob="platform-postgres-uat-dump",namespace="uat"}'
+        values: '21600x480'
+      - series: 'kube_cronjob_status_last_successful_time{cluster="spoke-uat",cronjob="platform-postgres-uat-dump",namespace="uat"}'
+        values: '21600x480'
+    alert_rule_test:
+      - eval_time: 6h30m
+        alertname: NotesDumpFailed
+        exp_alerts:
+          - exp_labels: {severity: ticket, cluster: spoke-dev, cronjob: platform-postgres-dev-dump}
+            exp_annotations:
+              summary: "The last scheduled database dump of spoke-dev did not succeed"
+              description: "platform-postgres-dev-dump: the newest scheduled run has not completed successfully. Check its Job's logs (pg-dump and upload) and the dumps-<env> store key."
+      - eval_time: 7h40m
+        alertname: NotesDumpFailed
+        exp_alerts: []
+
+  # Last success at 0 s: stale past 13 h plus the 15m "for", never before.
+  - name: no successful dump in 13 hours fires, 12 hours does not
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{cluster="spoke-dev",cronjob="platform-postgres-dev-dump",namespace="dev"}'
+        values: '0x900'
+    alert_rule_test:
+      - eval_time: 12h
+        alertname: NotesDumpMissing
+        exp_alerts: []
+      - eval_time: 13h30m
+        alertname: NotesDumpMissing
+        exp_alerts:
+          - exp_labels: {severity: ticket, cluster: spoke-dev, cronjob: platform-postgres-dev-dump}
+            exp_annotations:
+              summary: "spoke-dev has no successful database dump in 13 hours"
+              description: "platform-postgres-dev-dump has not completed a dump for 13h 30m 0s; a lost volume would lose the notes rows written since the last one (TAD R-19)."
+
+  # Created at 0 s and never successful: fires after 13 h + 15m.
+  - name: a dump CronJob that never succeeded fires after 13 hours
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_created{cluster="spoke-uat",cronjob="platform-postgres-uat-dump",namespace="uat"}'
+        values: '0x900'
+    alert_rule_test:
+      - eval_time: 12h
+        alertname: NotesDumpMissing
+        exp_alerts: []
+      - eval_time: 13h30m
+        alertname: NotesDumpMissing
+        exp_alerts:
+          - exp_labels: {severity: ticket, cluster: spoke-uat, cronjob: platform-postgres-uat-dump}
+            exp_annotations:
+              summary: "spoke-uat has no successful database dump in 13 hours"
+              description: "platform-postgres-uat-dump has not completed a dump for 13h 30m 0s; a lost volume would lose the notes rows written since the last one (TAD R-19)."

@@ -82,7 +82,9 @@ languages. Measured on 2026-11-18:
   - **`smoke` gains `GET`/`POST /api/notes`**, forwarded to
     `NOTES_URL` only when that is set (absent: 404 as before).
     Requests are capped at 4 KiB, answers at 1 MiB; a notes 5xx or
-    timeout becomes smoke's own 502, so smoke's SLI covers the chain.
+    timeout becomes smoke's own 502. (Correction, 6.3e: smoke's SLO did
+    not include `/api/notes` until 6.3e added it, so until then this
+    502 did not reach the SLI.)
   - **`postgres` from its own chart (`charts/postgres-lab`).**
     PostgreSQL 18.6 by digest, one replica, restricted pod (UID 999,
     read-only root filesystem), PVC retained on delete and scale-down.
@@ -138,6 +140,14 @@ languages. Measured on 2026-11-18:
 - **Changed from the plan (6.3c).** notes has no `-aws` overlay: it is
   not delivered to EKS until 6.4, so a copy kept only for agreement
   would be dead configuration.
+
+- **6.3d+e — data protection and observability (one change).**
+  - Logical dumps of the notes database every 6 h to its own bucket,
+    plus a non-destructive restore check (amendment in ADR-0022).
+  - The scrape tells smoke and notes apart, smoke's SLO covers
+    `/api/notes`, and five alerts plus a dashboard cover notes, postgres
+    and the dumps (amendment in ADR-0021).
+  - Closes TAD R-19 in the lab.
 
 ## Alternatives Considered
 
@@ -275,6 +285,38 @@ languages. Measured on 2026-11-18:
   - dev and uat app passwords differ (compared by SHA-256 prefix only);
   - memory: smoke 1 Mi, notes 27 Mi, postgres 53 Mi;
   - hub back to `main`: uat's notes/postgres removed, PVC retained.
+- **6.3d+e, live before the pull request (2026-11-19):**
+  - `make db-dump-key ENV=dev|uat` created users and buckets `dumps-dev`
+    and `dumps-uat` and their Secrets; the store's address was inside
+    `dump.storeCIDR`;
+  - the upload commands, run from a throwaway rclone container (the same
+    digest) on the kind network: copy, list and delete worked with
+    `dumps-dev`; `velero-dev` on `dumps-dev` and `dumps-dev` on
+    `velero-dev` both got 403 AccessDenied, and no object was left;
+  - `make obs-install` on dev, uat and hub: `up{job="workload"}` now
+    carries `release` (smoke and notes apart in both clusters);
+    kube-state-metrics reports the postgres StatefulSets; the five new
+    rules are loaded;
+  - alert test on dev: auto-sync of `platform-postgres-dev` paused and
+    postgres scaled to 0. smoke answered 502 on `/api/notes` (5 of 5).
+    `PostgresDown` fired after 7 min and `NotesNotReady` after 11 min.
+    Scaled back and auto-sync restored: both Applications
+    Synced/Healthy, notes Ready, earlier rows intact;
+- **6.3d+e, live from the pull request branch (2026-11-19):**
+  - Argo CD created the dump CronJob, ExternalSecret (`SecretSynced`)
+    and NetworkPolicy in dev and uat; both postgres Applications
+    Synced/Healthy;
+  - one Job from each CronJob: dev 3308 bytes, uat 3280 bytes, each
+    with its `.sha256`, in `dumps-dev` and `dumps-uat`;
+  - `make db-restore-check`: dev 3 rows and uat 1 row, matching the live
+    rows by SHA-256; throwaway databases dropped, `notes` untouched;
+  - `NotesDumpFailed` on dev, with auto-sync paused, the CronJob every
+    3 min and the upload pointed at `dumps-uat` (dev's key is denied):
+    two runs failed, the alert fired 21 min after the last success, and
+    resolved 2 min after the bucket was fixed and a scheduled run
+    succeeded. Auto-sync was restored, and Argo CD put the CronJob back as
+    in Git;
+  - hub back to `main`.
 - **6.3c prod promotion, offline (2026-11-19):** the prod spoke is
   opt-in and was not running, so prod is proven offline only: both
   images verified by `make promote` (from uat); the prod overlays render

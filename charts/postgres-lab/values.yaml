@@ -37,3 +37,39 @@ credentials:
 # Pods allowed to connect on 5432 (same namespace), by label.
 networkPolicy:
   clientPodLabels: {}
+
+# Phase 6.3d (ADR-0022 amendment): logical dumps of the application's
+# database to the lab object store, every 6 h, kept 72 h (the same cadence
+# and TTL as Velero). A CronJob: pg_dump as the application role (the data
+# owner, not a superuser), then rclone uploads the dump and its SHA-256 to
+# bucket dumps-<env> and deletes objects older than `keep`. The store key
+# comes from eso-source-<env>/dumps-<env> (make db-dump-key ENV=<env>),
+# through this chart's SecretStore, as files.
+dump:
+  enabled: true
+  schedule: "17 */6 * * *"
+  keep: "72h"
+  # rclone v1.76.0, multi-arch index digest. Pinned 13 days after
+  # release (one day short of the two-week rule) because v1.75.2 carries
+  # six fixable HIGH findings and v1.76.0 one (Go stdlib); recorded in
+  # ADR-0022.
+  image:
+    repository: docker.io/rclone/rclone
+    digest: "sha256:7cbeec24a44f206067597c0368be4de90ae19a64d5113c7d1938bd737a81e466"
+  # The lab store (versitygw) by its container name on the kind network,
+  # and that network's CIDR for the egress rule: the container's address
+  # can change when it is recreated, the network's range does not.
+  # `make db-dump-key` checks the store's address is inside it.
+  storeEndpoint: "http://eks-gitops-backup-store:7070"
+  storeCIDR: "172.20.0.0/16"
+  storePort: 7070
+  # Source Secret (imperative, outside Git) with access-key-id and
+  # secret-access-key; empty means dumps-<release namespace>.
+  sourceSecretName: ""
+  bucket: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi

@@ -44,7 +44,8 @@ YAML
 q() { jq -r "$1" "$root/r.json"; }
 
 kinds="$(q '[.[].kind] | sort | join(" ")')"
-[ "$kinds" = "ConfigMap ExternalSecret NetworkPolicy SecretStore Service Service ServiceAccount StatefulSet" ] \
+# Phase 6.3d: plus the dump CronJob, its ExternalSecret and NetworkPolicy.
+[ "$kinds" = "ConfigMap CronJob ExternalSecret ExternalSecret NetworkPolicy NetworkPolicy SecretStore Service Service ServiceAccount StatefulSet" ] \
   && ok "exact object set: $kinds" || bad "object set: $kinds"
 img="$(q '.[] | select(.kind=="StatefulSet") | .spec.template.spec.containers[0].image')"
 [[ "$img" =~ ^docker\.io/library/postgres@sha256:[a-f0-9]{64}$ ]] && ok "image pinned by digest" || bad "image '$img'"
@@ -66,14 +67,42 @@ grep -qiE '(password|PASSWORD)[^_A-Za-z]*[:=] *["'"'"']?[A-Za-z0-9]{8,}' "$root/
 init="$(q '.[] | select(.kind=="ConfigMap") | .data["10-app-role.sh"]')"
 grep -qF '\set app_password `cat /run/secrets/postgres/app-password`' <<<"$init" && grep -qF 'NOSUPERUSER' <<<"$init" \
   && ! grep -qE 'psql[^\n]*(--set|-v app_password)' <<<"$init" || bad "init script: password on argv or role not restricted"
-[ "$(q '.[] | select(.kind=="ExternalSecret") | .spec.data | map(.secretKey) | join(",")')" = "superuser-password,app-password" ] || bad "ExternalSecret keys"
+[ "$(q '.[] | select(.kind=="ExternalSecret" and .metadata.name=="platform-postgres-dev-credentials") | .spec.data | map(.secretKey) | join(",")')" = "superuser-password,app-password" ] || bad "ExternalSecret keys"
 [ "$fail" -eq 0 ] && ok "passwords only as ESO-built files; none in the render; init reads the app password inside psql; app role NOSUPERUSER"
 
 [ "$(q "$sts.persistentVolumeClaimRetentionPolicy | [.whenDeleted, .whenScaled] | join(\",\")")" = "Retain,Retain" ] \
   && ok "PVC retained when the StatefulSet is deleted or scaled" || bad "PVC retention"
-np='.[] | select(.kind=="NetworkPolicy") | .spec'
-[ "$(q "$np | [(.policyTypes|join(\"+\")), (.ingress|length), (.ingress[0].from[0].podSelector.matchLabels[\"app.kubernetes.io/instance\"]), (.ingress[0].ports[0].port), (.egress|length)] | join(\",\")")" = "Ingress+Egress,1,platform-notes-dev,postgres,0" ] \
-  && ok "NetworkPolicy: 5432 only from platform-notes-dev pods; no egress" || bad "NetworkPolicy shape"
+np='.[] | select(.kind=="NetworkPolicy" and .metadata.name=="platform-postgres-dev") | .spec'
+[ "$(q "$np | [(.policyTypes|join(\"+\")), (.ingress|length), (.ingress[0].from[0].podSelector.matchLabels[\"app.kubernetes.io/instance\"]), (.ingress[0].from[1].podSelector.matchLabels[\"app.kubernetes.io/component\"]), (.ingress[0].from|length), (.ingress[0].ports[0].port), (.egress|length)] | join(\",\")")" = "Ingress+Egress,1,platform-notes-dev,dump,2,postgres,0" ] \
+  && ok "NetworkPolicy: 5432 only from platform-notes-dev pods and the dump Job; no egress" || bad "NetworkPolicy shape"
+
+# --- Phase 6.3d: the dump CronJob ---------------------------------------------
+cj='.[] | select(.kind=="CronJob") | .spec'
+pod="$cj.jobTemplate.spec.template.spec"
+[ "$(q "$cj | [.schedule, .concurrencyPolicy, .jobTemplate.spec.backoffLimit, .jobTemplate.spec.activeDeadlineSeconds] | join(\",\")")" = "17 */6 * * *,Forbid,1,600" ] \
+  || bad "dump schedule/concurrency/deadline"
+dimg="$(q "$pod.containers[0].image")"
+[[ "$dimg" =~ ^docker\.io/rclone/rclone@sha256:[a-f0-9]{64}$ ]] && [ "$(q "$pod.initContainers[0].image")" = "$img" ] || bad "dump images: '$dimg'"
+[ "$(q "$pod | [.automountServiceAccountToken, .securityContext.runAsNonRoot, .securityContext.runAsUser, .securityContext.seccompProfile.type] | join(\",\")")" = "false,true,999,RuntimeDefault" ] \
+  || bad "dump pod security context"
+[ "$(q "[$pod | (.initContainers + .containers)[] | .securityContext | [.readOnlyRootFilesystem, .allowPrivilegeEscalation, (.capabilities.drop|join(\"\"))] | join(\",\")] | unique | join(\" \")")" = "true,false,ALL" ] \
+  || bad "dump container security context"
+[ "$(q "[$pod | (.initContainers + .containers)[] | .env // [] | .[]] | length")" = 0 ] || bad "dump containers have env entries (secrets must be files)"
+[ "$(q "$pod.volumes | map(select(.emptyDir != null and .emptyDir.sizeLimit == null)) | length")" = 0 ] || bad "dump emptyDirs without size limits"
+[ "$(q "$pod.volumes | map(select(.secret != null) | .secret.secretName) | join(\",\")")" = "platform-postgres-dev-credentials,platform-postgres-dev-dump-credentials" ] \
+  && [ "$(q "$pod.volumes[] | select(.name==\"credentials\") | .secret.items | map(.key) | join(\",\")")" = "app-password" ] || bad "dump secret volumes"
+dargs="$(q "$pod.initContainers[0].args[0]")"
+grep -qF -- '-U notes -d notes' <<<"$dargs" && ! grep -q -- '-U postgres' <<<"$dargs" || bad "pg_dump must run as the application role, never the superuser"
+uargs="$(q "$pod.containers[0].args[0]")"
+grep -qF 'store:dumps-dev' <<<"$uargs" && grep -qF -- '--min-age 72h' <<<"$uargs" || bad "upload bucket or retention"
+[ "$(q '.[] | select(.kind=="ExternalSecret" and .metadata.name=="platform-postgres-dev-dump-credentials") | [(.spec.data | map(.secretKey + "<-" + .remoteRef.key) | join(",")), .spec.target.deletionPolicy] | join(" ")')" = "access-key-id<-dumps-dev,secret-access-key<-dumps-dev Retain" ] \
+  || bad "dump ExternalSecret"
+dnp='.[] | select(.kind=="NetworkPolicy" and .metadata.name=="platform-postgres-dev-dump") | .spec'
+[ "$(q "$dnp | [(.podSelector.matchLabels[\"app.kubernetes.io/component\"]), (.ingress|length), (.egress|length), (.egress[0].ports|map(.port|tostring)|join(\"/\")), (.egress[1].to[0].podSelector.matchLabels[\"app.kubernetes.io/name\"]), (.egress[1].ports[0].port|tostring), .egress[2].to[0].ipBlock.cidr, (.egress[2].ports[0].port|tostring)] | join(\",\")")" = "dump,0,3,53/53,postgres-lab,5432,172.20.0.0/16,7070" ] \
+  || bad "dump NetworkPolicy shape"
+grep -E 'ipBlock' -A1 "$root/r.yaml" | grep -q '0\.0\.0\.0/0' && bad "an any-address ipBlock"
+[ "$fail" -eq 0 ] && ok "dump CronJob: every 6 h, Forbid, deadline 600 s; pinned images; restricted pods; secrets only as files; pg_dump as the application role; bucket dumps-dev, kept 72h; own ExternalSecret (Retain); NetworkPolicy no ingress, egress DNS + postgres:5432 + store CIDR:7070 only"
+"$HELM" template x "$CHART" -f "$root/v.yaml" --set dump.enabled=false | grep -qE '^kind: CronJob$' && bad "dump.enabled=false still renders the CronJob"
 
 neg() { # $1=description $2=extra values
   printf '%s\n' "$2" > "$root/neg.yaml"
@@ -87,6 +116,14 @@ neg "an unknown key" 'superuserPassword: hunter2'
 grep -v -e '^networkPolicy:' -e 'clientPodLabels:' -e 'app.kubernetes.io/instance:' "$root/v.yaml" > "$root/nolabels.yaml"
 if "$HELM" template x "$CHART" -f "$root/nolabels.yaml" >/dev/null 2>&1; then bad "schema accepted: no client pod labels"; else ok "schema refuses: no client pod labels"; fi
 neg "postgres as the application user" 'appUser: postgres'
+neg "a dump store CIDR wider than /16" 'dump:
+  storeCIDR: "0.0.0.0/0"'
+neg "a tag-only dump image" 'dump:
+  image:
+    repository: docker.io/rclone/rclone
+    digest: "1.76.0"'
+neg "a dump retention not in hours" 'dump:
+  keep: "3d"'
 
 [ "$fail" -eq 0 ] || { echo "check-postgres-lab-chart: FAILED"; exit 1; }
 echo "check-postgres-lab-chart: OK"
