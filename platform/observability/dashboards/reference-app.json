@@ -1,0 +1,253 @@
+{
+  "uid": "platform-reference-app",
+  "title": "Platform / Reference application",
+  "description": "Phase 6.3e: notes traffic, errors and latency; smoke's /api/notes answers; notes and postgres readiness; age of the last database dump, per environment.",
+  "tags": [
+    "platform",
+    "reference-app"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "timezone": "utc",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "cluster",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "hub-prometheus"
+        },
+        "query": {
+          "query": "label_values(up, cluster)",
+          "refId": "cluster"
+        },
+        "definition": "label_values(up, cluster)",
+        "multi": true,
+        "includeAll": true,
+        "current": {},
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "notes requests per second, by cluster and route",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "sum by (cluster, route) (rate(http_requests_total{job=\"workload\",release=~\"platform-notes-.+\",cluster=~\"$cluster\"}[5m]))",
+          "legendFormat": "{{cluster}} {{route}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "notes 5xx share, by cluster",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "sum by (cluster) (rate(http_requests_total{job=\"workload\",release=~\"platform-notes-.+\",cluster=~\"$cluster\",code=~\"5..\"}[5m])) / sum by (cluster) (rate(http_requests_total{job=\"workload\",release=~\"platform-notes-.+\",cluster=~\"$cluster\"}[5m]))",
+          "legendFormat": "{{cluster}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "notes p95 latency, by cluster and route",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (cluster, route, le) (rate(http_request_duration_seconds_bucket{job=\"workload\",release=~\"platform-notes-.+\",cluster=~\"$cluster\"}[5m])))",
+          "legendFormat": "{{cluster}} {{route}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "smoke /api/notes answers, by cluster and code",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "sum by (cluster, code) (rate(http_requests_total{job=\"workload\",route=\"/api/notes\",cluster=~\"$cluster\"}[5m]))",
+          "legendFormat": "{{cluster}} {{code}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Ready replicas: notes and postgres",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "max by (cluster, deployment) (kube_deployment_status_replicas_available{deployment=~\"platform-notes-.+-standard-workload\",cluster=~\"$cluster\"})",
+          "legendFormat": "{{cluster}} {{deployment}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "max by (cluster, statefulset) (kube_statefulset_status_replicas_ready{statefulset=~\"platform-postgres-.+\",cluster=~\"$cluster\"})",
+          "legendFormat": "{{cluster}} {{statefulset}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Age of the last successful database dump",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hub-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hub-prometheus"
+          },
+          "expr": "time() - max by (cluster, cronjob) (kube_cronjob_status_last_successful_time{cronjob=~\"platform-postgres-.+-dump\",cluster=~\"$cluster\"})",
+          "legendFormat": "{{cluster}} {{cronjob}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    }
+  ]
+}

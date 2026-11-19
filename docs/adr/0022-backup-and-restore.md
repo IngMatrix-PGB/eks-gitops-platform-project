@@ -257,3 +257,46 @@ storage, and a scripted restore drill with recorded evidence. Measured on
       credential instead.
     - The failed runs were not counted; each drill was rerun from
       scratch.
+
+## Amendment (Phase 6.3d, 2026-11-19): logical dumps of the reference application's database
+
+- **Logical dumps, not the node agent.** The notes rows are the only
+  volume data in the lab. A `pg_dump` is consistent by construction,
+  restorable into any PostgreSQL 18, small, and needs no privileged
+  DaemonSet. The node agent would need a hostPath DaemonSet with root on
+  every node to copy one small volume. Revisit at 6.4 (EBS snapshots).
+- **`charts/postgres-lab` renders a CronJob** (every 6 h, kept 72 h, the
+  same cadence and TTL as Velero).
+  - Init container `pg-dump`: the chart's postgres image, as the
+    application role (the data owner, never the superuser), custom
+    format, into a size-limited emptyDir, plus its SHA-256.
+  - Container `upload`: rclone v1.76.0 by digest. It copies both files
+    to bucket `dumps-<env>` and deletes objects older than 72 h. rclone
+    was chosen over aws-cli (about ten times larger) and `mc` (AGPL).
+    v1.76.0 was pinned 13 days after release, one day short of the
+    two-week rule, because v1.75.2 carries six fixable HIGH findings and
+    v1.76.0 one (Go standard library, fixed in Go 1.27.4).
+  - Restricted pods, no service account token, secrets only as files.
+    Its own NetworkPolicy allows no ingress, and egress only to DNS,
+    postgres:5432 and the store's port from the kind network's range
+    (`dump.storeCIDR`). The container's address may change when it is
+    recreated; the network's range does not. `make db-dump-key` checks
+    that the store's address is inside it.
+- **Its own store user and bucket per environment.** `make db-dump-key
+  ENV=` creates user and bucket `dumps-<env>` and reconciles
+  `eso-source-<env>/dumps-<env>` from the store's IAM file. The key is
+  never printed. A reader Role grants that one Secret to the postgres
+  SecretStore identity. Velero's users and the dump users cannot read
+  each other's buckets (403 both ways). Velero backs up that Secret, so a
+  rebuilt spoke gets the same key back.
+- **A non-destructive restore check.** `make db-restore-check ENV=`
+  takes the newest dump from the store's directory on the host and
+  checks its SHA-256. It restores the dump into a throwaway database in
+  the same PostgreSQL and compares the row count and an ordered SHA-256
+  of every row with the live table, for the same ids. Then it drops the
+  throwaway database.
+- **Health in the hub** (ADR-0021): `NotesDumpFailed` and
+  `NotesDumpMissing`, from kube-state-metrics.
+- **Not done here:** a destructive drill that deletes the volume and
+  restores from a dump. The restore check proves that a dump restores.
+- **Validation:** recorded in ADR-0023 (6.3d) with the pull request.

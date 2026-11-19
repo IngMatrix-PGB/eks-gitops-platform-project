@@ -3,7 +3,7 @@
   "title": "postgres-lab values (Phase 6.3b, ADR-0023)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["image", "database", "appUser", "storage", "resources", "credentials", "networkPolicy"],
+  "required": ["image", "database", "appUser", "storage", "resources", "credentials", "networkPolicy", "dump"],
   "properties": {
     "image": {
       "type": "object", "additionalProperties": false, "required": ["repository", "digest"],
@@ -45,6 +45,37 @@
       "type": "object", "additionalProperties": false, "required": ["clientPodLabels"],
       "properties": {
         "clientPodLabels": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string"}}
+      }
+    },
+    "dump": {
+      "description": "Phase 6.3d: logical dumps to the lab object store.",
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "schedule", "keep", "image", "storeEndpoint", "storeCIDR", "storePort", "sourceSecretName", "bucket", "resources"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "schedule": {"type": "string", "pattern": "^[0-9*/,-]+( [0-9*/,-]+){4}$"},
+        "keep": {"type": "string", "pattern": "^[1-9][0-9]*h$"},
+        "image": {
+          "type": "object", "additionalProperties": false, "required": ["repository", "digest"],
+          "properties": {
+            "repository": {"type": "string", "pattern": "^[a-z0-9.-]+(/[a-z0-9._-]+)+$"},
+            "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
+          }
+        },
+        "storeEndpoint": {"type": "string", "pattern": "^http://[a-z0-9.-]+:[0-9]{1,5}$"},
+        "storeCIDR": {"type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/(1[6-9]|2[0-9]|3[0-2])$"},
+        "storePort": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "sourceSecretName": {"type": "string", "pattern": "^([a-z0-9][a-z0-9-]{0,62})?$"},
+        "bucket": {"type": "string", "pattern": "^([a-z0-9][a-z0-9-]{1,61}[a-z0-9])?$"},
+        "resources": {
+          "type": "object", "additionalProperties": false, "required": ["requests", "limits"],
+          "properties": {
+            "requests": {"type": "object", "additionalProperties": false, "required": ["cpu", "memory"],
+              "properties": {"cpu": {"type": "string"}, "memory": {"type": "string"}}},
+            "limits": {"type": "object", "additionalProperties": false, "required": ["memory"],
+              "properties": {"memory": {"type": "string"}}}
+          }
+        }
       }
     }
   }

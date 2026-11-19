@@ -302,3 +302,27 @@ decides how much of it runs locally.
     - lines were wrapped as `time=... log=...`;
     - the agent mounted a service account token. `obs-render` now checks
       for that last one.
+
+## Amendment (Phase 6.3e, 2026-11-19): the reference application
+
+- The spoke scrape job `workload` adds a `release` label (the Argo CD
+  Application name). smoke and notes share `app=standard-workload`;
+  `release` tells them apart.
+- smoke's availability SLO now also counts `/api/notes`. smoke answers
+  502 when notes or its database fails, so the SLI covers the whole
+  chain. A unit test fails only `/api/notes` and expects the fast burn
+  to fire.
+- Each spoke's kube-state-metrics also collects statefulsets, jobs and
+  cronjobs. These are read-only and limited to the environment
+  namespace.
+- `reference-app.rules.yml` adds five `ticket` alerts, each unit-tested:
+  - `NotesDown`;
+  - `NotesNotReady`;
+  - `PostgresDown`;
+  - `NotesDumpFailed`: the newest scheduled dump has not succeeded 15
+    minutes after it was scheduled;
+  - `NotesDumpMissing`: no success for 13 hours, including a CronJob
+  that never succeeded.
+- Dashboard "Platform / Reference application": notes traffic, errors
+  and p95; smoke's `/api/notes` answers; notes and postgres readiness;
+  the age of the last dump.

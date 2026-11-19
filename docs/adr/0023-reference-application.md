@@ -82,7 +82,9 @@ languages. Measured on 2026-11-18:
   - **`smoke` gains `GET`/`POST /api/notes`**, forwarded to
     `NOTES_URL` only when that is set (absent: 404 as before).
     Requests are capped at 4 KiB, answers at 1 MiB; a notes 5xx or
-    timeout becomes smoke's own 502, so smoke's SLI covers the chain.
+    timeout becomes smoke's own 502. (Correction, 6.3e: smoke's SLO did
+    not include `/api/notes` until 6.3e added it, so until then this
+    502 did not reach the SLI.)
   - **`postgres` from its own chart (`charts/postgres-lab`).**
     PostgreSQL 18.6 by digest, one replica, restricted pod (UID 999,
     read-only root filesystem), PVC retained on delete and scale-down.
@@ -138,6 +140,14 @@ languages. Measured on 2026-11-18:
 - **Changed from the plan (6.3c).** notes has no `-aws` overlay: it is
   not delivered to EKS until 6.4, so a copy kept only for agreement
   would be dead configuration.
+
+- **6.3d+e — data protection and observability (one change).**
+  - Logical dumps of the notes database every 6 h to its own bucket,
+    plus a non-destructive restore check (amendment in ADR-0022).
+  - The scrape tells smoke and notes apart, smoke's SLO covers
+    `/api/notes`, and five alerts plus a dashboard cover notes, postgres
+    and the dumps (amendment in ADR-0021).
+  - Closes TAD R-19 in the lab.
 
 ## Alternatives Considered
 

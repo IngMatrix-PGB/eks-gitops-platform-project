@@ -1,8 +1,9 @@
 # Phase 6.1c (ADR-0021): the smoke availability SLO.
 #
-# SLI: share of requests to the user-facing routes ("/" and "/api/info")
-# that the workload did not answer with a 5xx, per cluster (one spoke =
-# one environment). Objective: 99.5 % over 30 days, so the error budget
+# SLI: share of requests to the user-facing routes ("/", "/api/info" and,
+# since Phase 6.3e, "/api/notes") that the workload did not answer with a
+# 5xx, per cluster (one spoke = one environment). smoke answers 502 when
+# notes or its database fails, so the SLI covers the whole chain. Objective: 99.5 % over 30 days, so the error budget
 # is 0.5 % (0.005).
 #
 # Recording rules: the error ratio over each window the alerts use. When
@@ -20,66 +21,66 @@ groups:
       - record: cluster:smoke_http_errors:ratio_rate5m
         expr: |
           (
-            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[5m]))
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes",code=~"5.."}[5m]))
             or
-            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[5m]))
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[5m]))
           )
           /
-          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[5m]))
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[5m]))
       - record: cluster:smoke_http_errors:ratio_rate30m
         expr: |
           (
-            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[30m]))
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes",code=~"5.."}[30m]))
             or
-            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[30m]))
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[30m]))
           )
           /
-          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[30m]))
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[30m]))
       - record: cluster:smoke_http_errors:ratio_rate1h
         expr: |
           (
-            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[1h]))
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes",code=~"5.."}[1h]))
             or
-            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[1h]))
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[1h]))
           )
           /
-          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[1h]))
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[1h]))
       - record: cluster:smoke_http_errors:ratio_rate2h
         expr: |
           (
-            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[2h]))
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes",code=~"5.."}[2h]))
             or
-            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[2h]))
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[2h]))
           )
           /
-          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[2h]))
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[2h]))
       - record: cluster:smoke_http_errors:ratio_rate6h
         expr: |
           (
-            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[6h]))
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes",code=~"5.."}[6h]))
             or
-            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[6h]))
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[6h]))
           )
           /
-          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[6h]))
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[6h]))
       - record: cluster:smoke_http_errors:ratio_rate1d
         expr: |
           (
-            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[1d]))
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes",code=~"5.."}[1d]))
             or
-            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[1d]))
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[1d]))
           )
           /
-          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[1d]))
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[1d]))
       - record: cluster:smoke_http_errors:ratio_rate3d
         expr: |
           (
-            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info",code=~"5.."}[3d]))
+            sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes",code=~"5.."}[3d]))
             or
-            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[3d]))
+            0 * sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[3d]))
           )
           /
-          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info"}[3d]))
+          sum by (cluster) (rate(http_requests_total{job="workload",route=~"/|/api/info|/api/notes"}[3d]))
 
   - name: slo-smoke-availability-alerts
     rules:

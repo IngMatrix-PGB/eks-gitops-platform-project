@@ -174,6 +174,10 @@ The hub loads the rules in `platform/observability/rules/`:
 - **Argo CD.** Four alerts: an application Degraded for 10 minutes, an
   application OutOfSync for 30 minutes, a failed sync, and the
   application controller down.
+- **Reference application (Phase 6.3e).** `NotesDown`, `NotesNotReady`,
+  `PostgresDown`, `NotesDumpFailed` and `NotesDumpMissing`, all `ticket`.
+  smoke's SLO also counts `/api/notes`. Dashboard: "Platform / Reference
+  application".
 
 Alertmanager has no external receiver in the lab. Read the alerts from
 its API:

@@ -25,7 +25,7 @@
 	check-observability check-observability-regression obs-chart-fetch obs-render obs-install obs-status obs-uninstall \
 	backup-chart-fetch backup-render backup-store-up backup-store-down backup-store-status backup-install backup-status \
 	backup-uninstall backup-now backup-restore-check backup-drill-spoke backup-drill-hub \
-	check-postgres-lab-chart eso-provision-db-secret
+	check-postgres-lab-chart eso-provision-db-secret db-dump-key db-restore-check
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
@@ -65,6 +65,12 @@ check-spoke-access: ## Phase 3.4.4a/6.3a: the spoke Role, the AppProject and Arg
 
 check-postgres-lab-chart: ## Phase 6.3b: offline contract of charts/postgres-lab - object set, digest, restricted pod, passwords only as ESO files, PVC retained, NetworkPolicy, schema negatives
 	@bash scripts/validate/check-postgres-lab-chart.sh
+
+db-dump-key: ## Phase 6.3d: store user + bucket dumps-<ENV> and its key as eso-source-<ENV>/dumps-<ENV> (reconciled from the store, never printed) with reader RBAC; LAB_CLUSTER defaults to ENV
+	@sh lab/backup/db-dump-key.sh "$(ENV)"
+
+db-restore-check: ## Phase 6.3d: non-destructive - restore the newest dump of ENV into a throwaway database and compare rows with the live table
+	@sh lab/backup/db-restore-check.sh "$(ENV)"
 
 eso-provision-db-secret: ## Phase 6.3b: eso-source-<ENV>/db-<ENV> with two random passwords (kept if present) and its reader RBAC (always ensured); LAB_CLUSTER defaults to ENV
 	@sh lab/eso/provision-db-secret.sh "$(ENV)"
