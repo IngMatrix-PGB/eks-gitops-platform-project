@@ -224,8 +224,14 @@ languages. Measured on 2026-11-18:
     table;
   - after deleting the postgres pod the rows were still there and notes
     reconnected without restarting;
-  - a pod without notes' labels got no answer from postgres:5432 or
-    notes:8080; a pod with notes' instance label reached postgres;
+  - a pod without notes' labels got no answer from postgres:5432; a pod
+    with notes' instance label reached postgres;
+  - correction (found during 6.3c): the 6.3b record also said such a pod
+    got no answer from notes:8080. That probe was invalid: it used
+    `pg_isready` against an HTTP port, which reports "no response" for
+    any non-PostgreSQL server. By the chart contract (ADR-0006) notes
+    accepts its http port from every pod of its namespace, so that pod
+    would have been allowed;
   - memory: smoke 4 Mi, notes 29 Mi, postgres 35 Mi.
   - The lab test found one defect, fixed before commit: smoke forwarded
     the body chunked, and notes reads only `Content-Length`. Smoke now
@@ -239,5 +245,23 @@ languages. Measured on 2026-11-18:
   notes cases (unknown app, overlay missing, order, image block added
   with configuration kept, ApplicationSet/overlay agreement, postgres
   alongside, another app's image in the notes ledger). `make validate`.
-- **6.3c, live:** recorded with the pull request and each promotion.
+- **6.3c code, live (2026-11-18):** hub switched to the branch: no new
+  ApplicationSet, smoke's ApplicationSet and Applications kept their
+  UIDs, Synced/Healthy; back to `main` the same.
+- **6.3c dev promotion, live (2026-11-19),** hub on the promotion branch:
+  - `platform-notes` and `platform-postgres` generated
+    `platform-notes-dev` and `platform-postgres-dev`, Synced/Healthy;
+    smoke's Applications kept their UIDs;
+  - first sync left `platform-postgres-dev` OutOfSync on the
+    StatefulSet's `volumeClaimTemplates` (API defaults added live); the
+    chart now writes `apiVersion`, `kind` and `volumeMode`, and the
+    Application went Synced;
+  - through smoke: `POST /api/notes` 201 and read back, empty body 400;
+    role `notes` without superuser/createdb/createrole, owns the table;
+  - an unlabelled pod got no answer from postgres:5432; a pod with notes'
+    instance label was accepted;
+  - memory: smoke 2 Mi, notes 40 Mi, postgres 51 Mi;
+  - hub back to `main`: notes and postgres Applications and pods gone,
+    PVC `data-platform-postgres-dev-0` retained.
+- **6.3c uat, prod:** recorded with their promotions.
 - **6.3d–6.3e:** recorded here as each lands.

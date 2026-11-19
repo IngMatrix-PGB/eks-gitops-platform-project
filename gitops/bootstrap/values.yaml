@@ -36,12 +36,12 @@ components:
     chartPath: charts/standard-workload
     overlayPrefix: "notes-"
     profiles: [local-multicluster]
-    environments: []
+    environments: [dev]
   - name: postgres
     chartPath: charts/postgres-lab
     overlayPrefix: ""
     profiles: [local-multicluster]
-    environments: []
+    environments: [dev]
 
 # Exactly three environments, matching the dev/uat/prod spokes of
 # ADR-0015 (simulated as namespaces in lab-lite). Adding a fourth is

@@ -96,13 +96,19 @@ spec:
           configMap:
             name: {{ .Release.Name }}-init
             defaultMode: 0555
+  # apiVersion, kind and volumeMode are the API server's defaults, written
+  # out so Argo CD's diff of the live StatefulSet matches the render
+  # (Phase 6.3c: without them platform-postgres-dev stayed OutOfSync).
   volumeClaimTemplates:
-    - metadata:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: data
         labels:
           {{- include "postgres-lab.selectorLabels" . | nindent 10 }}
       spec:
         accessModes: ["ReadWriteOnce"]
+        volumeMode: Filesystem
         {{- with .Values.storage.storageClassName }}
         storageClassName: {{ . }}
         {{- end }}

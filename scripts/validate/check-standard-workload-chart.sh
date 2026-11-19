@@ -1208,8 +1208,15 @@ for render in "$render_dev" "$render_uat" "$render_prod" "$ov_dev" "$ov_uat" "$o
   printf '%s\n' "$np" | grep -qE '^    - Ingress$' && printf '%s\n' "$np" | grep -qE '^    - Egress$' || ok=0
   [ "$(printf '%s\n' "$np" | grep -cE '^\s+- port: 53$')" = "2" ] || ok=0
   # Phase 6.1a: http, metrics and DNS (TCP+UDP) - four ports, metrics
-  # only from the monitoring namespace.
-  [ "$(printf '%s\n' "$np" | grep -cE '^\s+- port: ')" = "4" ] || ok=0
+  # only from the monitoring namespace. Phase 6.3c: plus one per
+  # egressToPods entry the overlay itself sets (the smoke -> notes rule
+  # in values-dev.yaml), each to labelled pods of this namespace only.
+  case "$render" in
+    "$render_dev") src="$CHART/values-dev.yaml" ;; "$render_uat") src="$CHART/values-uat.yaml" ;;
+    "$render_prod") src="$CHART/values-prod.yaml" ;; *) src="" ;;
+  esac
+  extra=0; [ -n "$src" ] && extra="$(.tools/bin/yq '.networkPolicy.egressToPods // [] | length' "$src")"
+  [ "$(printf '%s\n' "$np" | grep -cE '^\s+- port: ')" = "$((4 + extra))" ] || ok=0
   [ "$(printf '%s\n' "$np" | grep -cE '^\s+- port: metrics$')" = "1" ] || ok=0
   metrics_from="$(printf '%s\n' "$np" | awk '/^    - from:/{blk=""} {blk=blk $0 "\n"} /- port: metrics$/{printf "%s", blk; exit}')"
   [ "$(printf '%s' "$metrics_from" | grep -cE '^\s+- (namespaceSelector|podSelector):')" = "1" ] || ok=0
@@ -1217,7 +1224,7 @@ for render in "$render_dev" "$render_uat" "$render_prod" "$ov_dev" "$ov_uat" "$o
   printf '%s\n' "$np" | grep -qE 'namespaceSelector: \{\}|ipBlock:|0\.0\.0\.0/0' && ok=0
   [ "$ok" -eq 1 ] || { echo "FAIL: $render NetworkPolicy is not exactly: own pods, Ingress+Egress, http from this namespace, metrics from monitoring only, DNS-only egress" >&2; fail=1; }
 done
-[ "$fail" -eq 0 ] && echo "OK: prod PodDisruptionBudgets are maxUnavailable: 1 over the Deployment's own selector; every NetworkPolicy (local and aws) selects only its own pods, allows http from its namespace and metrics from monitoring only, DNS-only egress, no ipBlock or any-namespace rule"
+[ "$fail" -eq 0 ] && echo "OK: prod PodDisruptionBudgets are maxUnavailable: 1 over the Deployment's own selector; every NetworkPolicy (local and aws) selects only its own pods, allows http from its namespace and metrics from monitoring only, egress DNS plus only the egressToPods rules its overlay sets, no ipBlock or any-namespace rule"
 
 # PDB appears only with >= 2 replicas; ingressFromNamespaces adds one selector each
 pdb1="$("$HELM" template x "$CHART" -f "$CHART/values-uat.yaml" | grep -c '^kind: PodDisruptionBudget$' || true)"
@@ -1390,6 +1397,7 @@ else
 fi
 for f in "$CHART"/values-*.yaml; do
   "$HELM" template t "$CHART" -f "$f" | awk '/^kind: NetworkPolicy$/{f=1} f&&/^---/{f=0} f' | grep -qE '^ +- port: (5432|8080)$' \
+    && ! grep -qE '^  egressToPods:' "$f" \
     && { echo "FAIL: $(basename "$f") renders an egressToPods rule it does not set" >&2; fail=1; }
 done
 run_negative_case "egressToPods without labels" 'networkPolicy:
