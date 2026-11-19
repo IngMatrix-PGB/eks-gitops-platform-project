@@ -35,10 +35,48 @@ name prefix, overlay suffix); the two profiles differ only in data.
 {{- $envRef = printf "%s.values.env%s" "{{" "}}" }}
 {{- $nsRef = $envRef }}
 {{- end }}
+{{- /*
+Phase 6.3c (ADR-0023): one ApplicationSet per component of the reference
+application. smoke (no `environments` key) keeps exactly its previous
+render: ApplicationSet <project>-environments, Applications
+platform-smoke-<env>, every environment of the profile - renaming either
+would cascade-delete the running workload. Every other component gets
+ApplicationSet <project>-<name> and Applications platform-<name>-<env>,
+only for its listed environments, only in its listed profiles; an empty
+list renders no ApplicationSet at all. Enabling an environment is one
+reviewed line in values.yaml (a promotion PR).
+*/ -}}
+{{- $profileEnvs := list }}
+{{- if $multicluster }}
+{{- $profileEnvs = $hs.environments }}
+{{- else }}
+{{- range .Values.environments }}{{ $profileEnvs = append $profileEnvs .name }}{{ end }}
+{{- end }}
+{{- $first := true }}
+{{- range $c := .Values.components }}
+{{- if not (regexMatch "^[a-z][a-z0-9-]*$" $c.name) }}
+{{- fail (printf "gitops/bootstrap: component name %q must match ^[a-z][a-z0-9-]*$" $c.name) }}
+{{- end }}
+{{- $all := not (hasKey $c "environments") }}
+{{- if and $all (ne $c.name "smoke") }}
+{{- fail (printf "gitops/bootstrap: component %q must list its environments (only smoke follows the profile)" $c.name) }}
+{{- end }}
+{{- $envs := ternary $profileEnvs ($c.environments | default list) $all }}
+{{- range $envs }}
+{{- if not (has . $profileEnvs) }}
+{{- fail (printf "gitops/bootstrap: component %q lists environment %q, which profile %q does not have" $c.name . $.Values.profile) }}
+{{- end }}
+{{- end }}
+{{- $inProfile := or (not (hasKey $c "profiles")) (has $.Values.profile ($c.profiles | default list)) }}
+{{- if and $envs $inProfile }}
+{{- if not $first }}
+---
+{{- end }}
+{{- $first = false }}
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: {{ .Values.project.name }}-environments
+  name: {{ $.Values.project.name }}-{{ ternary "environments" $c.name $all }}
   namespace: argocd
   labels:
     eks-gitops-lab-lite.local/owner: gitops-bootstrap
@@ -83,7 +121,7 @@ spec:
             - key: {{ $hs.environmentLabelKey }}
               operator: In
               values:
-                {{- range $hs.environments }}
+                {{- range $envs }}
                 - {{ . }}
                 {{- end }}
         values:
@@ -97,14 +135,16 @@ spec:
           file - an unknown value fails the render closed, never a
           silent fallback.
           */}}
-          {{- range .Values.environments }}
+          {{- range $.Values.environments }}
+          {{- if has .name $envs }}
           - env: {{ .name }}
             namespace: {{ .namespace }}
+          {{- end }}
           {{- end }}
     {{- end }}
   template:
     metadata:
-      name: "platform-smoke-{{ $envRef }}"
+      name: "platform-{{ $c.name }}-{{ $envRef }}"
       labels:
         eks-gitops-lab-lite.local/owner: gitops-bootstrap
       # Required so deleting this Application (directly, or via cascade
@@ -114,14 +154,14 @@ spec:
       finalizers:
         - resources-finalizer.argocd.argoproj.io
     spec:
-      project: {{ .Values.project.name }}
+      project: {{ $.Values.project.name }}
       source:
-        repoURL: {{ .Values.repoURL }}
-        targetRevision: {{ .Values.gitRevision }}
-        path: {{ .Values.workloadChartPath }}
+        repoURL: {{ $.Values.repoURL }}
+        targetRevision: {{ $.Values.gitRevision }}
+        path: {{ $c.chartPath | default $.Values.workloadChartPath }}
         helm:
           valueFiles:
-            - "values-{{ $envRef }}{{ $overlaySuffix }}.yaml"
+            - "values-{{ $c.overlayPrefix | default "" }}{{ $envRef }}{{ $overlaySuffix }}.yaml"
       # Phase 2.8.2: an HPA owns spec.replicas of a Deployment the workload
       # chart annotates replicas-owner=hpa (the chart renders minReplicas
       # there). Only those: a static Deployment stays fully reconciled
@@ -187,3 +227,5 @@ spec:
             duration: 5s
             factor: 2
             maxDuration: 3m
+{{- end }}
+{{- end }}

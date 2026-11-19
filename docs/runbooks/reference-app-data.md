@@ -9,8 +9,11 @@ is three components in one environment namespace:
 - `notes` (Python), which owns the data;
 - `postgres`, from `charts/postgres-lab`.
 
-Argo CD delivers them from 6.3c. This runbook covers what lives outside
-Git: the database credentials.
+Argo CD delivers them from 6.3c: one ApplicationSet per component, and
+an environment gets notes and postgres when a promotion pull request
+lists it in `gitops/bootstrap/values.yaml`
+([image-promotion.md](image-promotion.md)). This runbook covers what
+lives outside Git: the database credentials and the volume.
 
 ## Credentials
 
@@ -58,7 +61,9 @@ needs a new, empty volume.
 ## The volume
 
 - The PVC `data-<release>-0` is retained when the StatefulSet is deleted
-  or scaled down. Deleting it deletes the data.
+  or scaled down, when the environment is removed from the postgres
+  list, and when the spoke is deregistered. Deleting it deletes the
+  data; do it by hand, only on purpose.
 - There is no logical dump yet (TAD R-19); 6.3d adds one to the backup
   store.
 

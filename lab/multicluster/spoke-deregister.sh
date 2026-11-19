@@ -4,7 +4,8 @@
 # `make mc-spoke-deregister`. Idempotent.
 #
 # Phase 2.7.4: when the hub's ApplicationSet (profile local-multicluster)
-# has generated platform-smoke-<env> for this spoke, deleting the cluster
+# has generated platform-smoke-<env> (Phase 6.3c: and platform-notes-/
+# platform-postgres-<env>) for this spoke, deleting the cluster
 # Secret first ORPHANS the spoke's workloads: proven empirically (Argo CD
 # v3.5.2) - the ApplicationSet deletes the Application within ~10s and
 # its resources-finalizer completes without deleting anything, because
@@ -42,7 +43,12 @@ spoke="${1:-}"
 lab_mc_require_spoke "$spoke"
 sel="${LAB_MC_OWNER_LABEL_KEY}=${LAB_MC_OWNER_LABEL_VALUE}"
 
-app="platform-smoke-${spoke}"
+# Phase 6.3c: every generated Application aimed at this spoke (smoke and,
+# where enabled, notes and postgres), found by destination, not by name.
+spoke_apps() {
+  ckubectl "$LAB_MC_HUB" -n argocd get applications -l eks-gitops-lab-lite.local/owner=gitops-bootstrap \
+    -o jsonpath="{range .items[?(@.spec.destination.name=='spoke-${spoke}')]}{.metadata.name}{' '}{end}" 2>/dev/null || true
+}
 app_wait_s="${LAB_MC_DEREGISTER_TIMEOUT:-240}"
 if lab_mc_identity "$LAB_MC_HUB"; then
   escaped_owner_key="$(printf '%s' "$LAB_MC_OWNER_LABEL_KEY" | sed 's/\./\\./g')"
@@ -54,23 +60,24 @@ if lab_mc_identity "$LAB_MC_HUB"; then
   if [ "$secret_owner" = "$LAB_MC_OWNER_LABEL_VALUE" ]; then
     # 1. unselect the spoke (the label is the generator's only handle on it)
     ckubectl "$LAB_MC_HUB" -n argocd label secret "spoke-${spoke}" "${LAB_MC_ENV_LABEL_KEY}-" >/dev/null 2>&1 || true
-    # 2. wait for its Application (and the Application's own cascade on
-    #    the spoke) to finish while the credential is still valid
-    if ckubectl "$LAB_MC_HUB" -n argocd get application "$app" >/dev/null 2>&1; then
+    # 2. wait for its Applications (and their own cascade on the spoke)
+    #    to finish while the credential is still valid
+    app="$(spoke_apps)"
+    if [ -n "$app" ]; then
       if ! lab_mc_identity "$spoke"; then
-        echo "FAIL: Application '$app' still exists but spoke '$spoke' is not running ($LAB_MC_IDENTITY_CASE) - its finalizer cannot delete the workloads; start the spoke and re-run" >&2
+        echo "FAIL: Application(s) '${app% }' still exist but spoke '$spoke' is not running ($LAB_MC_IDENTITY_CASE) - their finalizers cannot delete the workloads; start the spoke and re-run" >&2
         exit 1
       fi
-      echo "mc-spoke-deregister: waiting up to ${app_wait_s}s for Application '$app' to be removed (its finalizer deletes the workloads on '$spoke') ..."
+      echo "mc-spoke-deregister: waiting up to ${app_wait_s}s for Application(s) '${app% }' to be removed (their finalizers delete the workloads on '$spoke') ..."
       waited=0
-      while ckubectl "$LAB_MC_HUB" -n argocd get application "$app" >/dev/null 2>&1; do
+      while [ -n "$(spoke_apps)" ]; do
         if [ "$waited" -ge "$app_wait_s" ]; then
-          echo "FAIL: Application '$app' was not removed within ${app_wait_s}s - the cluster Secret is kept (unlabelled) so its finalizer can still finish; inspect it and re-run" >&2
+          echo "FAIL: Application(s) '$(spoke_apps)' not removed within ${app_wait_s}s - the cluster Secret is kept (unlabelled) so their finalizers can still finish; inspect and re-run" >&2
           exit 1
         fi
         sleep 3; waited=$((waited + 3))
       done
-      echo "OK: Application '$app' removed after ${waited}s (workloads on '$spoke' deleted by its finalizer)"
+      echo "OK: Application(s) '${app% }' removed after ${waited}s (workloads on '$spoke' deleted by their finalizers; a postgres PVC is retained by design)"
     fi
     # 3. now the credential can go
     ckubectl "$LAB_MC_HUB" -n argocd delete secret "spoke-${spoke}" --ignore-not-found >/dev/null

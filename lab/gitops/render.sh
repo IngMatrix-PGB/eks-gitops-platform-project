@@ -21,6 +21,9 @@ require_repo_root
 # shellcheck source=../../scripts/gitops/_lib.sh
 . scripts/gitops/_lib.sh
 require_helm
+# Phase 6.3c: YAML is parsed with the pinned yq (make tools-install).
+YQ_BIN=".tools/bin/yq"
+[ -x "$YQ_BIN" ] || { echo "FAIL: $YQ_BIN not found - run 'make tools-install'" >&2; exit 1; }
 
 revision="${REVISION:-$GITOPS_DEFAULT_REVISION}"
 
@@ -172,7 +175,11 @@ check_hub_spoke() {
     rm -f "$out"; fail=1; return
   fi
   [ "$(grep -c '^kind: AppProject$' "$out")" = "1" ] || { echo "FAIL: $prof: expected exactly 1 AppProject" >&2; hs_fail=1; }
-  [ "$(grep -c '^kind: ApplicationSet$' "$out")" = "1" ] || { echo "FAIL: $prof: expected exactly 1 ApplicationSet" >&2; hs_fail=1; }
+  # Phase 6.3c: smoke's ApplicationSet plus one per other component that
+  # lists an environment and allows this profile.
+  local want_sets
+  want_sets="$(PROF="$prof" "$YQ_BIN" '[.components[] | select(.name != "smoke") | select((.environments // []) | length > 0) | select(((.profiles // [strenv(PROF)]) | contains([strenv(PROF)])))] | length + 1' gitops/bootstrap/values.yaml)"
+  [ "$(grep -c '^kind: ApplicationSet$' "$out")" = "$want_sets" ] || { echo "FAIL: $prof: expected exactly $want_sets ApplicationSet(s)" >&2; hs_fail=1; }
   if grep -qiE '^kind: SecretStore$|^kind: Secret$|auth:|serviceAccountRef|arn:aws:|AKIA[0-9A-Z]{16}' "$out"; then
     echo "FAIL: $prof: render contains a SecretStore/Secret/auth/serviceAccountRef/ARN/credential-shaped string" >&2; hs_fail=1
   fi
@@ -196,7 +203,8 @@ check_hub_spoke() {
     echo "FAIL: $prof: AppProject has a server-based, wildcard or *-aws destination (the hub must be unreachable)" >&2; hs_fail=1
   fi
   printf '%s\n' "$project" | grep -qE '^\s*clusterResourceWhitelist: \[\]$' || { echo "FAIL: $prof: clusterResourceWhitelist must be empty" >&2; hs_fail=1; }
-  appset="$(awk '/^kind: ApplicationSet$/{f=1} f{print}' "$out")"
+  # smoke's ApplicationSet only (the first one; others follow after ---)
+  appset="$(awk '/^kind: ApplicationSet$/{f=1} f && /^---/{exit} f{print}' "$out")"
   printf '%s\n' "$appset" | grep -qE '^\s*- CreateNamespace=false$' || { echo "FAIL: $prof: CreateNamespace=false missing" >&2; hs_fail=1; }
   printf '%s\n' "$appset" | grep -qF 'replicas-owner"] == "hpa") | .spec.replicas' && printf '%s\n' "$appset" | grep -qE '^\s+- RespectIgnoreDifferences=true$' || { echo "FAIL: $prof: HPA hand-over settings (ignoreDifferences on replicas-owner=hpa Deployments + RespectIgnoreDifferences) missing" >&2; hs_fail=1; }
   if printf '%s\n' "$appset" | grep -qE 'CreateNamespace=true|managedNamespaceMetadata:|server: https://kubernetes\.default\.svc'; then
@@ -228,6 +236,59 @@ check_hub_spoke() {
 
 check_hub_spoke local-multicluster multicluster-registration eks-spoke-registration ""
 check_hub_spoke aws-eks eks-spoke-registration multicluster-registration "-aws"
+
+# =============================================================================
+# Phase 6.3c (ADR-0023): one ApplicationSet per component. Proven with an
+# injected component list (notes in dev, postgres in dev+uat), then the
+# real values: every environment a component lists has its overlay.
+# =============================================================================
+comp_fail=0
+comp_values="$(mktemp)"; comp_out="$(mktemp)"
+cat > "$comp_values" <<'EOF'
+profile: local-multicluster
+components:
+  - name: smoke
+    chartPath: charts/standard-workload
+    overlayPrefix: ""
+  - name: notes
+    chartPath: charts/standard-workload
+    overlayPrefix: "notes-"
+    profiles: [local-multicluster]
+    environments: [dev]
+  - name: postgres
+    chartPath: charts/postgres-lab
+    overlayPrefix: ""
+    profiles: [local-multicluster]
+    environments: [dev, uat]
+EOF
+if "$HELM_BIN" template gitops/bootstrap -f "$comp_values" > "$comp_out" 2>&1; then
+  got="$("$YQ_BIN" -r 'select(.kind == "ApplicationSet") | [.metadata.name, .spec.template.metadata.name, .spec.template.spec.source.path, .spec.template.spec.source.helm.valueFiles[0], (.spec.generators[0].clusters.selector.matchExpressions[0].values | join(","))] | join(" ")' "$comp_out" | grep -v -e '^$' -e '^---$')"
+  want="platform-environments platform-smoke-{{.values.env}} charts/standard-workload values-{{.values.env}}.yaml dev,uat,prod
+platform-notes platform-notes-{{.values.env}} charts/standard-workload values-notes-{{.values.env}}.yaml dev
+platform-postgres platform-postgres-{{.values.env}} charts/postgres-lab values-{{.values.env}}.yaml dev,uat"
+  [ "$got" = "$want" ] || { echo "FAIL: per-component ApplicationSets differ from the expected names/paths/overlays/environments:" >&2; printf '%s\n' "$got" >&2; comp_fail=1; }
+else
+  echo "FAIL: render with notes/postgres enabled failed" >&2; cat "$comp_out" >&2; comp_fail=1
+fi
+[ "$("$HELM_BIN" template gitops/bootstrap -f "$comp_values" --set profile=aws-eks | grep -c '^kind: ApplicationSet$')" = "1" ] \
+  || { echo "FAIL: aws-eks renders a lab-only component (notes/postgres)" >&2; comp_fail=1; }
+sed 's/environments: \[dev\]$/environments: [qa]/' "$comp_values" > "$comp_out"
+"$HELM_BIN" template gitops/bootstrap -f "$comp_out" 2>&1 | grep -q 'lists environment "qa", which profile' \
+  || { echo "FAIL: a component environment outside the profile was not refused" >&2; comp_fail=1; }
+grep -v '^    environments: \[dev\]$' "$comp_values" > "$comp_out"
+"$HELM_BIN" template gitops/bootstrap -f "$comp_out" 2>&1 | grep -q 'component "notes" must list its environments' \
+  || { echo "FAIL: a non-smoke component without an environments list was not refused" >&2; comp_fail=1; }
+rm -f "$comp_values" "$comp_out"
+# the real values: each listed environment has the overlay its Application reads
+for row in $("$YQ_BIN" -r '.components[] | .chartPath as $c | .overlayPrefix as $p | (.environments // [])[] | $c + "|" + $p + "|" + .' gitops/bootstrap/values.yaml); do
+  f="$(echo "$row" | cut -d'|' -f1)/values-$(echo "$row" | cut -d'|' -f2)$(echo "$row" | cut -d'|' -f3).yaml"
+  [ -f "$f" ] || { echo "FAIL: gitops/bootstrap/values.yaml enables an environment whose overlay $f is missing" >&2; comp_fail=1; }
+done
+if [ "$comp_fail" -eq 0 ]; then
+  echo "OK: one ApplicationSet per component (smoke keeps platform-environments/platform-smoke-<env>; notes/postgres by listed environment only, lab profile only); out-of-profile environment and missing list refused; every enabled environment has its overlay"
+else
+  fail=1
+fi
 
 if [ "$fail" -ne 0 ]; then
   echo "gitops-render: FAILED"
