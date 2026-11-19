@@ -84,10 +84,10 @@ configs:
         kinds: ["*"]
         clusters: ["https://kubernetes.default.svc"]
       - apiGroups: [""]
-        kinds: ["ConfigMap", "Service", "ServiceAccount"]
+        kinds: ["ConfigMap", "Service", "ServiceAccount", "PersistentVolumeClaim"]
         clusters: ["https://eks-gitops-*-control-plane:6443"]
       - apiGroups: ["apps"]
-        kinds: ["Deployment"]
+        kinds: ["Deployment", "StatefulSet"]
         clusters: ["https://eks-gitops-*-control-plane:6443"]
       - apiGroups: ["external-secrets.io"]
         kinds: ["SecretStore", "ExternalSecret"]
@@ -102,6 +102,10 @@ configs:
       # Phase 2.8.2: the workload chart's optional HPA.
       - apiGroups: ["autoscaling"]
         kinds: ["HorizontalPodAutoscaler"]
+        clusters: ["https://eks-gitops-*-control-plane:6443"]
+      # Phase 6.3a: stateful components and their dump Jobs (ADR-0023).
+      - apiGroups: ["batch"]
+        kinds: ["Job", "CronJob"]
         clusters: ["https://eks-gitops-*-control-plane:6443"]
   params:
     server.insecure: "false"            # same: quoted string, per argocd-cmd-params-cm.yaml

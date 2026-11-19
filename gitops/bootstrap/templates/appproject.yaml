@@ -86,3 +86,14 @@ spec:
     # Phase 2.8.2: the workload chart's optional HPA (prod only today).
     - group: "autoscaling"
       kind: HorizontalPodAutoscaler
+    # Phase 6.3a (ADR-0023): stateful components - a data store's
+    # StatefulSet and its PersistentVolumeClaim, and the Job/CronJob of
+    # its logical dumps. Still namespaced only, still never Secret.
+    - group: "apps"
+      kind: StatefulSet
+    - group: ""
+      kind: PersistentVolumeClaim
+    - group: "batch"
+      kind: Job
+    - group: "batch"
+      kind: CronJob

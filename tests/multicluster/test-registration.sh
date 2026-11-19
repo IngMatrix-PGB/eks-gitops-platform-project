@@ -138,6 +138,13 @@ for s in $spokes; do
   can_i "$s" no create poddisruptionbudgets.policy -n kube-system
   can_i "$s" yes patch horizontalpodautoscalers.autoscaling -n "$s"
   can_i "$s" no create horizontalpodautoscalers.autoscaling -n default
+  # Phase 6.3a: stateful components and their dump Jobs; still namespaced.
+  can_i "$s" yes create statefulsets.apps -n "$s"
+  can_i "$s" yes create persistentvolumeclaims -n "$s"
+  can_i "$s" yes create jobs.batch -n "$s"
+  can_i "$s" yes create cronjobs.batch -n "$s"
+  can_i "$s" no create statefulsets.apps -n default
+  can_i "$s" no create daemonsets.apps -n "$s"
   for res in externalsecrets secretstores; do
     if [ "$(sar_allowed "$s" external-secrets.io "$res" create "$s")" = "true" ]; then
       echo "OK: '$s' SubjectAccessReview create $res.external-secrets.io -n $s -> allowed (CRD not installed yet; RBAC evaluated directly)"

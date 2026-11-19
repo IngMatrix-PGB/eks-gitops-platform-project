@@ -126,6 +126,7 @@ verify_executable() {
     syft) "$dest" version >/dev/null 2>&1 ;;
     cosign) "$dest" version >/dev/null 2>&1 ;;
     promtool) "$dest" --version >/dev/null 2>&1 ;;
+    yq) "$dest" --version >/dev/null 2>&1 ;;
     *) return 1 ;;
   esac
 }

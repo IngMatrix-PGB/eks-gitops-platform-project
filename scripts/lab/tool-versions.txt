@@ -34,6 +34,9 @@
 # Phase 6.1b adds promtool from the Prometheus v3.15.1 release archive
 # (sha256sums.txt of that release; published 2026-10-21): it checks the
 # observability configs and dashboard queries offline in make validate.
+# Phase 6.3a adds yq v4.54.1 (released 2026-09-29; SHA-256 from the
+# release's checksums file): render checks parse YAML with it instead of
+# depending on whichever Python and PyYAML the PATH happens to hold.
 kind|v0.33.0|darwin-arm64|kind|raw||0c8c7dbe5e23594a198b786c4bc13dacc101fa6196b0cb0b23a1ca44e61f4b4f|0c8c7dbe5e23594a198b786c4bc13dacc101fa6196b0cb0b23a1ca44e61f4b4f|https://kind.sigs.k8s.io/dl/v0.33.0/kind-darwin-arm64
 kubectl|v1.36.4|darwin-arm64|kubectl|raw||c9e4f713d6fee0043a3d835cca13077cda2bc0973840eb9779360df0b5bdfc69|c9e4f713d6fee0043a3d835cca13077cda2bc0973840eb9779360df0b5bdfc69|https://dl.k8s.io/release/v1.36.4/bin/darwin/arm64/kubectl
 helm|v4.2.4|darwin-arm64|helm|tar.gz|darwin-arm64/helm|d747eb4e28bd2727173d15b759fa0a17822291ec09db7ced3d55af290a3661a2|66f6b8881392bfa15c6c1dceef980426a28709c8122d5dc8a7a29697cad7334c|https://get.helm.sh/helm-v4.2.4-darwin-arm64.tar.gz
@@ -42,6 +45,7 @@ trivy|v0.76.1|darwin-arm64|trivy|tar.gz|trivy|11a9b6cd2752011b54f01ea4bd0dbfa9f0
 syft|v1.55.0|darwin-arm64|syft|tar.gz|syft|1217c258bd5eb91ef3189cf22a82e02f9cac07e4ce934350f428e93aff674625|55a63db797b2a060aa56c7a03991bb11084e01ed4e3863df12370d74e84b4821|https://github.com/anchore/syft/releases/download/v1.55.0/syft_1.55.0_darwin_arm64.tar.gz
 cosign|v3.1.4|darwin-arm64|cosign|raw||9f9b8cd557cf2e5b3df3373a00baa005a86b02391e3e06dd0ce37b3a1533d3a4|9f9b8cd557cf2e5b3df3373a00baa005a86b02391e3e06dd0ce37b3a1533d3a4|https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-darwin-arm64
 promtool|v3.15.1|darwin-arm64|promtool|tar.gz|prometheus-3.15.1.darwin-arm64/promtool|0d4d3d9837d27e4fcd0bd16d115b1b8d6732a4bf3e69107f1190d9ef653ae471|56669304a38daa39b1393833fa98ea5a78556a52e527d9647d8b75b57d3f62e1|https://github.com/prometheus/prometheus/releases/download/v3.15.1/prometheus-3.15.1.darwin-arm64.tar.gz
+yq|v4.54.1|darwin-arm64|yq|raw||fee511a181bd8b3e6b7da98842b41973bfac8cd3bcd341ed29a584620b5b2844|fee511a181bd8b3e6b7da98842b41973bfac8cd3bcd341ed29a584620b5b2844|https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_darwin_arm64
 kind|v0.33.0|linux-amd64|kind|raw||aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d|aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d|https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-amd64
 kubectl|v1.36.4|linux-amd64|kubectl|raw||8b8f088da2dab964f853b38464033b1be15ede2839eca751482357c45abdd05a|8b8f088da2dab964f853b38464033b1be15ede2839eca751482357c45abdd05a|https://dl.k8s.io/release/v1.36.4/bin/linux/amd64/kubectl
 helm|v4.2.4|linux-amd64|helm|tar.gz|linux-amd64/helm|c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3|92e191314f44aac173711bb0247c38c727f3ddf65ad16a01c0861d509a63a9e1|https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz
@@ -50,3 +54,4 @@ trivy|v0.76.1|linux-amd64|trivy|tar.gz|trivy|c7cbe3137fb8a48a17574bede3dd6beb167
 syft|v1.55.0|linux-amd64|syft|tar.gz|syft|bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d|64c9631c3560336c55c549df0de08cd577d02399c9de807ac390960a4ed5c351|https://github.com/anchore/syft/releases/download/v1.55.0/syft_1.55.0_linux_amd64.tar.gz
 cosign|v3.1.4|linux-amd64|cosign|raw||424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa|424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa|https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64
 promtool|v3.15.1|linux-amd64|promtool|tar.gz|prometheus-3.15.1.linux-amd64/promtool|6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84|d0d2e0b6de44079416d2e5ea3c3fa8c9eed83bed1ad2cdd549a1bb644d8b4456|https://github.com/prometheus/prometheus/releases/download/v3.15.1/prometheus-3.15.1.linux-amd64.tar.gz
+yq|v4.54.1|linux-amd64|yq|raw||8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f|8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f|https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64

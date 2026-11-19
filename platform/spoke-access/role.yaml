@@ -22,10 +22,10 @@ metadata:
     eks-gitops-lab-lite.local/owner: multicluster-registration
 rules:
   - apiGroups: [""]
-    resources: ["configmaps", "services", "serviceaccounts"]
+    resources: ["configmaps", "services", "serviceaccounts", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["apps"]
-    resources: ["deployments"]
+    resources: ["deployments", "statefulsets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["external-secrets.io"]
     resources: ["secretstores", "externalsecrets"]
@@ -38,4 +38,8 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["autoscaling"]
     resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Phase 6.3a: a data store's logical dumps.
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
