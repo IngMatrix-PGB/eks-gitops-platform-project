@@ -285,6 +285,25 @@ languages. Measured on 2026-11-18:
   - dev and uat app passwords differ (compared by SHA-256 prefix only);
   - memory: smoke 1 Mi, notes 27 Mi, postgres 53 Mi;
   - hub back to `main`: uat's notes/postgres removed, PVC retained.
+- **6.3d+e, live before the pull request (2026-11-19):**
+  - `make db-dump-key ENV=dev|uat` created users and buckets `dumps-dev`
+    and `dumps-uat` and their Secrets; the store's address was inside
+    `dump.storeCIDR`;
+  - the upload commands, run from a throwaway rclone container (the same
+    digest) on the kind network: copy, list and delete worked with
+    `dumps-dev`; `velero-dev` on `dumps-dev` and `dumps-dev` on
+    `velero-dev` both got 403 AccessDenied, and no object was left;
+  - `make obs-install` on dev, uat and hub: `up{job="workload"}` now
+    carries `release` (smoke and notes apart in both clusters);
+    kube-state-metrics reports the postgres StatefulSets; the five new
+    rules are loaded;
+  - alert test on dev: auto-sync of `platform-postgres-dev` paused and
+    postgres scaled to 0. smoke answered 502 on `/api/notes` (5 of 5).
+    `PostgresDown` fired after 7 min and `NotesNotReady` after 11 min.
+    Scaled back and auto-sync restored: both Applications
+    Synced/Healthy, notes Ready, earlier rows intact;
+  - the CronJob through Argo CD, the dumps and the restore check:
+    recorded with the pull request.
 - **6.3c prod promotion, offline (2026-11-19):** the prod spoke is
   opt-in and was not running, so prod is proven offline only: both
   images verified by `make promote` (from uat); the prod overlays render
