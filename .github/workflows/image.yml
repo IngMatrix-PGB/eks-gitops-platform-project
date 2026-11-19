@@ -85,27 +85,31 @@ jobs:
 
       - name: make image-build
         # docker build (unit tests run in the build stage), non-root check.
-        run: make image-build
+        # Phase 6.3b: every first-party app, in this one job (a matrix
+        # would rename the required check "build, scan, SBOM").
+        run: for app in smoke notes; do IMAGE_APP=$app make image-build; done
 
       - name: make image-scan
         # Fails on any HIGH/CRITICAL vulnerability with a fix available,
         # or any HIGH/CRITICAL Dockerfile misconfiguration.
-        run: make image-scan
+        run: for app in smoke notes; do IMAGE_APP=$app make image-scan; done
 
       - name: make image-sbom
-        run: make image-sbom
+        run: for app in smoke notes; do IMAGE_APP=$app make image-sbom; done
 
       - name: make image-build-multi
         # Cross-compiled linux/amd64 + linux/arm64 index; proves the
         # arm64 variant (the kind lab on Apple silicon) builds on every PR.
-        run: make image-build-multi
+        run: for app in smoke notes; do IMAGE_APP=$app make image-build-multi; done
 
       - name: Upload SBOM
         # actions/upload-artifact v7.0.2.
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: smoke-sbom-cyclonedx
-          path: .tools/out/image/smoke.cdx.json
+          name: sbom-cyclonedx
+          path: |
+            .tools/out/image/smoke.cdx.json
+            .tools/out/image/notes.cdx.json
           if-no-files-found: error
           retention-days: 30
 
@@ -137,38 +141,47 @@ jobs:
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
 
       - name: make image-publish
-        run: make image-publish
+        run: for app in smoke notes; do IMAGE_APP=$app make image-publish; done
 
       - name: make image-scan-remote
-        run: make image-scan-remote
+        run: for app in smoke notes; do IMAGE_APP=$app make image-scan-remote; done
 
       - name: make image-sign
-        run: make image-sign
+        run: for app in smoke notes; do IMAGE_APP=$app make image-sign; done
 
-      - name: Read the published digest
+      - name: Read the published digests
         id: ref
         run: |
-          ref="$(cat .tools/out/image/published.ref)"
-          echo "name=${ref%@*}" >> "$GITHUB_OUTPUT"
-          echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
-
-      - name: SLSA build provenance
-        # actions/attest-build-provenance v4.2.2.
+          smoke="$(cat .tools/out/image/published.ref)"
+          notes="$(cat .tools/out/image/published-notes.ref)"
+          echo "smoke_name=${smoke%@*}" >> "$GITHUB_OUTPUT"
+          echo "smoke_digest=${smoke#*@}" >> "$GITHUB_OUTPUT"
+          echo "notes_name=${notes%@*}" >> "$GITHUB_OUTPUT"
+          echo "notes_digest=${notes#*@}" >> "$GITHUB_OUTPUT"
+      - name: SLSA build provenance (smoke)
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
-          subject-name: ${{ steps.ref.outputs.name }}
-          subject-digest: ${{ steps.ref.outputs.digest }}
+          subject-name: ${{ steps.ref.outputs.smoke_name }}
+          subject-digest: ${{ steps.ref.outputs.smoke_digest }}
           push-to-registry: true
-
+      - name: SLSA build provenance (notes)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ steps.ref.outputs.notes_name }}
+          subject-digest: ${{ steps.ref.outputs.notes_digest }}
+          push-to-registry: true
       - name: make image-verify
-        run: make image-verify
+        run: |
+          IMAGE_APP=smoke make image-verify
+          IMAGE_APP=notes IMAGE="$(cat .tools/out/image/published-notes.ref)" make image-verify
 
       - name: Summary
         run: |
           {
-            echo "### Published image"
+            echo "### Published images"
             echo
-            echo "\`$(cat .tools/out/image/published.ref)\`"
+            echo "- smoke: \`$(cat .tools/out/image/published.ref)\`"
+            echo "- notes: \`$(cat .tools/out/image/published-notes.ref)\`"
             echo
             echo "Signed by this workflow on main, CycloneDX SBOM attested per platform, SLSA provenance attached. Promote this digest (Phase 5.1c)."
           } >> "$GITHUB_STEP_SUMMARY"

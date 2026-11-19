@@ -33,3 +33,17 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+
+  # Phase 6.3b: apps/notes - its digest-pinned bases and its hash-pinned
+  # requirements.txt (pg8000 and its closure).
+  - package-ecosystem: "docker"
+    directory: "/apps/notes"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: "pip"
+    directory: "/apps/notes"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3

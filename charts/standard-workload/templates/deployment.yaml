@@ -107,6 +107,17 @@ spec:
             - name: METRICS_PORT
               value: "{{ .Values.metrics.port }}"
             {{- end }}
+            {{- /* Phase 6.3b (ADR-0023): plain, non-secret settings (a
+            peer service's URL, a database host). Secrets never travel
+            here - the schema rejects secret-like names, and they reach a
+            workload only as ESO-built files. */}}
+            {{- range $name, $value := .Values.extraEnv }}
+            {{- if has $name (list "UI_MESSAGE" "SHUTDOWN_TIMEOUT" "METRICS_PORT") }}
+            {{- fail (printf "extraEnv: %s is set by the chart itself" $name) }}
+            {{- end }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
           lifecycle:
             preStop:
               sleep:

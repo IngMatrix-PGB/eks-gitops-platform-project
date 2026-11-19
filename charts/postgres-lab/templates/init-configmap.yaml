@@ -1,0 +1,25 @@
+{{- /*
+First-start initialisation (the image runs /docker-entrypoint-initdb.d
+only on an empty data directory): the application's login role, not a
+superuser, owning nothing beyond what it needs - CONNECT on its database
+and USAGE/CREATE on schema public (PostgreSQL 15+ no longer grants CREATE
+there by default). The password is read inside psql from the mounted file
+(\set with backticks), never put on a command line.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-init
+  labels:
+    {{- include "postgres-lab.labels" . | nindent 4 }}
+data:
+  10-app-role.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'SQL'
+    \set app_password `cat /run/secrets/postgres/app-password`
+    CREATE ROLE {{ .Values.appUser }} LOGIN PASSWORD :'app_password' NOSUPERUSER NOCREATEDB NOCREATEROLE;
+    REVOKE ALL ON DATABASE {{ .Values.database }} FROM PUBLIC;
+    GRANT CONNECT, TEMPORARY ON DATABASE {{ .Values.database }} TO {{ .Values.appUser }};
+    GRANT USAGE, CREATE ON SCHEMA public TO {{ .Values.appUser }};
+    SQL

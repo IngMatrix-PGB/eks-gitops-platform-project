@@ -71,6 +71,45 @@ languages. Measured on 2026-11-18:
   generate the right Applications. Today it would be a refactor with
   nothing to prove.
 
+- **6.3b — the second and third components, tested in the lab.**
+  - **`notes` (Python 3.13, `apps/notes`).** Standard library HTTP
+    server plus one hash-pinned driver (`pg8000` and its closure),
+    on distroless `python3-debian13`, non-root. `GET`/`POST /notes`,
+    `/healthz`, `/readyz` (503 until its table exists, while the
+    database is down, or while draining), metrics on their own port
+    with the same histogram buckets as smoke. It reads its password
+    from a file on every connection, so a rotation needs no restart.
+  - **`smoke` gains `GET`/`POST /api/notes`**, forwarded to
+    `NOTES_URL` only when that is set (absent: 404 as before).
+    Requests are capped at 4 KiB, answers at 1 MiB; a notes 5xx or
+    timeout becomes smoke's own 502, so smoke's SLI covers the chain.
+  - **`postgres` from its own chart (`charts/postgres-lab`).**
+    PostgreSQL 18.6 by digest, one replica, restricted pod (UID 999,
+    read-only root filesystem), PVC retained on delete and scale-down.
+    Both passwords arrive as files from one ESO `ExternalSecret`; the
+    application role is created on first start without superuser,
+    database-creation or role-creation rights. NetworkPolicy: 5432
+    only from the client pods' labels, no egress.
+  - **Credentials stay outside Git.** `make eso-provision-db-secret
+    ENV=` creates `eso-source-<env>/db-<env>` with two random
+    passwords if absent (never printed, never rotated) and always
+    re-applies its reader Role for the two SecretStore identities.
+  - **`standard-workload` gains two optional values** (amendment in
+    ADR-0006): `extraEnv` (plain configuration only; the schema rejects
+    names that look like credentials) and `networkPolicy.egressToPods`
+    (egress to labelled pods of the same namespace, one port each).
+    Both are empty by default, so existing renders do not change.
+  - **One image job, two images.** `image.yml` builds, scans, SBOMs,
+    signs and attests `smoke` and `notes` in the same job (a matrix
+    would rename the required check). Dependabot watches the notes
+    base images and `requirements.txt`; `check-supply-chain` requires a
+    hash on every requirement and `--require-hashes` in the build.
+- **Changed from the plan (6.3b).** The ApplicationSet per spoke and
+  component, the overlays and the promotions move to 6.3c. They need a
+  published, signed notes digest, which exists only after this change
+  reaches `main`. 6.3b is proven with locally built images on the dev
+  spoke instead.
+
 ## Alternatives Considered
 
 - **Uninstall and reinstall Argo CD to change its values.** Rejected: it
@@ -83,6 +122,16 @@ languages. Measured on 2026-11-18:
 - **Stateful kinds inside `standard-workload`.** Rejected: that chart is
   the stateless contract (ADR-0006). The data store gets its own chart in
   6.3b.
+- **A third-party PostgreSQL chart or operator.** Rejected for the lab:
+  it brings far more objects and permissions than one StatefulSet needs,
+  and the AppProject would have to allow them. A small chart with a
+  strict schema is checked offline object by object.
+- **Credentials as environment variables.** Rejected: the passwords
+  stay files (ADR-0010), read by `POSTGRES_PASSWORD_FILE` and by notes
+  on every connection.
+- **Distroless `python3-debian12`.** Rejected after scanning: about 30
+  fixable HIGH findings in its Python and libraries; `python3-debian13`
+  had none.
 
 ## Consequences
 
@@ -126,4 +175,25 @@ languages. Measured on 2026-11-18:
     - may not read Secrets or create DaemonSets.
   - The AppProject change reaches the hub from Git. It is synced and
     checked on the pushed branch before the pull request.
-- **6.3b–6.3e:** recorded here as each lands.
+- **6.3b, offline:** notes unit tests (11) run in the image build;
+  smoke `go test -race` including the proxy tests (7);
+  `check-postgres-lab-chart`; `check-standard-workload-chart` with the
+  `extraEnv` and `egressToPods` cases; `check-supply-chain`; image scan
+  with zero fixable HIGH/CRITICAL for both images; `make validate`.
+- **6.3b, live on the dev spoke (2026-11-18),** with locally built
+  images in namespace `dev`, every object named `notescheck-*` and
+  deleted afterwards:
+  - both ExternalSecrets `SecretSynced`, three pods Ready, 0 restarts;
+  - `POST /api/notes` through smoke returned 201, `GET` read it back;
+    an empty body returned notes' 400 unchanged;
+  - role `notes` without superuser, createdb or createrole; it owns the
+    table;
+  - after deleting the postgres pod the rows were still there and notes
+    reconnected without restarting;
+  - a pod without notes' labels got no answer from postgres:5432 or
+    notes:8080; a pod with notes' instance label reached postgres;
+  - memory: smoke 4 Mi, notes 29 Mi, postgres 35 Mi.
+  - The lab test found one defect, fixed before commit: smoke forwarded
+    the body chunked, and notes reads only `Content-Length`. Smoke now
+    reads the capped body first; a test asserts the length.
+- **6.3c–6.3e:** recorded here as each lands.

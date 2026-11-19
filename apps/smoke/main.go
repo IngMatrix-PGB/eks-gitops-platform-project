@@ -14,6 +14,8 @@
 //     podinfo, so they work unchanged across the switch, Phase 5.1c-1);
 //   - on SIGTERM: stop accepting new connections and drain in-flight
 //     requests for at most SHUTDOWN_TIMEOUT (default 5s);
+//   - Phase 6.3b: GET and POST /api/notes forward to the notes service
+//     when NOTES_URL is set (notes.go);
 //   - Phase 6.1a: GET /metrics on METRICS_PORT (default 9090, the chart's
 //     metrics.port), never on PORT, with request counts and durations
 //     (metrics.go); it stops after the application server has drained.
@@ -32,6 +34,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -48,6 +51,7 @@ type config struct {
 	metricsPort     int
 	uiMessage       string
 	shutdownTimeout time.Duration
+	notesURL        *url.URL // Phase 6.3b: nil when NOTES_URL is unset
 }
 
 // lookup returns the first non-empty value among the given variables.
@@ -89,6 +93,13 @@ func loadConfig(getenv func(string) string) (config, error) {
 		}
 		c.shutdownTimeout = d
 	}
+	if v := lookup(getenv, "NOTES_URL"); v != "" {
+		u, err := parseNotesURL(v)
+		if err != nil {
+			return c, err
+		}
+		c.notesURL = u
+	}
 	return c, nil
 }
 
@@ -115,6 +126,11 @@ func newHandler(c config, ready *atomic.Bool) http.Handler {
 	}
 	mux.HandleFunc("GET /{$}", info)
 	mux.HandleFunc("GET /api/info", info)
+	if c.notesURL != nil {
+		proxy := notesProxy(c.notesURL, newNotesClient())
+		mux.HandleFunc("GET /api/notes", proxy)
+		mux.HandleFunc("POST /api/notes", proxy)
+	}
 	return mux
 }
 

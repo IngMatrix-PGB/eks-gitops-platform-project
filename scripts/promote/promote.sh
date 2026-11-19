@@ -17,7 +17,9 @@ set -eu
 
 [ -f scripts/promote/_lib.sh ] || { echo "FAIL: run from the repository root" >&2; exit 1; }
 . scripts/promote/_lib.sh
-IMAGE_REPO="$(sed -n 's/^IMAGE_REPO="\(.*\)"$/\1/p' scripts/image/image.sh)"
+# Phase 6.3b: image.sh derives the repository from IMAGE_APP; promotion
+# covers smoke only until 6.3c gives each app its own ledger.
+IMAGE_REPO="$(sed -n 's/^IMAGE_REPO="\(.*\)"$/\1/p' scripts/image/image.sh | sed 's/\$IMAGE_APP$/smoke/')"
 [ -n "$IMAGE_REPO" ] || { echo "FAIL: cannot read IMAGE_REPO from scripts/image/image.sh" >&2; exit 1; }
 
 env="${ENV:-}"

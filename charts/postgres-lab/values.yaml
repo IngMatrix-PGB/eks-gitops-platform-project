@@ -1,0 +1,39 @@
+# Phase 6.3b (ADR-0023): every key is required by values.schema.json and
+# set here or by the environment overlay. No password is ever a value:
+# both passwords come from the ESO-built Secret (credentials.*).
+
+image:
+  repository: docker.io/library/postgres
+  # postgres:18.6-bookworm, multi-arch index digest.
+  digest: "sha256:f1ea2a1a4fb7b68d4836be1fdcb8a6466a89b072158bf9d97663600538c294c5"
+
+# The database the application owns, and its login role (not a
+# superuser). Created on first start only (empty data directory).
+database: notes
+appUser: notes
+
+storage:
+  size: 1Gi
+  # Empty: the cluster's default StorageClass (local-path in kind).
+  storageClassName: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+# The source Secret (imperative, outside Git - lab/eso/provision-db-
+# secret.sh) holds two keys, superuser-password and app-password. This
+# chart's SecretStore reads it through its own ServiceAccount.
+credentials:
+  secretStoreName: ""
+  authServiceAccountName: ""
+  sourceNamespace: ""
+  sourceSecretName: ""
+  refreshInterval: "1m"
+
+# Pods allowed to connect on 5432 (same namespace), by label.
+networkPolicy:
+  clientPodLabels: {}

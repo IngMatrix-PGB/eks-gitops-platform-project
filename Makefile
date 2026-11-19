@@ -24,13 +24,14 @@
 	workload-hpa-handover \
 	check-observability check-observability-regression obs-chart-fetch obs-render obs-install obs-status obs-uninstall \
 	backup-chart-fetch backup-render backup-store-up backup-store-down backup-store-status backup-install backup-status \
-	backup-uninstall backup-now backup-restore-check backup-drill-spoke backup-drill-hub
+	backup-uninstall backup-now backup-restore-check backup-drill-spoke backup-drill-hub \
+	check-postgres-lab-chart eso-provision-db-secret
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -61,6 +62,12 @@ check-standard-workload-chart: ## Offline lint/render/schema/PSS/dry-run validat
 
 check-spoke-access: ## Phase 3.4.4a/6.3a: the spoke Role, the AppProject and Argo CD's spoke resource.inclusions name exactly the same kinds - no ClusterRole, no secrets, no wildcard
 	@bash scripts/validate/check-spoke-access.sh
+
+check-postgres-lab-chart: ## Phase 6.3b: offline contract of charts/postgres-lab - object set, digest, restricted pod, passwords only as ESO files, PVC retained, NetworkPolicy, schema negatives
+	@bash scripts/validate/check-postgres-lab-chart.sh
+
+eso-provision-db-secret: ## Phase 6.3b: eso-source-<ENV>/db-<ENV> with two random passwords (kept if present) and its reader RBAC (always ensured); LAB_CLUSTER defaults to ENV
+	@sh lab/eso/provision-db-secret.sh "$(ENV)"
 
 check-spoke-access-regression: ## Phase 6.3a: check-spoke-access against mutated copies of the three places
 	@sh tests/validate/test-spoke-access.sh

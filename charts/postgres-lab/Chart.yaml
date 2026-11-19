@@ -1,0 +1,11 @@
+apiVersion: v2
+name: postgres-lab
+description: >-
+  Phase 6.3b (ADR-0023): one PostgreSQL instance for the reference
+  application - a StatefulSet with one PersistentVolumeClaim, credentials
+  only through ESO (never in values), restricted pod, reachable only from
+  the notes service. Lab data store; on AWS the choice (RDS or in-cluster)
+  is made at 6.4.
+type: application
+version: 0.1.0
+appVersion: "18.6"
