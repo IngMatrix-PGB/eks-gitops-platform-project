@@ -275,5 +275,12 @@ languages. Measured on 2026-11-18:
   - dev and uat app passwords differ (compared by SHA-256 prefix only);
   - memory: smoke 1 Mi, notes 27 Mi, postgres 53 Mi;
   - hub back to `main`: uat's notes/postgres removed, PVC retained.
-- **6.3c prod:** recorded with its promotion.
+- **6.3c prod promotion, offline (2026-11-19):** the prod spoke is
+  opt-in and was not running, so prod is proven offline only: both
+  images verified by `make promote` (from uat); the prod overlays render
+  (postgres 8 objects, notes with `DB_HOST`, smoke with `NOTES_URL`);
+  the three ApplicationSets select dev, uat and prod; `make validate`.
+  Until a prod spoke is registered no prod Application exists. Before
+  registering one, `make eso-provision-db-secret ENV=prod` must run;
+  without it notes and postgres stay not ready (no data at risk).
 - **6.3d–6.3e:** recorded here as each lands.

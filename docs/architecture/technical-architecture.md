@@ -764,7 +764,7 @@ a fresh, explicit authorization.**
 | [ADR-0020](../adr/0020-main-branch-ruleset.md) | Ruleset for the main branch (supersedes ADR-0009's branch protection gap) | Accepted |
 | [ADR-0021](../adr/0021-observability.md) | Observability for the hub and the spokes | Accepted (6.1a–6.1d implemented) |
 | [ADR-0022](../adr/0022-backup-and-restore.md) | Backup and restore of the state outside Git | Accepted (6.2a–6.2b implemented) |
-| [ADR-0023](../adr/0023-reference-application.md) | Reference application with a data store | Accepted (6.3a–6.3b implemented, 6.3c in progress) |
+| [ADR-0023](../adr/0023-reference-application.md) | Reference application with a data store | Accepted (6.3a–6.3c implemented) |
 
 Each ADR above records an **approved decision**, not an implemented one
 — every capability it describes is tracked honestly in "Evidence and
@@ -932,7 +932,7 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
   - **6.3 — Reference application (ADR-0023):** in progress. Grow `apps/smoke` into a small multi-language application (two or three services) and one data store whose credentials arrive through ESO, proving the standard chart across languages.
     - **6.3a — Contract for stateful components:** implemented. StatefulSet, PersistentVolumeClaim, Job and CronJob added in lockstep to the AppProject, the spoke Role and Argo CD's spoke inclusions, the three compared by `check-spoke-access`; `make argocd-upgrade CONFIRM=yes` applies a reviewed Argo CD values change with a diff, confirmation and rollback; `yq` pinned for YAML parsing in render checks.
     - **6.3b — notes and postgres:** implemented and tested on the dev spoke with local images. `apps/notes` (Python, distroless, hash-pinned driver), smoke's `/api/notes` proxy, `charts/postgres-lab` (PostgreSQL 18.6, ESO-file credentials, retained PVC, NetworkPolicy), `make eso-provision-db-secret`, `standard-workload` `extraEnv`/`egressToPods`, both images through the same signed pipeline. Argo CD delivery and promotions move to 6.3c.
-    - **6.3c — Delivery per component:** code implemented (one ApplicationSet per component with smoke's render unchanged; promotion per app with its own ledger; spoke deregistration waits for every Application of the spoke); dev and uat promoted (smoke with `/api/notes`, notes and postgres Synced/Healthy on each spoke, a note written and read back through smoke, separate credentials per environment); prod follows as its own pull request.
+    - **6.3c — Delivery per component:** implemented (one ApplicationSet per component with smoke's render unchanged; promotion per app with its own ledger; spoke deregistration waits for every Application of the spoke); dev and uat promoted and verified live (smoke with `/api/notes`, notes and postgres Synced/Healthy on each spoke, a note written and read back through smoke, separate credentials per environment); prod promoted in Git and verified offline (the prod spoke is opt-in and was not running).
   - **6.4 — First real AWS deployment:** not started. Hub plus one spoke in a single sandbox account, created and destroyed in one authorized session with a budget alert in place; measured cost and evidence recorded here.
 - **Phase 7 — Final evidence, draw.io, and DOCX:** not started.
 

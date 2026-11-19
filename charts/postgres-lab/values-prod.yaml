@@ -1,0 +1,15 @@
+# Phase 6.3c (ADR-0023): the reference application's PostgreSQL in prod.
+# Rendered by Application platform-postgres-prod (release name), so its
+# Service is platform-postgres-prod. The image is the chart's digest; the
+# passwords come from eso-source-prod/db-prod (make eso-provision-db-secret
+# ENV=prod), read by this chart's own SecretStore identity.
+credentials:
+  secretStoreName: prod-postgres-backend
+  authServiceAccountName: prod-postgres-reader
+  sourceNamespace: eso-source-prod
+  sourceSecretName: db-prod
+
+# Only notes connects (Application platform-notes-prod).
+networkPolicy:
+  clientPodLabels:
+    app.kubernetes.io/instance: platform-notes-prod

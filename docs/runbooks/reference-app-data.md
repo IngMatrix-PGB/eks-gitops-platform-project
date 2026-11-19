@@ -35,6 +35,10 @@ make eso-provision-db-secret ENV=dev
   `db-<env>-reader`, which let `<env>-postgres-reader` and
   `<env>-notes-reader` read that one Secret.
 - `make eso-install` must have created `eso-source-<env>` first.
+- prod (Phase 6.3c): notes and postgres are already listed for prod in
+  Git, so they sync as soon as a prod spoke is registered. Run
+  `make eso-provision-db-secret ENV=prod` right after
+  `make eso-install` on that spoke; until then both stay not ready.
 - Velero backs this Secret up with the rest of the source namespace
   (ADR-0022); a restore brings the same values back.
 
