@@ -224,8 +224,14 @@ languages. Measured on 2026-11-18:
     table;
   - after deleting the postgres pod the rows were still there and notes
     reconnected without restarting;
-  - a pod without notes' labels got no answer from postgres:5432 or
-    notes:8080; a pod with notes' instance label reached postgres;
+  - a pod without notes' labels got no answer from postgres:5432; a pod
+    with notes' instance label reached postgres;
+  - correction (found during 6.3c): the 6.3b record also said such a pod
+    got no answer from notes:8080. That probe was invalid: it used
+    `pg_isready` against an HTTP port, which reports "no response" for
+    any non-PostgreSQL server. By the chart contract (ADR-0006) notes
+    accepts its http port from every pod of its namespace, so that pod
+    would have been allowed;
   - memory: smoke 4 Mi, notes 29 Mi, postgres 35 Mi.
   - The lab test found one defect, fixed before commit: smoke forwarded
     the body chunked, and notes reads only `Content-Length`. Smoke now
