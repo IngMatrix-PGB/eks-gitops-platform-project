@@ -302,8 +302,21 @@ languages. Measured on 2026-11-18:
     `PostgresDown` fired after 7 min and `NotesNotReady` after 11 min.
     Scaled back and auto-sync restored: both Applications
     Synced/Healthy, notes Ready, earlier rows intact;
-  - the CronJob through Argo CD, the dumps and the restore check:
-    recorded with the pull request.
+- **6.3d+e, live from the pull request branch (2026-11-19):**
+  - Argo CD created the dump CronJob, ExternalSecret (`SecretSynced`)
+    and NetworkPolicy in dev and uat; both postgres Applications
+    Synced/Healthy;
+  - one Job from each CronJob: dev 3308 bytes, uat 3280 bytes, each
+    with its `.sha256`, in `dumps-dev` and `dumps-uat`;
+  - `make db-restore-check`: dev 3 rows and uat 1 row, matching the live
+    rows by SHA-256; throwaway databases dropped, `notes` untouched;
+  - `NotesDumpFailed` on dev, with auto-sync paused, the CronJob every
+    3 min and the upload pointed at `dumps-uat` (dev's key is denied):
+    two runs failed, the alert fired 21 min after the last success, and
+    resolved 2 min after the bucket was fixed and a scheduled run
+    succeeded. Auto-sync was restored, and Argo CD put the CronJob back as
+    in Git;
+  - hub back to `main`.
 - **6.3c prod promotion, offline (2026-11-19):** the prod spoke is
   opt-in and was not running, so prod is proven offline only: both
   images verified by `make promote` (from uat); the prod overlays render
