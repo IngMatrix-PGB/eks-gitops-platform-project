@@ -110,6 +110,35 @@ languages. Measured on 2026-11-18:
   reaches `main`. 6.3b is proven with locally built images on the dev
   spoke instead.
 
+- **6.3c — delivery through Argo CD, per component.** One code change,
+  then three promotion pull requests (dev, uat, prod), each moving smoke
+  and notes together.
+  - **One ApplicationSet per component** (`gitops/bootstrap/values.yaml`
+    `components`). smoke keeps exactly its previous render (ApplicationSet
+    `platform-environments`, Applications `platform-smoke-<env>`,
+    overlays `values-<env>.yaml`): renaming either would cascade-delete
+    the running workload. notes and postgres get `platform-notes` and
+    `platform-postgres`, Applications `platform-<component>-<env>`, only
+    for the environments they list, only in the `local-multicluster`
+    profile (`charts/postgres-lab` is a lab chart; the AWS data store is
+    decided at 6.4). An empty list renders nothing; an environment
+    outside the profile, or a component without a list, fails the
+    render.
+  - **Promotion per app.** `make promote APP=notes ENV=...` with its own
+    ledger (`gitops/promotions/notes.tsv`) and repository, read from
+    `image.sh`. notes has one overlay per environment
+    (`values-notes-<env>.yaml`), created with its configuration before
+    the first promotion, which adds its image block.
+    `check-promotion` runs per app and also requires that notes runs
+    exactly where the bootstrap values list it, with postgres listed
+    alongside.
+  - **Deregistering a spoke** waits for every Application aimed at it,
+    found by destination, not only smoke's. The postgres PVC stays
+    (retention policy) and is deleted by hand.
+- **Changed from the plan (6.3c).** notes has no `-aws` overlay: it is
+  not delivered to EKS until 6.4, so a copy kept only for agreement
+  would be dead configuration.
+
 ## Alternatives Considered
 
 - **Uninstall and reinstall Argo CD to change its values.** Rejected: it
@@ -129,6 +158,11 @@ languages. Measured on 2026-11-18:
 - **Credentials as environment variables.** Rejected: the passwords
   stay files (ADR-0010), read by `POSTGRES_PASSWORD_FILE` and by notes
   on every connection.
+- **A matrix generator (clusters × components) with a post-selector.**
+  Rejected: which Applications exist would depend on selector behaviour
+  over flattened parameters, which this project already saw silently do
+  nothing. One ApplicationSet per component is rendered and checked
+  offline name by name.
 - **Distroless `python3-debian12`.** Rejected after scanning: about 30
   fixable HIGH findings in its Python and libraries; `python3-debian13`
   had none.
@@ -196,4 +230,14 @@ languages. Measured on 2026-11-18:
   - The lab test found one defect, fixed before commit: smoke forwarded
     the body chunked, and notes reads only `Content-Length`. Smoke now
     reads the capped body first; a test asserts the length.
-- **6.3c–6.3e:** recorded here as each lands.
+- **6.3c, offline:** the bootstrap render with the default values was
+  compared byte for byte with main's in the three profiles: identical.
+  `gitops-render`: with notes in dev and postgres in dev and uat it
+  renders exactly the three expected ApplicationSets (names, chart paths,
+  overlays, environments), none under `aws-eks`, and refuses an
+  out-of-profile environment and a missing list. `promote-test`: 8 new
+  notes cases (unknown app, overlay missing, order, image block added
+  with configuration kept, ApplicationSet/overlay agreement, postgres
+  alongside, another app's image in the notes ledger). `make validate`.
+- **6.3c, live:** recorded with the pull request and each promotion.
+- **6.3d–6.3e:** recorded here as each lands.

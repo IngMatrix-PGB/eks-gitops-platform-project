@@ -48,6 +48,8 @@ jobs:
         run: |
           bash scripts/ci/changed-paths.sh \
             'charts/standard-workload/values-*.yaml' \
+            'charts/postgres-lab/values-*.yaml' \
+            'gitops/bootstrap/values.yaml' \
             'gitops/promotions/**' \
             'scripts/promote/**' \
             '.github/workflows/promotion.yml' \

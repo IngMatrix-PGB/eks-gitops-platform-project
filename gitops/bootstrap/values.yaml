@@ -16,6 +16,33 @@ project:
 # per-environment one, is therefore the correct shape now.
 workloadChartPath: charts/standard-workload
 
+# Phase 6.3c (ADR-0023): the reference application's components, one
+# ApplicationSet each (templates/applicationset.yaml).
+#   - smoke has no `environments` key: it follows the profile's list and
+#     keeps its historical names (ApplicationSet <project>-environments,
+#     Applications platform-smoke-<env>, overlays values-<env>.yaml).
+#   - every other component lists its environments explicitly; a
+#     promotion PR adds one when that environment gets the component.
+#     An empty list renders nothing.
+#   - `profiles` limits a component to some profiles: postgres-lab is a
+#     lab chart, so notes and postgres are lab-multicluster only (the AWS
+#     data store is decided at 6.4).
+#   - overlays: <chartPath>/values-<overlayPrefix><env>[<suffix>].yaml.
+components:
+  - name: smoke
+    chartPath: charts/standard-workload
+    overlayPrefix: ""
+  - name: notes
+    chartPath: charts/standard-workload
+    overlayPrefix: "notes-"
+    profiles: [local-multicluster]
+    environments: []
+  - name: postgres
+    chartPath: charts/postgres-lab
+    overlayPrefix: ""
+    profiles: [local-multicluster]
+    environments: []
+
 # Exactly three environments, matching the dev/uat/prod spokes of
 # ADR-0015 (simulated as namespaces in lab-lite). Adding a fourth is
 # intentionally not supported without an explicit, separately-reviewed

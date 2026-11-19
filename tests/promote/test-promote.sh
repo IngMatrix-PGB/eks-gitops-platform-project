@@ -24,10 +24,16 @@ for f in scripts/image/image.sh scripts/promote/_lib.sh scripts/promote/promote.
          charts/standard-workload/values-dev.yaml charts/standard-workload/values-dev-aws.yaml \
          charts/standard-workload/values-uat.yaml charts/standard-workload/values-uat-aws.yaml \
          charts/standard-workload/values-prod.yaml charts/standard-workload/values-prod-aws.yaml \
-         gitops/promotions/smoke.tsv; do
+         gitops/promotions/smoke.tsv gitops/promotions/notes.tsv gitops/bootstrap/values.yaml; do
   mkdir -p "$work/$(dirname "$f")"; cp "$f" "$work/$f"
 done
+mkdir -p "$work/.tools"; ln -s "$here/.tools/bin" "$work/.tools/bin"
 cd "$work"
+# Phase 6.3c: notes starts nowhere - no notes overlay, empty ledger, and
+# no environment listed for notes or postgres in the bootstrap values.
+.tools/bin/yq -i '(.components[] | select(.name == "notes" or .name == "postgres") | .environments) = []' gitops/bootstrap/values.yaml
+grep -E '^[[:space:]]*(#|$)' gitops/promotions/notes.tsv > "$root/n" || true
+cat "$root/n" > gitops/promotions/notes.tsv
 # The test starts from a fixed state, not from whatever the repository
 # currently runs: every overlay on an image of another repository (as
 # before the first promotion), and a ledger with its header only.
@@ -71,7 +77,7 @@ chmod +x "$root/bin/docker" "$root/bin/cosign"
 
 promote() {
   env PATH="$root/bin:$PATH" COSIGN_BIN="$root/bin/cosign" FAKE_COSIGN_LOG="$root/cosign.log" \
-    FAKE_UNSIGNED="${UNSIGNED:-}" ENV="$1" DIGEST="${2:-}" sh scripts/promote/promote.sh > "$root/out" 2>&1
+    FAKE_UNSIGNED="${UNSIGNED:-}" APP="${APP:-smoke}" ENV="$1" DIGEST="${2:-}" sh scripts/promote/promote.sh > "$root/out" 2>&1
 }
 check() { PROMOTION_BASE_REF="$base" bash scripts/validate/check-promotion.sh > "$root/check" 2>&1; }
 ref_of() { . scripts/promote/_lib.sh; overlay_image_ref "charts/standard-workload/values-$1.yaml"; }
@@ -150,6 +156,41 @@ printf '2099-01-01\tuat\t%s@%s\tmain\n' "$repo" "$d1" >> gitops/promotions/smoke
 mutate_check "uat recorded as promoted straight from main" "may only be promoted from 'dev'"
 awk '/^image:/{skip=1; next} skip && /^  /{next} {skip=0; print}' charts/standard-workload/values-uat.yaml > "$root/u" && cat "$root/u" > charts/standard-workload/values-uat.yaml
 mutate_check "an overlay without its own image block" "needs its own image block"
+
+# --- Phase 6.3c: notes has its own overlays, ledger and repository ---
+nrepo="ghcr.io/ingmatrix-pgb/eks-gitops-platform-notes"
+nrows() { grep -cvE '^[[:space:]]*(#|$)' gitops/promotions/notes.tsv || true; }
+nref() { . scripts/promote/_lib.sh; overlay_image_ref "charts/standard-workload/values-notes-$1.yaml"; }
+rc=0; ( APP=web promote dev "$d1" ) || rc=$?; expect_refused "an unknown APP" "APP must be one of"
+rc=0; ( APP=notes promote dev "$d1" ) || rc=$?; expect_refused "notes into dev before its overlay exists" "add the dev notes overlay"
+rc=0; ( APP=notes promote uat ) || rc=$?; expect_refused "notes into uat while dev has no notes" "promote dev first"
+printf '# notes in dev\nextraEnv:\n  DB_HOST: platform-postgres-dev\n' > charts/standard-workload/values-notes-dev.yaml
+if ( APP=notes promote dev "$d1" ) && [ "$(nref dev)" = "$nrepo@$d1" ] && [ "$(nrows)" = "1" ] && [ "$(rows)" = "3" ] \
+   && [ "$(changed)" = "charts/standard-workload/values-notes-dev.yaml gitops/promotions/notes.tsv " ] \
+   && grep -q '^  DB_HOST: platform-postgres-dev$' charts/standard-workload/values-notes-dev.yaml \
+   && grep -q "$nrepo@sha256" "$root/cosign.log"; then
+  ok "notes promoted into dev: image block added to its overlay (config kept), notes ledger only, verified against the notes repository"
+else
+  bad "notes dev promotion wrong: $(cat "$root/out") changed=$(changed) nrows=$(nrows)"
+fi
+if check; then bad "check-promotion accepted a notes overlay in dev that the bootstrap values do not list"
+elif grep -q 'does not list notes in dev' "$root/check"; then ok "check-promotion caught: notes overlay without the ApplicationSet listing dev"
+else bad "unlisted notes overlay caught for the wrong reason: $(cat "$root/check")"; fi
+.tools/bin/yq -i '(.components[] | select(.name == "notes") | .environments) = ["dev"]' gitops/bootstrap/values.yaml
+if check; then bad "check-promotion accepted notes in dev without postgres"
+elif grep -q 'lists notes in dev without postgres' "$root/check"; then ok "check-promotion caught: notes listed without postgres"
+else bad "notes without postgres caught for the wrong reason: $(cat "$root/check")"; fi
+.tools/bin/yq -i '(.components[] | select(.name == "postgres") | .environments) = ["dev"]' gitops/bootstrap/values.yaml
+check && ok "check-promotion passes with notes promoted and listed in dev, postgres alongside" || bad "notes in dev fails check-promotion: $(cat "$root/check")"
+.tools/bin/yq -i '(.components[] | select(.name == "notes") | .environments) = ["dev", "uat"]' gitops/bootstrap/values.yaml
+if check; then bad "check-promotion accepted notes listed in uat with no notes overlay there"
+elif grep -q 'lists notes in uat, but no promoted notes overlay' "$root/check"; then ok "check-promotion caught: notes listed in uat before it is promoted there"
+else bad "listed-but-unpromoted caught for the wrong reason: $(cat "$root/check")"; fi
+.tools/bin/yq -i '(.components[] | select(.name == "notes") | .environments) = ["dev"]' gitops/bootstrap/values.yaml
+printf '2099-01-01\tdev\t%s@%s\tmain\n' "$repo" "$d2" >> gitops/promotions/notes.tsv
+if check; then bad "check-promotion accepted a smoke image in the notes ledger"
+elif grep -q 'notes.tsv row 2 is malformed' "$root/check"; then ok "check-promotion caught: another app's image in the notes ledger"
+else bad "foreign image in notes ledger caught for the wrong reason: $(cat "$root/check")"; fi
 
 cd "$here"
 if [ "$fail" -ne 0 ]; then echo "promote-test: FAILED"; exit 1; fi

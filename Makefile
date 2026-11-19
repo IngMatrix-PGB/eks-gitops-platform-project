@@ -31,7 +31,7 @@ help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart gitops-render check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -276,8 +276,8 @@ image-verify: ## Phase 5.1b: cosign verify + verify-attestation of IMAGE=<repo>@
 image-test-verify: ## Phase 5.1b: offline - fake cosign/docker pin the exact signer identity, the verified references, fail-closed paths and publish's CI-only guard
 	@sh tests/image/test-image-verify.sh
 
-promote: ## Phase 5.1c: promote apps/smoke into ENV=dev (DIGEST=sha256:... from main) | uat (from dev) | prod (from uat); verifies the signature first, edits the two overlays + ledger, never commits
-	@ENV="$(ENV)" DIGEST="$(DIGEST)" sh scripts/promote/promote.sh
+promote: ## Phase 5.1c/6.3c: promote APP=smoke (default) or notes into ENV=dev (DIGEST=sha256:... from main) | uat (from dev) | prod (from uat); verifies the signature first, edits the two overlays + ledger, never commits
+	@APP="$(APP)" ENV="$(ENV)" DIGEST="$(DIGEST)" sh scripts/promote/promote.sh
 
 promotion-verify: ## Phase 5.1c: online - every overlay image of our repository verifies (signature + SBOM attestations, exact identity)
 	@sh scripts/promote/verify-overlays.sh
@@ -353,7 +353,7 @@ gitops-repo-check: ## Read-only inspection of the same repository-authentication
 gitops-repo-remove: ## Remove the repository Secret, GitHub deploy key, and local key files (requires CONFIRM=REMOVE; never run by the lifecycle test)
 	@sh lab/gitops/repo-remove.sh
 
-gitops-render: ## Fully offline Helm render of gitops/bootstrap; proves exactly 1 AppProject/1 ApplicationSet/3 generators/0 Secrets/no wildcards (accepts REVISION=<value>)
+gitops-render: ## Fully offline Helm render of gitops/bootstrap (in validate since 6.3c); proves 1 AppProject, smoke's ApplicationSet + one per enabled component, 3 generators/0 Secrets/no wildcards (accepts REVISION=<value>)
 	@sh lab/gitops/render.sh
 
 gitops-bootstrap: ## Fail-closed idempotent apply of the root Application only (accepts REVISION=<value>, default main)
