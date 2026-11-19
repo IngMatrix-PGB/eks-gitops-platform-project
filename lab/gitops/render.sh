@@ -183,7 +183,8 @@ check_hub_spoke() {
   if grep -qiE '^kind: SecretStore$|^kind: Secret$|auth:|serviceAccountRef|arn:aws:|AKIA[0-9A-Z]{16}' "$out"; then
     echo "FAIL: $prof: render contains a SecretStore/Secret/auth/serviceAccountRef/ARN/credential-shaped string" >&2; hs_fail=1
   fi
-  [ "$(grep -cE '^\s*- clusters:$' "$out")" = "1" ] || { echo "FAIL: $prof: expected exactly 1 clusters generator" >&2; hs_fail=1; }
+  # one clusters generator per ApplicationSet (Phase 6.3c)
+  [ "$(grep -cE '^\s*- clusters:$' "$out")" = "$want_sets" ] || { echo "FAIL: $prof: expected exactly $want_sets clusters generator(s), one per ApplicationSet" >&2; hs_fail=1; }
   [ "$(grep -cE '^\s*- list:$' "$out" || true)" = "0" ] || { echo "FAIL: $prof: a list generator is still rendered" >&2; hs_fail=1; }
   grep -qE "^\s*eks-gitops-lab-lite\.local/owner: ${owner}$" "$out" || { echo "FAIL: $prof: selector lacks owner label value '$owner'" >&2; hs_fail=1; }
   if grep -qE "owner: ${other_owner}$" "$out"; then
@@ -228,7 +229,7 @@ check_hub_spoke() {
     echo "FAIL: $prof: selector self-test did not render the injected 'qa' environment (got '$qa_sel') - check is broken" >&2; hs_fail=1
   fi
   if [ "$hs_fail" -eq 0 ]; then
-    echo "OK: profile=$prof renders 1 AppProject (spoke-dev/uat/prod by name, bound to dev/uat/prod, no cluster-scoped grant) and 1 ApplicationSet with exactly 1 clusters generator (owner=$owner + platform.environment in dev/uat/prod), CreateNamespace=false, destination by cluster name, values-<env>${suffix}.yaml, revision propagated; an extra 'qa' is detectable"
+    echo "OK: profile=$prof renders 1 AppProject (spoke-dev/uat/prod by name, bound to dev/uat/prod, no cluster-scoped grant) and smoke's ApplicationSet (plus one per enabled component), each with exactly 1 clusters generator (owner=$owner + platform.environment in dev/uat/prod), CreateNamespace=false, destination by cluster name, values-<env>${suffix}.yaml, revision propagated; an extra 'qa' is detectable"
   else
     fail=1
   fi
