@@ -7,14 +7,51 @@ that never enter Git, Argo CD-driven environment reconciliation, and
 production promotion gated by a reviewed pull request plus runtime trust
 boundaries.
 
+## What this demonstrates
+
+- **GitOps hub and spokes, locally.** One Argo CD hub reconciles `dev`,
+  `uat` and `prod` spoke clusters (`kind`) from this repository, one
+  Application per spoke and component, never one on the hub
+  ([ADR-0015](docs/adr/0015-hub-and-spoke-environment-model.md)).
+- **Signed images promoted by pull request.** First-party images are
+  built with tests, scanned, given an SBOM, signed keylessly and
+  promoted `dev` → `uat` → `prod` by digest through reviewed PRs with a
+  ledger ([ADR-0017](docs/adr/0017-image-supply-chain.md),
+  [image-promotion](docs/runbooks/image-promotion.md)).
+- **Secrets that never enter Git.** One External Secrets Operator per
+  spoke, each isolated to its own source namespace; database passwords
+  and store keys arrive the same way
+  ([ADR-0010](docs/adr/0010-external-secrets-operator-contract.md)).
+- **A reference application with state.** A Go front service, a Python
+  service and PostgreSQL behind NetworkPolicies, with logical dumps and
+  a non-destructive restore check
+  ([ADR-0023](docs/adr/0023-reference-application.md),
+  [reference-app-data](docs/runbooks/reference-app-data.md)).
+- **Operations you can measure.** Metrics and logs shipped from every
+  spoke to the hub, an SLO with tested burn-rate alerts, and restore
+  drills with measured RTO
+  ([observability](docs/runbooks/observability.md),
+  [backup-restore](docs/runbooks/backup-restore.md)).
+- **AWS as offline-tested code.** Organization and guardrails, per-account
+  baseline, network, EKS with Karpenter, Pod Identity and Secrets
+  Manager in Terraform, tested offline and against a local emulator in
+  CI; never applied to AWS
+  ([ADR-0016](docs/adr/0016-aws-organization-and-guardrails.md),
+  [ADR-0018](docs/adr/0018-terraform-against-a-local-aws-emulator.md)).
+- **Honest status.** Each Definition-of-Done criterion has a status and
+  its evidence in the TAD's
+  [Definition of Done — status](docs/architecture/technical-architecture.md#definition-of-done--status);
+  `make validate` checks that the TAD, the ADRs and this README agree.
+
+
 ## Target architecture, in brief
 
 - **Terraform** provisions AWS infrastructure; **Argo CD**, running in
   the `management` hub, pulls desired state from Git and reconciles it
   toward the workload spokes after bootstrap.
 - **Hub and spoke** ([ADR-0015](docs/adr/0015-hub-and-spoke-environment-model.md)) —
-  `management` is the hub and control plane only (Argo CD, Keycloak for
-  the local lab); `dev`, `uat`, and `prod` are spokes, each running its
+  `management` is the hub and control plane only (Argo CD; Keycloak for
+  the local lab is planned, Phase 4); `dev`, `uat`, and `prod` are spokes, each running its
   **own** External Secrets Operator instance; application workloads run
   only in spokes. `dev` deploys automatically on merge, `uat` and `prod`
   by reviewed PR. On AWS the target is one account per environment.
@@ -32,45 +69,56 @@ boundaries.
 Full detail, diagrams, risks, and current implementation status live in
 the [Technical Architecture Document](docs/architecture/technical-architecture.md).
 
+## Quick start
+
+Prerequisites: macOS or Linux, Docker with at least 4.2 GiB of memory
+for the hub and two spokes (the preflight refuses less; observability
+and backups need more), GNU Make, `git`, and `gh` signed in to an
+account that administers the repository (Argo CD reads it with a
+deploy key that `make gitops-repo-setup` creates). Every tool the lab
+runs is downloaded pinned and checksum-verified into `.tools/`, and
+every kubeconfig lives in `.local/`; nothing touches your global
+`kubectl` context or any AWS account.
+
+```bash
+make tools-install          # pinned kind, kubectl, helm, terraform, trivy and the rest into .tools/bin/
+make validate               # every offline check CI runs
+make mc-up                  # hub + dev + uat: Argo CD, registration, ESO, source Secrets, bootstrap from main
+make lab-mc-status          # identity, registration and memory per member
+```
+
+Then, optionally, in this order:
+
+- observability on the hub and each spoke:
+  [observability runbook](docs/runbooks/observability.md);
+- the backup store and Velero:
+  [backup-restore runbook](docs/runbooks/backup-restore.md);
+- database credentials and dump keys for the reference application:
+  [reference-app-data runbook](docs/runbooks/reference-app-data.md).
+
+`make lab-mc-destroy` removes the clusters; data and keys you created
+stay in `.local/`. Working on a fork: the GitOps repository and its GitHub
+account are set in `scripts/gitops/_lib.sh`, `gitops/root-application.yaml` and
+`gitops/bootstrap/values.yaml`.
+
 ## Current status
 
-**Phase 1 (documentation foundation), Phase 2.1 (local tooling and
-`kind` foundation), Phase 2.2 (Argo CD bootstrap), Phase 2.3 (private
-GitOps bootstrap), Phase 2.4 (standard workload contract), Phase 2.5
-(repository governance baseline), Phase 2.6.1 (External Secrets
-Operator bootstrap), Phase 2.6.2 (External Secrets workload
-contract), Phase 2.6.3a (transactional GitOps lifecycle and safe
-revision rollback), Phase 2.6.3b (source-secret idempotency and
-kubeconfig evidence hardening), Phase 2.7.1 (`dev`/`uat`/`prod`
-environments in the local lab), and Phase 2.7.2 (the same environments
-in the aws-eks profile and Terraform, offline), and Phase 2.7.3 (hub
-and spoke `kind` clusters with Argo CD registration) are implemented** — a single, pinned `lab-lite`
-`kind` cluster running a pinned, digest-verified Argo CD control plane,
-reconciling this repository's own `gitops/` directory over a read-only
-SSH deploy key into `dev`, `uat`, and `prod` namespaces, each
-running a real Restricted-PSS-compliant
-`Deployment`/`Service`/`ServiceAccount`/`ConfigMap`
-(`charts/standard-workload`, a pinned, non-root image) instead
-of the earlier smoke `ConfigMap`, plus two namespace-scoped External
-Secrets Operator controllers (one per environment), each now backed by
-its own namespaced `SecretStore`/`ExternalSecret` pair (Kubernetes-
-provider local backend) that reconciles an imperative, out-of-Git
-source Secret into a target Secret ESO owns exclusively, mounted into
-the workload as a read-only volume — never an environment variable, and
-never a `Secret` manifest in Git. No Keycloak
-yet — postponed, not rejected (ADR-0008).
+| Phase | Scope | Status |
+|---|---|---|
+| Phase 0 | Discovery | Complete |
+| Phase 1 | Documentation foundation (TAD, ADRs, validation) | Complete |
+| Phase 2 | Local GitOps lab: `kind`, Argo CD, ESO, standard chart, hub and spokes, resilience | Complete |
+| Phase 3 | Terraform for AWS: organization, accounts, network, EKS, identity, registry (offline-tested, never applied) | Complete |
+| Phase 4 | Human identity and SSO: IAM Identity Center, Keycloak for the lab | Not started |
+| Phase 5 | Image supply chain, promotion, Terraform CI, branch protection | Complete |
+| Phase 6 | Observability, backup and restore, reference application, first AWS deployment | In progress (6.1–6.3 done; 6.4 blocked on an AWS account) |
+| Phase 7 | Consistency, diagrams, DOCX export, fresh rebuild | In progress |
 
-**Phase 3.1–3.3.5 (Terraform EKS/network foundation, Pod Identity/Secrets
-Manager IaC, dual-provider secret contract, GitOps profile mechanism, and
-the EKS identity boundary) exist as code, offline-validated only.** See
-"AWS EKS profile" below — none of it is deployed, and no AWS account
-exists to deploy it against. `main` is protected by
-a GitHub ruleset: every change goes through a pull request whose required
-checks pass (ADR-0020). An `Accepted` ADR records an approved decision, not
-necessarily a fully implemented one. See the TAD's evidence table and
-delivery roadmap for what exists versus what is proposed.
+An `Accepted` ADR records an approved decision, not necessarily a fully
+implemented one. Nothing has been deployed to AWS: the AWS code is
+tested offline and against a local emulator only.
 
-### What comes next
+### Phase detail
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -107,11 +155,18 @@ delivery roadmap for what exists versus what is proposed.
 | 6.2 | Backup and restore drill | Implemented (6.2a–6.2b) |
 | 6.2a | Velero on every member backs up the state outside Git (platform Secrets and ConfigMaps) to a lab S3 store (`versitygw`, one bucket and key per member, under `.local/backups/`); every 6 h, TTL 72 h; least-privilege RBAC; backup alerts in the hub; `make backup-restore-check` restores into throwaway namespaces and compares by SHA-256 (ADR-0022, `docs/runbooks/backup-restore.md`) | Implemented; verified on lab-multicluster (hub, dev, uat) |
 | 6.2b | Scripted, destructive restore drills: `make backup-drill-spoke SPOKE=<env>` and `make backup-drill-hub` (both `CONFIRM=yes`) rebuild a lost member from Git plus its backup and verify by SHA-256 that source values, credentials and registrations return unchanged; measured RTO 556 s (uat) and 350 s (hub) | Implemented; both drills run on lab-multicluster |
-| 6.3 | Multi-language reference application with a data store, growing `apps/smoke` | In progress |
-| 6.3d+e | Logical dumps of the notes database every 6 h to the lab store (own bucket per environment), `make db-dump-key`, non-destructive `make db-restore-check`; scrape tells smoke and notes apart, `/api/notes` in smoke's SLO, five alerts and a dashboard (ADR-0022/0021 amendments, `docs/runbooks/backup-restore.md`) | Implemented |
-| 6.3c | Delivery of the reference application through Argo CD: one ApplicationSet per component (smoke unchanged), `make promote APP=notes`, per-app ledgers; dev → uat → prod promotions as separate PRs (ADR-0023, `docs/runbooks/image-promotion.md`) | Implemented; dev and uat promoted and verified live, prod promoted and verified offline (prod spoke opt-in) |
-| 6.3b | `apps/notes` (Python) behind smoke's `/api/notes`, PostgreSQL from `charts/postgres-lab` with credentials through ESO, NetworkPolicies between the three; both images through the signed pipeline (ADR-0023, `docs/runbooks/reference-app-data.md`) | Implemented; tested on the dev spoke with local images (Argo CD delivery in 6.3c) |
+| 6.3 | Multi-language reference application with a data store, growing `apps/smoke` | Implemented (6.3a–6.3e) |
 | 6.3a | Platform contract for stateful components: StatefulSet, PVC, Job, CronJob allowed on spokes in the AppProject, the spoke Role and Argo CD's inclusions (checked as one); `make argocd-upgrade` applies a reviewed Argo CD values change with diff, confirmation and rollback (ADR-0023, `docs/runbooks/argocd-upgrade.md`) | Implemented; upgrade and RBAC verified on lab-multicluster |
+| 6.3b | `apps/notes` (Python) behind smoke's `/api/notes`, PostgreSQL from `charts/postgres-lab` with credentials through ESO, NetworkPolicies between the three; both images through the signed pipeline (ADR-0023, `docs/runbooks/reference-app-data.md`) | Implemented; tested on the dev spoke with local images (Argo CD delivery in 6.3c) |
+| 6.3c | Delivery of the reference application through Argo CD: one ApplicationSet per component (smoke unchanged), `make promote APP=notes`, per-app ledgers; dev → uat → prod promotions as separate PRs (ADR-0023, `docs/runbooks/image-promotion.md`) | Implemented; dev and uat promoted and verified live, prod promoted and verified offline (prod spoke opt-in) |
+| 6.3d+e | Logical dumps of the notes database every 6 h to the lab store (own bucket per environment), `make db-dump-key`, non-destructive `make db-restore-check`; scrape tells smoke and notes apart, `/api/notes` in smoke's SLO, five alerts and a dashboard (ADR-0022/0021 amendments, `docs/runbooks/backup-restore.md`) | Implemented |
+| 6.4 | First real AWS deployment: hub plus one spoke in a single sandbox account, created and destroyed in one authorized session, measured cost recorded | Planned; blocked until a personal sandbox AWS account exists |
+| 6.4a | Code for the session (offline, USD 0): single-account mode, aws-eks root Application, session scripts with a destroy sweep, budget first | Not started |
+| 6.4b | The authorized session: apply, prove EKS Pod Identity and hub-to-spoke registration, destroy, record the bill | Not started |
+| 7a | Consistency pass: statuses aligned, Definition-of-Done scorecard in the TAD, this README's "What this demonstrates" and quick start, `check-docs-consistency` | Implemented |
+| 7b | Four draw.io diagrams derived from the TAD, source and SVG committed, with a check that each export matches its source | Not started |
+| 7c | DOCX export of the TAD with pandoc, attached to a GitHub Release | Not started |
+| 7d | Fresh lab rebuild following only this README (destructive, needs an explicit go) | Not started |
 
 Full detail and ordering live in the TAD's
 [Delivery Roadmap](docs/architecture/technical-architecture.md#delivery-roadmap).
@@ -417,33 +472,58 @@ Secret lives outside both Git and Helm ownership.
 | Standard workload chart | The one Helm chart every workload uses |
 | EKS Pod Identity / IRSA | Workload-to-AWS identity (default / compatibility) |
 | External Secrets Operator + AWS Secrets Manager | Secrets, never in Git — one ESO instance per cluster |
-| IAM Identity Center + Keycloak | Human access to AWS/EKS, and to Argo CD in the local lab |
+| IAM Identity Center + Keycloak | Human access to AWS/EKS, and to Argo CD in the local lab (planned, Phase 4) |
 | `kind` | Local lab with no AWS service charges, for GitOps and identity-contract shape testing |
 
 ## Architecture Decision Records
 
-All fifteen are `Accepted` — an approved decision, not necessarily a
-fully implemented one. 0001–0003 and 0006–0010 have runtime-tested code
-behind them; 0004 and 0011–0014 have offline-validated code only; 0005
-and 0015 are design decisions not yet implemented.
+All 23 are `Accepted`: an approved decision, not necessarily a fully
+implemented one. The TAD's "Evidence and Implementation Status" says
+how much of each is implemented, and `make validate` checks that this
+table, the TAD's decisions table and the ADR files agree.
 
-| ADR | Decision |
+| ADR | Decision | Status |
+|---|---|---|
+| [0001](docs/adr/0001-platform-scope-and-boundaries.md) | Platform scope and repository boundaries | Accepted |
+| [0002](docs/adr/0002-environment-topology.md) | Environment topology | Accepted |
+| [0003](docs/adr/0003-gitops-control-plane-and-promotion.md) | GitOps control plane and promotion | Accepted |
+| [0004](docs/adr/0004-workload-identity-and-secrets.md) | Workload identity and secrets | Accepted |
+| [0005](docs/adr/0005-sso-bootstrap-and-cluster-access.md) | SSO, bootstrap, and cluster access | Accepted |
+| [0006](docs/adr/0006-standard-workload-contract.md) | Standard workload contract | Accepted |
+| [0007](docs/adr/0007-private-gitops-bootstrap.md) | Private repository GitOps bootstrap | Accepted |
+| [0008](docs/adr/0008-standard-workload-before-sso.md) | Standard workload contract before SSO | Accepted |
+| [0009](docs/adr/0009-repository-governance-baseline.md) | Repository governance baseline | Accepted |
+| [0010](docs/adr/0010-external-secrets-operator-contract.md) | External Secrets Operator contract | Accepted |
+| [0011](docs/adr/0011-terraform-foundation.md) | Terraform foundation | Accepted |
+| [0012](docs/adr/0012-network-eks-iac-foundation.md) | Network and EKS IaC foundation | Accepted |
+| [0013](docs/adr/0013-pod-identity-secrets-manager-iac.md) | EKS Pod Identity and AWS Secrets Manager IaC | Accepted |
+| [0014](docs/adr/0014-eks-application-identity-boundary.md) | EKS Application Generation and Identity Boundary | Accepted |
+| [0015](docs/adr/0015-hub-and-spoke-environment-model.md) | Hub-and-spoke environment model | Accepted |
+| [0016](docs/adr/0016-aws-organization-and-guardrails.md) | AWS organization, accounts and guardrails | Accepted |
+| [0017](docs/adr/0017-image-supply-chain.md) | Image supply chain and promotion | Accepted |
+| [0018](docs/adr/0018-terraform-against-a-local-aws-emulator.md) | Terraform plan and apply against a local AWS emulator | Accepted |
+| [0019](docs/adr/0019-terraform-static-analysis.md) | Static analysis of the Terraform code | Accepted |
+| [0020](docs/adr/0020-main-branch-ruleset.md) | Ruleset for the main branch | Accepted |
+| [0021](docs/adr/0021-observability.md) | Observability for the hub and the spokes | Accepted |
+| [0022](docs/adr/0022-backup-and-restore.md) | Backup and restore of the state outside Git | Accepted |
+| [0023](docs/adr/0023-reference-application.md) | Reference application with a data store | Accepted |
+
+## Runbooks
+
+| Runbook | Covers |
 |---|---|
-| [0001](docs/adr/0001-platform-scope-and-boundaries.md) | Platform scope and repository boundaries |
-| [0002](docs/adr/0002-environment-topology.md) | Environment topology |
-| [0003](docs/adr/0003-gitops-control-plane-and-promotion.md) | GitOps control plane and promotion |
-| [0004](docs/adr/0004-workload-identity-and-secrets.md) | Workload identity and secrets |
-| [0005](docs/adr/0005-sso-bootstrap-and-cluster-access.md) | SSO, bootstrap, and cluster access |
-| [0006](docs/adr/0006-standard-workload-contract.md) | Standard workload contract |
-| [0007](docs/adr/0007-private-gitops-bootstrap.md) | Private repository GitOps bootstrap |
-| [0008](docs/adr/0008-standard-workload-before-sso.md) | Standard workload contract before SSO |
-| [0009](docs/adr/0009-repository-governance-baseline.md) | Repository governance baseline |
-| [0010](docs/adr/0010-external-secrets-operator-contract.md) | External Secrets Operator contract |
-| [0011](docs/adr/0011-terraform-foundation.md) | Terraform foundation |
-| [0012](docs/adr/0012-network-eks-iac-foundation.md) | Network and EKS IaC foundation |
-| [0013](docs/adr/0013-pod-identity-secrets-manager-iac.md) | EKS Pod Identity and AWS Secrets Manager IaC |
-| [0014](docs/adr/0014-eks-application-identity-boundary.md) | EKS application generation and identity boundary |
-| [0015](docs/adr/0015-hub-and-spoke-environment-model.md) | Hub-and-spoke environment model (`management` + `dev`/`uat`/`prod`) |
+| [argocd-upgrade](docs/runbooks/argocd-upgrade.md) | Upgrading Argo CD's values on a running cluster |
+| [backup-restore](docs/runbooks/backup-restore.md) | Backup and restore on lab-multicluster |
+| [eks-bootstrap-order](docs/runbooks/eks-bootstrap-order.md) | EKS Bootstrap Order |
+| [eks-destroy-order](docs/runbooks/eks-destroy-order.md) | EKS Destroy Order |
+| [image-promotion](docs/runbooks/image-promotion.md) | Promoting the first-party images dev → uat → prod |
+| [image-publish](docs/runbooks/image-publish.md) | Publishing and verifying the first-party image |
+| [kubernetes-to-aws-secrets-migration](docs/runbooks/kubernetes-to-aws-secrets-migration.md) | Kubernetes-Provider to AWS-Secrets-Manager Migration |
+| [observability](docs/runbooks/observability.md) | Observability on lab-multicluster |
+| [reference-app-data](docs/runbooks/reference-app-data.md) | The reference application's data store |
+| [repository-governance](docs/runbooks/repository-governance.md) | Repository governance (main ruleset) |
+| [terraform-emulator](docs/runbooks/terraform-emulator.md) | Terraform against the local AWS emulator |
+| [terraform-static-analysis](docs/runbooks/terraform-static-analysis.md) | Terraform static analysis |
 
 ## Working locally
 
