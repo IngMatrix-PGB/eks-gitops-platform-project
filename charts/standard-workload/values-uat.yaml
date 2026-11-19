@@ -8,7 +8,7 @@
 # always hold the same reference; check-promotion enforces it.
 image:
   repository: ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke
-  digest: "sha256:b9ab7c7bf576f323212162dc42d7833ea1ae2e396f18827ccc3a29e38d746fbb"
+  digest: "sha256:146757533ef4f3fe2b003a888dfe70b9e5e616b1431aff37d2a17d2d3f1a7047"
 
 replicaCount: 1
 
@@ -30,3 +30,15 @@ externalSecret:
   sourceNamespace: "eso-source-uat"
   sourceSecretName: "local-backend-uat"
   authServiceAccountName: "uat-secretstore-reader"
+
+# Phase 6.3c (ADR-0023): /api/notes forwards to notes in this namespace
+# (Application platform-notes-uat), and only notes is reachable beyond DNS.
+# Lab only: the aws overlay keeps notes off until 6.4.
+extraEnv:
+  NOTES_URL: http://platform-notes-uat-standard-workload:8080
+
+networkPolicy:
+  egressToPods:
+    - podLabels:
+        app.kubernetes.io/instance: platform-notes-uat
+      port: 8080
