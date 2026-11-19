@@ -1,0 +1,48 @@
+# Phase 6.3c (ADR-0023): notes in prod, from charts/standard-workload
+# (Application platform-notes-prod). Its image block is written only by
+# `make promote APP=notes` (scripts/promote/promote.sh); the ledger is
+# gitops/promotions/notes.tsv. No -aws copy: notes is lab-only until 6.4.
+image:
+  repository: ghcr.io/ingmatrix-pgb/eks-gitops-platform-notes
+  digest: "sha256:4d109b984bfcd1156c9ca4f213e4f87f83a2249bee45f36601a339ec8ec9443b"
+
+replicaCount: 1
+
+service:
+  port: 8080
+
+# dev measured 40 Mi in use (6.3c).
+resources:
+  requests:
+    cpu: 25m
+    memory: 48Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+configMap:
+  uiMessage: "notes prod"
+
+extraEnv:
+  DB_HOST: platform-postgres-prod
+
+# The app role's password as a file, from eso-source-prod/db-prod.
+externalSecret:
+  enabled: true
+  secretStoreName: prod-notes-backend
+  sourceNamespace: eso-source-prod
+  sourceSecretName: db-prod
+  sourceProperty: app-password
+  authServiceAccountName: prod-notes-reader
+  key: password
+  mountPath: /var/run/secrets/notes-db
+  fileName: password
+
+# Callers: smoke (same namespace). Egress: postgres only.
+networkPolicy:
+  enabled: true
+  ingressFromNamespaces: []
+  egressToPods:
+    - podLabels:
+        app.kubernetes.io/instance: platform-postgres-prod
+      port: 5432

@@ -12,3 +12,4 @@
 2026-11-18	prod	ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke@sha256:b9ab7c7bf576f323212162dc42d7833ea1ae2e396f18827ccc3a29e38d746fbb	uat
 2026-11-19	dev	ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke@sha256:146757533ef4f3fe2b003a888dfe70b9e5e616b1431aff37d2a17d2d3f1a7047	main
 2026-11-19	uat	ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke@sha256:146757533ef4f3fe2b003a888dfe70b9e5e616b1431aff37d2a17d2d3f1a7047	dev
+2026-11-19	prod	ghcr.io/ingmatrix-pgb/eks-gitops-platform-smoke@sha256:146757533ef4f3fe2b003a888dfe70b9e5e616b1431aff37d2a17d2d3f1a7047	uat
