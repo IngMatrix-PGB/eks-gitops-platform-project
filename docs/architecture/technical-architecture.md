@@ -5,18 +5,18 @@
 | Field | Value |
 |---|---|
 | Document | eks-gitops-platform-project Technical Architecture |
-| Version | 0.38.0 |
+| Version | 0.39.0 |
 | Status | Implementation in progress |
-| Phase | Phases 0–3 and 5 complete (Phase 3 as offline-tested code, never applied); Phase 4 not started; Phase 6.1–6.3 implemented and runtime-tested on `lab-multicluster`; Phase 6.4 planned and blocked on a sandbox AWS account; Phase 7 in progress (7a) |
-| Last updated | 2026-11-19 |
+| Phase | Phases 0–3 and 5 complete (Phase 3 as offline-tested code, never applied); Phase 4 not started; Phase 6.1–6.3 implemented and runtime-tested on `lab-multicluster`; Phase 6.4 planned and blocked on a sandbox AWS account; Phase 7 in progress (7a–7b) |
+| Last updated | 2026-11-20 |
 
 This document is the **single, authoritative source of truth** for the
 project's architecture: scope, principles, topology, control plane,
 identity, secrets, security, risks, evidence, and roadmap. Diagrams are
-inline Mermaid, versioned as part of this file; a standalone draw.io
-diagram and a polished DOCX export are derived artifacts generated from
-this document later (Phase 7), never an independent source to keep in
-sync.
+inline Mermaid, versioned as part of this file. The four draw.io
+diagrams under "Diagrams (draw.io)" and the DOCX export (Phase 7c) are
+derived from this document, never an independent source: when the
+architecture changes, this document changes first, then the diagrams.
 
 Architectural reasoning here stands on this project's own requirements
 and on general, well-documented GitOps/Kubernetes/AWS engineering risks
@@ -145,6 +145,27 @@ CD reconciles. `management` is the control plane only; it is never a
 workload plane. Every cluster that creates Kubernetes `Secret`s runs its
 **own** ESO instance against AWS Secrets Manager — none is shared. See
 "Cluster and Environment Topology."
+
+### Diagrams (draw.io)
+
+Four diagrams of the implemented lab and the offline-tested AWS target,
+derived from this document (Phase 7b). Each `.drawio` source is
+editable in draw.io; `make diagrams` re-exports the SVGs, and
+`make check-diagrams` (in `make validate`) fails when an SVG no longer
+matches its source.
+
+![System context and hub-and-spoke topology](diagrams/system-topology.svg)
+
+![GitOps delivery and image promotion](diagrams/delivery-promotion.svg)
+
+![Secrets and workload identity](diagrams/secrets-identity.svg)
+
+![Reference application on one spoke](diagrams/reference-application.svg)
+
+Sources: [system-topology](diagrams/system-topology.drawio),
+[delivery-promotion](diagrams/delivery-promotion.drawio),
+[secrets-identity](diagrams/secrets-identity.drawio),
+[reference-application](diagrams/reference-application.drawio).
 
 ## Cluster and Environment Topology
 
@@ -838,6 +859,7 @@ Implementation Status" below.
 | Restore drills (ADR-0022, Phase 6.2b) | `CODE-CONFIRMED` and run on lab-multicluster, 2026-11-18 | `make backup-drill-spoke SPOKE=uat`: RTO 556 s; source and workload Secrets identical by SHA-256, hub users unchanged, dev untouched, metrics/logs/backups with unchanged credentials. `make backup-drill-hub`: RTO 350 s; repository, user list and both cluster Secrets identical (no re-registration), spokes untouched and still writing, rebuilt Loki gateway accepts their credentials. Each drill rerun from scratch after the gaps it found were fixed (reader RBAC in backups, Argo CD cache refresh, probe port, GitHub preflight) |
 | Backup of the state outside Git (ADR-0022, Phase 6.2a) | `CODE-CONFIRMED`, offline-tested, and runtime-tested on lab-multicluster, 2026-11-18 | `make backup-render` (hub/dev/uat/prod: pinned images, exact ClusterRole, no wildcard or `cluster-admin`, restricted pods, own bucket, schedule scope, Helm objects excluded); 5 backup alerts unit-tested with 2 regression mutations. Live: Velero on hub, dev and uat with locations Available; backups hold exactly the out-of-Git Secrets; `make backup-restore-check` restored 15 Secrets identical; store stopped → `VeleroBackupStorageUnavailable` on all three, recovered and resolved after restart; Velero 42–81 Mi per member, store 17 MiB |
 | Documentation consistency and Definition-of-Done scorecard (Phase 7a) | `CODE-CONFIRMED`, offline-tested; live no-op check on lab-multicluster, 2026-11-19 | `make check-docs-consistency` (23 ADRs, 53 README phase rows, 12 runbooks) and its 15 mutation cases in `make validate`; the hub switched to the pushed branch and back to `main` with `make gitops-switch-revision` (root Application UID unchanged, 3 stable reads each way) and all seven Applications stayed Synced/Healthy |
+| draw.io diagrams (Phase 7b) | `CODE-CONFIRMED`, offline-tested | Four `.drawio` sources and their SVG exports (draw.io 31.3.2, source embedded); `make check-diagrams` and its 11 mutation cases in `make validate`; each diagram rendered and reviewed by hand before commit |
 | Argo CD's production AWS identity provider | `UNKNOWN` | Explicitly undecided pending Phase 3/4 (ADR-0005) |
 | Crossplane-based self-service infrastructure | `OUT OF SCOPE` | Deferred past the MVP (ADR-0001) |
 | Progressive Delivery as primary production gate | `OUT OF SCOPE` | Not the design (see "Application Delivery and Promotion") |
@@ -941,7 +963,7 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
     - **6.4b — The authorized session:** not started; needs the account and an explicit go. Apply, prove EKS Pod Identity and the hub-to-spoke registration, destroy and sweep to zero, then record the measured bill.
 - **Phase 7 — Final evidence, draw.io, and DOCX:** in progress.
   - **7a — Consistency and Definition-of-Done scorecard:** implemented. Statuses aligned across the TAD and README, the "Definition of Done — status" table, README "What this demonstrates" and quick start, and `check-docs-consistency` in `make validate`.
-  - **7b — draw.io diagrams:** not started. Four diagrams derived from this document, source and SVG export committed, with a check that each export matches its source.
+  - **7b — draw.io diagrams:** implemented. Four diagrams under "Diagrams (draw.io)" (topology, delivery and promotion, secrets and identity, reference application), `.drawio` source and SVG export committed; `make diagrams` exports locally, `check-diagrams` in `make validate` compares each SVG's embedded copy with its source without needing draw.io.
   - **7c — DOCX export:** not started. Generated with pandoc from this document and attached to a GitHub Release, never committed.
   - **7d — Fresh lab rebuild from the README:** not started; destructive, needs an explicit go. Its result is the evidence for the first Definition-of-Done criterion.
 

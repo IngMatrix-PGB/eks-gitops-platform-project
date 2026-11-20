@@ -66,6 +66,11 @@ boundaries.
   gate is paired with `AppProject`/RBAC/least-privilege-credential
   controls — a PR alone is treated as necessary, not sufficient.
 
+![System context and hub-and-spoke topology](docs/architecture/diagrams/system-topology.svg)
+
+The TAD has three more draw.io diagrams: delivery and promotion,
+secrets and identity, and the reference application.
+
 Full detail, diagrams, risks, and current implementation status live in
 the [Technical Architecture Document](docs/architecture/technical-architecture.md).
 
@@ -164,7 +169,7 @@ tested offline and against a local emulator only.
 | 6.4a | Code for the session (offline, USD 0): single-account mode, aws-eks root Application, session scripts with a destroy sweep, budget first | Not started |
 | 6.4b | The authorized session: apply, prove EKS Pod Identity and hub-to-spoke registration, destroy, record the bill | Not started |
 | 7a | Consistency pass: statuses aligned, Definition-of-Done scorecard in the TAD, this README's "What this demonstrates" and quick start, `check-docs-consistency` | Implemented |
-| 7b | Four draw.io diagrams derived from the TAD, source and SVG committed, with a check that each export matches its source | Not started |
+| 7b | Four draw.io diagrams derived from the TAD (topology, delivery, secrets and identity, reference application), source and SVG committed; `make diagrams` exports, `check-diagrams` compares each export with its source | Implemented |
 | 7c | DOCX export of the TAD with pandoc, attached to a GitHub Release | Not started |
 | 7d | Fresh lab rebuild following only this README (destructive, needs an explicit go) | Not started |
 
