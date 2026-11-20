@@ -26,13 +26,13 @@
 	backup-chart-fetch backup-render backup-store-up backup-store-down backup-store-status backup-install backup-status \
 	backup-uninstall backup-now backup-restore-check backup-drill-spoke backup-drill-hub \
 	check-postgres-lab-chart eso-provision-db-secret db-dump-key db-restore-check \
-	check-docs-consistency check-docs-consistency-regression
+	check-docs-consistency check-docs-consistency-regression diagrams check-diagrams check-diagrams-regression
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-docs-consistency check-docs-consistency-regression check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart gitops-render check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-docs-consistency check-docs-consistency-regression check-diagrams check-diagrams-regression check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart gitops-render check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -57,6 +57,15 @@ check-docs-consistency: ## Phase 7a: README, TAD and ADRs agree (ADR titles/stat
 
 check-docs-consistency-regression: ## Phase 7a: mutation tests for check-docs-consistency
 	@sh tests/validate/test-docs-consistency.sh
+
+diagrams: ## Phase 7b: LOCAL ONLY - export docs/architecture/diagrams/*.drawio to SVG with the draw.io CLI (DRAWIO=<path>), then check-diagrams
+	@sh scripts/docs/diagrams.sh
+
+check-diagrams: ## Phase 7b: every draw.io source has an SVG export that embeds the same shapes, and the TAD links each SVG (no draw.io needed)
+	@sh scripts/validate/check-diagrams.sh
+
+check-diagrams-regression: ## Phase 7b: mutation tests for check-diagrams
+	@sh tests/validate/test-diagrams.sh
 
 check-tad: ## Verify the Technical Architecture Document has all required sections
 	@bash scripts/validate/check-tad-sections.sh
