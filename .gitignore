@@ -41,3 +41,7 @@ __pycache__/
 # Editor/OS-generated temp files
 *.tmp
 *~
+
+# Generated documents (Phase 7c): make docs-docx writes here; published as
+# GitHub Release assets, never committed.
+/dist/
