@@ -56,7 +56,7 @@ readme_unknown() { mutate "$1/README.md" 's/^\(| 7d | .*\)$/\1\
 run_case "a README phase the roadmap does not have is rejected" reject readme_unknown
 readme_no_top() { mutate "$1/README.md" '/^| Phase 7 | /d'; }
 run_case "a top-level roadmap phase without a README row is rejected" reject readme_no_top
-readme_no_word() { mutate "$1/README.md" 's/^\(| 7d | .*| \)Not started |$/\1Soon |/'; }
+readme_no_word() { mutate "$1/README.md" 's/^\(| 6\.4a | .*| \)Not started |$/\1Soon |/'; }
 run_case "a README status with no recognized status word is rejected" reject readme_no_word
 readme_done_word() { mutate "$1/README.md" 's/^\(| Phase 5 | .*| \)Complete |$/\1Implemented |/'; }
 run_case "implemented and complete are the same status" accept readme_done_word
