@@ -446,6 +446,26 @@ EOF
           port: 8082
           targetPort: metrics
           protocol: TCP
+  # Phase 4b: the same for the Argo CD API server, whose session metrics
+  # show a local (break-glass) login.
+  - |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: obs-argocd-server-metrics
+      namespace: argocd
+      labels:
+        app.kubernetes.io/part-of: platform-observability
+    spec:
+      type: ClusterIP
+      selector:
+        app.kubernetes.io/name: argocd-server
+        app.kubernetes.io/instance: argocd
+      ports:
+        - name: metrics
+          port: 8083
+          targetPort: metrics
+          protocol: TCP
   - |
     apiVersion: networking.k8s.io/v1
     kind: NetworkPolicy

@@ -269,6 +269,10 @@ inventory_namespace_contents() {
   #                                   as an incidental side effect of
   #                                   deleting the whole namespace below,
   #                                   never by a targeted delete here.
+  #                                   Since Phase 4b it is the
+  #                                   break-glass password (ADR-0025).
+  #   secret/argocd-oidc - Phase 4b: the SSO client secret, written by
+  #                                   `make idp-install` (not by Helm).
   #   appproject.argoproj.io/default - the default AppProject, created
   #                                   by the application-controller on
   #                                   first startup (no template for it
@@ -277,7 +281,7 @@ inventory_namespace_contents() {
   # install, not foreign/unexpected content - the deletion this
   # function gates is namespace deletion, which removes them anyway.
   unexpected_tmp="$(mktemp)" || { rm -f "$nsinv_tmp"; return 2; }
-  grep -vE '^(serviceaccount/default|configmap/kube-root-ca\.crt|secret/argocd-redis|secret/argocd-initial-admin-secret|appproject\.argoproj\.io/default)$|^event(\.events\.k8s\.io)?/' "$nsinv_tmp" > "$unexpected_tmp"
+  grep -vE '^(serviceaccount/default|configmap/kube-root-ca\.crt|secret/argocd-redis|secret/argocd-initial-admin-secret|secret/argocd-oidc|appproject\.argoproj\.io/default)$|^event(\.events\.k8s\.io)?/' "$nsinv_tmp" > "$unexpected_tmp"
   count="$(wc -l < "$unexpected_tmp" | tr -d ' ')"
   if [ "$count" -gt 0 ]; then
     echo "FAIL: $count unexpected object(s) remain in namespace '$ns':" >&2
@@ -288,3 +292,15 @@ inventory_namespace_contents() {
   rm -f "$nsinv_tmp" "$unexpected_tmp"
   return 0
 }
+
+# Phase 4b (ADR-0025): break-glass. The local admin is off in the values;
+# lab/argocd/breakglass.sh turns it on for at most
+# ARGOCD_BREAKGLASS_MAX_HOURS, recorded on argocd-cm with these
+# annotations, and raises ArgoCDBreakGlassActive in the hub's
+# Alertmanager until it expires or is turned off.
+ARGOCD_BREAKGLASS_PREFIX="eks-gitops-lab-lite.local/breakglass"
+ARGOCD_BREAKGLASS_DEFAULT_HOURS=1
+ARGOCD_BREAKGLASS_MAX_HOURS=8
+ARGOCD_BREAKGLASS_ALERT="ArgoCDBreakGlassActive"
+ARGOCD_ALERTMANAGER_NAMESPACE="monitoring"
+ARGOCD_ALERTMANAGER_SERVICE="obs-alertmanager"

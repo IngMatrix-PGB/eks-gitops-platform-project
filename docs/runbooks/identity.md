@@ -21,6 +21,11 @@ LAB_CLUSTER=hub make idp-status
   when the realm file, the image or the manifest changed.
 - **Passwords:** each test user's password is copied to
   `.local/identity/<user>` (mode 600).
+- **Argo CD (Phase 4b):** when the namespace `argocd` exists, the
+  `argocd` client secret is also written to the Secret
+  `argocd/argocd-oidc`, which Argo CD's SSO reads. Run `idp-install`
+  again after Argo CD is (re)installed. See
+  [argocd-access](argocd-access.md).
 
 `idp-status` changes nothing. It checks the issuer from inside the
 cluster and gets one token per test user, through a port-forward on

@@ -100,3 +100,60 @@ tests:
             exp_annotations:
               summary: "The hub's Argo CD application controller has not been scraped for 5 minutes"
               description: "No application is reconciled while it is down, and the other Argo CD alerts go blind."
+
+  # Phase 4b: one local login pages at once and clears 10 minutes later;
+  # refused logins and other session calls never fire.
+  - name: a successful local login fires, refused logins do not
+    interval: 1m
+    input_series:
+      - series: 'grpc_server_handled_total{job="argocd-server",cluster="hub",grpc_service="session.SessionService",grpc_method="Create",grpc_code="OK",grpc_type="unary"}'
+        values: '0x4 1x20'
+      - series: 'grpc_server_handled_total{job="argocd-server",cluster="hub",grpc_service="session.SessionService",grpc_method="Create",grpc_code="Unauthenticated",grpc_type="unary"}'
+        values: '0+1x25'
+      - series: 'grpc_server_handled_total{job="argocd-server",cluster="hub",grpc_service="session.SessionService",grpc_method="GetUserInfo",grpc_code="OK",grpc_type="unary"}'
+        values: '0+5x25'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ArgoCDLocalAdminLogin
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ArgoCDLocalAdminLogin
+        exp_alerts:
+          - exp_labels: {severity: page, cluster: hub}
+            exp_annotations:
+              summary: "Someone signed in to Argo CD with the local admin (break-glass)"
+              description: "1 local login(s) in the last 10 minutes on cluster hub. Check the break-glass record: make argocd-breakglass-status."
+      - eval_time: 16m
+        alertname: ArgoCDLocalAdminLogin
+        exp_alerts: []
+
+  # The API server not scraped for 5 minutes, or not scraped at all.
+  - name: the API server is down when its scrape fails
+    interval: 1m
+    input_series:
+      - series: 'up{job="argocd-server",cluster="hub"}'
+        values: '1x5 0x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ArgoCDServerDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ArgoCDServerDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: argocd-server, cluster: hub}
+            exp_annotations:
+              summary: "The hub's Argo CD API server has not been scraped for 5 minutes"
+              description: "A break-glass login would not raise ArgoCDLocalAdminLogin while it is down."
+  - name: the API server is down when it is not scraped at all
+    interval: 1m
+    input_series:
+      - series: 'up{job="prometheus",cluster="hub"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ArgoCDServerDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: argocd-server}
+            exp_annotations:
+              summary: "The hub's Argo CD API server has not been scraped for 5 minutes"
+              description: "A break-glass login would not raise ArgoCDLocalAdminLogin while it is down."

@@ -42,3 +42,28 @@ groups:
         annotations:
           summary: "The hub's Argo CD application controller has not been scraped for 5 minutes"
           description: "No application is reconciled while it is down, and the other Argo CD alerts go blind."
+
+  # Phase 4b (ADR-0025): the local admin is break-glass only. Every
+  # successful local login (session Create, which SSO never uses) pages,
+  # and a server that cannot be scraped would hide one.
+  - name: argocd-access
+    rules:
+      - alert: ArgoCDLocalAdminLogin
+        expr: sum by (cluster) (increase(grpc_server_handled_total{job="argocd-server",grpc_service="session.SessionService",grpc_method="Create",grpc_code="OK"}[10m])) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "Someone signed in to Argo CD with the local admin (break-glass)"
+          description: "{{ $value }} local login(s) in the last 10 minutes on cluster {{ $labels.cluster }}. Check the break-glass record: make argocd-breakglass-status."
+
+      - alert: ArgoCDServerDown
+        expr: |
+          up{job="argocd-server"} == 0
+          or
+          absent(up{job="argocd-server"})
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The hub's Argo CD API server has not been scraped for 5 minutes"
+          description: "A break-glass login would not raise ArgoCDLocalAdminLogin while it is down."

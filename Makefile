@@ -5,6 +5,7 @@
 	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle lab-test-eks-identity-offline eks-test-spoke-secret image-build image-scan image-sbom image-all image-build-multi image-publish image-scan-remote image-sign image-verify image-test-verify promote promotion-verify check-promotion promote-test \
 	argocd-chart-fetch argocd-render argocd-install argocd-status argocd-uninstall argocd-port-forward \
 	argocd-test-runtime-health argocd-test-lifecycle \
+	argocd-breakglass argocd-breakglass-off argocd-breakglass-status argocd-test-sso argocd-test-breakglass check-argocd-rbac check-argocd-rbac-regression \
 	gitops-repo-setup gitops-repo-check gitops-repo-remove gitops-render gitops-bootstrap \
 	gitops-status gitops-test gitops-uninstall gitops-test-lifecycle \
 	gitops-switch-revision gitops-retire-appproject-kind gitops-resume-appproject-kind \
@@ -35,7 +36,7 @@ help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-docs-consistency check-docs-consistency-regression check-diagrams check-diagrams-regression docs-release-regression backup-store-regression check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart gitops-render check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret eks-session-regression check-identity check-identity-regression image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-docs-consistency check-docs-consistency-regression check-diagrams check-diagrams-regression docs-release-regression backup-store-regression check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart gitops-render check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret eks-session-regression check-identity check-identity-regression check-argocd-rbac check-argocd-rbac-regression image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -301,6 +302,27 @@ check-identity: ## Phase 4a: offline checks of the identity provider: pinned ima
 
 check-identity-regression: ## Phase 4a: 16 mutation cases for check-identity (secrets in the realm, public client, unpinned image, escalation, ...)
 	@sh tests/identity/test-identity-render.sh
+
+check-argocd-rbac: ## Phase 4b: offline checks of Argo CD's SSO and roles: admin off, OIDC to the lab issuer with the secret by reference, every group mapped, developers limited to their environment
+	@sh lab/argocd/rbac-check.sh
+
+check-argocd-rbac-regression: ## Phase 4b: mutation cases for check-argocd-rbac (admin on, wildcard grant, cross-environment developer, literal secret, ...)
+	@sh tests/argocd/test-rbac-check.sh
+
+argocd-breakglass: ## Phase 4b: turn the Argo CD local admin on for HOURS (1..8, default 1) with a REASON, recorded and alerted (LAB_CLUSTER=, CONFIRM=yes)
+	@sh lab/argocd/breakglass.sh on $(if $(filter yes,$(CONFIRM)),--confirm,)
+
+argocd-breakglass-off: ## Phase 4b: turn the Argo CD local admin off again and resolve the break-glass alert (LAB_CLUSTER=)
+	@sh lab/argocd/breakglass.sh off
+
+argocd-breakglass-status: ## Phase 4b: read-only - is the local admin on, by whom, why, until when; fails when expired or unrecorded (LAB_CLUSTER=)
+	@sh lab/argocd/breakglass.sh status
+
+argocd-test-sso: ## Phase 4b: read-only live role matrix on the hub - a Keycloak token per test user against the Argo CD API (list, get, dry-run sync), local admin refused
+	@sh tests/argocd/test-sso-rbac.sh
+
+argocd-test-breakglass: ## Phase 4b: live break-glass cycle on the hub - on, admin login works and the alert is active, off, old token and login refused, alert resolved
+	@sh tests/argocd/test-breakglass.sh
 
 # Phase 6.4a (ADR-0024): the sandbox AWS session, run by an operator in
 # Phase 6.4b only (docs/runbooks/eks-sandbox-session.md). Every target
