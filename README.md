@@ -51,7 +51,7 @@ boundaries.
   toward the workload spokes after bootstrap.
 - **Hub and spoke** ([ADR-0015](docs/adr/0015-hub-and-spoke-environment-model.md)) —
   `management` is the hub and control plane only (Argo CD; Keycloak for
-  the local lab is planned, Phase 4); `dev`, `uat`, and `prod` are spokes, each running its
+  the local lab since Phase 4a); `dev`, `uat`, and `prod` are spokes, each running its
   **own** External Secrets Operator instance; application workloads run
   only in spokes. `dev` deploys automatically on merge, `uat` and `prod`
   by reviewed PR. On AWS the target is one account per environment.
@@ -139,7 +139,7 @@ account are set in `scripts/gitops/_lib.sh`, `gitops/root-application.yaml` and
 | Phase 1 | Documentation foundation (TAD, ADRs, validation) | Complete |
 | Phase 2 | Local GitOps lab: `kind`, Argo CD, ESO, standard chart, hub and spokes, resilience | Complete |
 | Phase 3 | Terraform for AWS: organization, accounts, network, EKS, identity, registry (offline-tested, never applied) | Complete |
-| Phase 4 | Human identity and SSO: IAM Identity Center, Keycloak for the lab | Not started |
+| Phase 4 | Human identity and SSO: IAM Identity Center, Keycloak for the lab | In progress (4a done) |
 | Phase 5 | Image supply chain, promotion, Terraform CI, branch protection | Complete |
 | Phase 6 | Observability, backup and restore, reference application, first AWS deployment | In progress (6.1–6.3 done; 6.4a done; 6.4b blocked on an AWS account) |
 | Phase 7 | Consistency, diagrams, DOCX export, fresh rebuild | Implemented |
@@ -165,6 +165,11 @@ tested offline and against a local emulator only.
 | 3.4.3c | Per-spoke ESO identity (plan-only): one apply per spoke account, one table of per-environment identities shared with the chart's cross-validation | Implemented (offline) |
 | 3.4.4a | Hub-to-spoke Argo CD identity on EKS (plan-only): hub role via Pod Identity, spoke roles and STANDARD access entries with no EKS access policy, one shared namespaced Role (`platform/spoke-access/role.yaml`, `make check-spoke-access`) | Implemented (offline) |
 | 3.4.4b | aws-eks GitOps profile in hub-and-spoke form: clusters generator to `spoke-<env>`/`<env>`, offline EKS cluster Secret renderer with `awsAuthConfig` and no token (`lab/eks/spoke-cluster-secret.sh`, `make eks-test-spoke-secret`) | Implemented (offline) |
+| 4a | Keycloak on the hub, the lab-only identity provider: pinned image, Pod Security restricted, realm from Git with only `${KC_*}` placeholders (secrets generated in-cluster), one test user per role, one issuer for in-cluster and port-forward callers (`make idp-install`/`idp-status`, `make check-identity`; ADR-0025, `docs/runbooks/identity.md`) | Implemented; verified on lab-multicluster |
+| 4b | Argo CD OIDC and RBAC by group (platform-admin, developer per environment, auditor), local admin as guarded break-glass | Not started |
+| 4c | Grafana OIDC with group-to-role mapping | Not started |
+| 4d | IAM Identity Center as code (permission sets, EKS access entries per role, prod elevation as a reviewed change with an expiry), offline | Not started |
+| 4e | Argo CD's production identity provider and the OIDC client-secret seeding (R-04), decided in an ADR | Not started |
 | 5.1a | Image CI: first-party `apps/smoke`, build with tests, Trivy scan failing on fixable HIGH/CRITICAL, CycloneDX SBOM (`make image-all`, `make check-supply-chain`, `.github/workflows/image.yml`) | Implemented |
 | 5.1b | Multi-platform image pushed to GHCR from `main` only, cosign keyless signature, SBOM attestation per platform, SLSA provenance, verified against the exact main-workflow identity (`make image-verify`, `docs/runbooks/image-publish.md`) | Implemented (published from `main`, package public) |
 | 5.1c-1 | Promotion tooling: `make promote` (dev ← signed digest from main, uat ← dev, prod ← uat), append-only ledger, `make check-promotion`, `promotion.yml`; lab tests independent of the workload image (`docs/runbooks/image-promotion.md`) | Implemented |
@@ -502,7 +507,7 @@ Secret lives outside both Git and Helm ownership.
 | Standard workload chart | The one Helm chart every workload uses |
 | EKS Pod Identity / IRSA | Workload-to-AWS identity (default / compatibility) |
 | External Secrets Operator + AWS Secrets Manager | Secrets, never in Git — one ESO instance per cluster |
-| IAM Identity Center + Keycloak | Human access to AWS/EKS, and to Argo CD in the local lab (planned, Phase 4) |
+| IAM Identity Center + Keycloak | Human access to AWS/EKS, and to Argo CD in the local lab (Keycloak on the hub since 4a; Argo CD login 4b, Identity Center 4d) |
 | `kind` | Local lab with no AWS service charges, for GitOps and identity-contract shape testing |
 
 ## Architecture Decision Records
@@ -538,6 +543,7 @@ table, the TAD's decisions table and the ADR files agree.
 | [0022](docs/adr/0022-backup-and-restore.md) | Backup and restore of the state outside Git | Accepted |
 | [0023](docs/adr/0023-reference-application.md) | Reference application with a data store | Accepted |
 | [0024](docs/adr/0024-sandbox-aws-session.md) | First AWS deployment as a single-account sandbox session | Accepted |
+| [0025](docs/adr/0025-lab-identity-provider.md) | Lab identity provider and human roles | Accepted |
 
 ## Runbooks
 
@@ -549,6 +555,7 @@ table, the TAD's decisions table and the ADR files agree.
 | [eks-bootstrap-order](docs/runbooks/eks-bootstrap-order.md) | EKS Bootstrap Order |
 | [eks-destroy-order](docs/runbooks/eks-destroy-order.md) | EKS Destroy Order |
 | [eks-sandbox-session](docs/runbooks/eks-sandbox-session.md) | The sandbox AWS session (Phase 6.4b) |
+| [identity](docs/runbooks/identity.md) | The lab identity provider (Keycloak) |
 | [image-promotion](docs/runbooks/image-promotion.md) | Promoting the first-party images dev → uat → prod |
 | [image-publish](docs/runbooks/image-publish.md) | Publishing and verifying the first-party image |
 | [kubernetes-to-aws-secrets-migration](docs/runbooks/kubernetes-to-aws-secrets-migration.md) | Kubernetes-Provider to AWS-Secrets-Manager Migration |

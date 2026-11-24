@@ -1,0 +1,135 @@
+# Phase 4a (ADR-0025): Keycloak, the lab-only identity provider (ADR-0005),
+# on the lab-multicluster hub. Applied by lab/identity/install.sh, which
+# substitutes __IDP_IMAGE__ and __IDP_ISSUER_HOST__ from
+# scripts/identity/_lib.sh; checked offline by lab/identity/render.sh.
+#
+# Dev mode (start-dev): embedded dev-file database on an emptyDir, plain
+# HTTP inside the cluster. A restart re-imports the realm from Git with
+# the same generated secrets (env placeholders), so nothing is lost that
+# the install cannot recreate. Never a production shape.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keycloak
+  labels:
+    eks-gitops-lab-lite.local/owner: identity-bootstrap
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.36
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.36
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.36
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    eks-gitops-lab-lite.local/owner: identity-bootstrap
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    eks-gitops-lab-lite.local/owner: identity-bootstrap
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    eks-gitops-lab-lite.local/owner: identity-bootstrap
+    app.kubernetes.io/name: keycloak
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keycloak
+      annotations:
+        # Changed by the install when the realm file changes, so the pod
+        # re-imports it.
+        eks-gitops-lab-lite.local/realm-sha256: "__IDP_REALM_SHA__"
+    spec:
+      serviceAccountName: keycloak
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 0
+        fsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: keycloak
+          image: "__IDP_IMAGE__"
+          args: ["start-dev", "--import-realm"]
+          env:
+            - name: KC_HOSTNAME
+              value: "http://__IDP_ISSUER_HOST__:8080"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: JAVA_OPTS_KC_HEAP
+              value: "-XX:MaxRAMPercentage=60"
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef: { name: keycloak-bootstrap-admin, key: username }
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: keycloak-bootstrap-admin, key: password }
+          # Every realm placeholder (client secrets, test-user passwords).
+          envFrom:
+            - secretRef:
+                name: keycloak-realm-secrets
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+          readinessProbe:
+            httpGet: { path: /health/ready, port: management }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /health/live, port: management }
+            initialDelaySeconds: 120
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /opt/keycloak/data
+            - name: realm
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: realm
+          configMap:
+            name: keycloak-realm-platform

@@ -1,0 +1,191 @@
+{
+  "realm": "platform",
+  "enabled": true,
+  "displayName": "eks-gitops platform (lab)",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": false,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "bruteForceProtected": true,
+  "groups": [
+    {
+      "name": "platform-admins"
+    },
+    {
+      "name": "developers-dev"
+    },
+    {
+      "name": "developers-uat"
+    },
+    {
+      "name": "auditors"
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "argocd",
+      "name": "Argo CD (hub)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${KC_CLIENT_SECRET_ARGOCD}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "https://localhost:8443/auth/callback"
+      ],
+      "webOrigins": [
+        "https://localhost:8443"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://localhost:8443"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "grafana",
+      "name": "Grafana (hub)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${KC_CLIENT_SECRET_GRAFANA}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:3000/login/generic_oauth"
+      ],
+      "webOrigins": [
+        "http://localhost:3000"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin-user",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "admin-user@example.invalid",
+      "firstName": "admin",
+      "lastName": "lab",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KC_PW_ADMIN_USER}",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "platform-admins"
+      ]
+    },
+    {
+      "username": "dev-user",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "dev-user@example.invalid",
+      "firstName": "dev",
+      "lastName": "lab",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KC_PW_DEV_USER}",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "developers-dev"
+      ]
+    },
+    {
+      "username": "uat-user",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "uat-user@example.invalid",
+      "firstName": "uat",
+      "lastName": "lab",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KC_PW_UAT_USER}",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "developers-uat"
+      ]
+    },
+    {
+      "username": "auditor-user",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "auditor-user@example.invalid",
+      "firstName": "auditor",
+      "lastName": "lab",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KC_PW_AUDITOR_USER}",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "auditors"
+      ]
+    },
+    {
+      "username": "nogroup-user",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "nogroup-user@example.invalid",
+      "firstName": "nogroup",
+      "lastName": "lab",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KC_PW_NOGROUP_USER}",
+          "temporary": false
+        }
+      ],
+      "groups": []
+    }
+  ]
+}

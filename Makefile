@@ -28,13 +28,14 @@
 	check-postgres-lab-chart eso-provision-db-secret db-dump-key db-restore-check \
 	check-docs-consistency check-docs-consistency-regression diagrams check-diagrams check-diagrams-regression docs-docx docs-release docs-release-regression \
 	charts-fetch backup-store-regression \
-	eks-session-preflight eks-session-plan eks-session-apply eks-session-kubeconfig eks-session-hub eks-session-verify eks-session-teardown eks-session-destroy eks-session-sweep eks-session-regression
+	eks-session-preflight eks-session-plan eks-session-apply eks-session-kubeconfig eks-session-hub eks-session-verify eks-session-teardown eks-session-destroy eks-session-sweep eks-session-regression \
+	idp-install idp-status idp-uninstall check-identity check-identity-regression
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-docs-consistency check-docs-consistency-regression check-diagrams check-diagrams-regression docs-release-regression backup-store-regression check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart gitops-render check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret eks-session-regression image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-docs-consistency check-docs-consistency-regression check-diagrams check-diagrams-regression docs-release-regression backup-store-regression check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart gitops-render check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret eks-session-regression check-identity check-identity-regression image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -283,6 +284,23 @@ lab-test-eks-identity-offline: ## Phase 3.3.4b: fully offline positive/negative 
 
 eks-test-spoke-secret: ## Phase 3.4.4b: offline matrix for lab/eks/spoke-cluster-secret.sh (EKS cluster Secret with awsAuthConfig, no token) + its selection contract with the aws-eks profile
 	@sh tests/eks/test-spoke-cluster-secret.sh
+
+# Phase 4a (ADR-0025): Keycloak, the lab-only identity provider, on the
+# lab-multicluster hub.
+idp-install: ## Phase 4a: install Keycloak on the hub (LAB_CLUSTER=hub): generated secrets kept in-cluster, realm from Git, test-user passwords in .local/identity/
+	@sh lab/identity/install.sh
+
+idp-status: ## Phase 4a: read-only live check: Ready, in-cluster issuer, one token per test user with its groups claim, wrong password refused (LAB_CLUSTER=hub)
+	@sh lab/identity/status.sh
+
+idp-uninstall: ## Phase 4a: delete namespace keycloak and .local/identity/ (LAB_CLUSTER=hub, CONFIRM=yes)
+	@sh lab/identity/uninstall.sh
+
+check-identity: ## Phase 4a: offline checks of the identity provider: pinned image, restricted pod, in-cluster issuer, realm without secrets matching the tables
+	@sh lab/identity/render.sh
+
+check-identity-regression: ## Phase 4a: 16 mutation cases for check-identity (secrets in the realm, public client, unpinned image, escalation, ...)
+	@sh tests/identity/test-identity-render.sh
 
 # Phase 6.4a (ADR-0024): the sandbox AWS session, run by an operator in
 # Phase 6.4b only (docs/runbooks/eks-sandbox-session.md). Every target
