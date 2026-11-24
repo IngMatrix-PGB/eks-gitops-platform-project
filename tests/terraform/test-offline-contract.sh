@@ -983,6 +983,54 @@ setup_other_script_writes_provider() {
 }
 run_case "another script that writes a provider \"aws\" block is rejected" reject setup_other_script_writes_provider
 
+# --- Phase 6.4a (ADR-0024): the sandbox-session exception, check 9f ------
+# The real scripts/terraform/aws-session.sh is copied into the fixture;
+# each reject case removes exactly one guard from that copy.
+SESSION_SRC="$here/scripts/terraform/aws-session.sh"
+put_session() {
+  mkdir -p "$1/scripts/terraform"
+  cp "$SESSION_SRC" "$1/scripts/terraform/aws-session.sh"
+}
+mutate_session() {
+  put_session "$1"
+  f="$1/scripts/terraform/aws-session.sh"
+  cp "$f" "$f.orig"
+  sed -i.bak -e "$2" "$f" && rm -f "$f.bak"
+  if cmp -s "$f" "$f.orig"; then
+    echo "FAIL: session mutation '$2' changed nothing" >&2
+    exit 1
+  fi
+  rm -f "$f.orig"
+}
+setup_session_real() {
+  put_session "$1"
+  printf '\neks-session-x:\n\t@bash scripts/terraform/aws-session.sh %s budget\n' "$APPLY_WORD" >> "$1/Makefile"
+}
+run_case "the real session script, and a Makefile target that calls it with '$APPLY_WORD', are accepted" accept setup_session_real
+setup_session_ci() { mutate_session "$1" '/^  \[ -z "\${CI:-}\${GITHUB_ACTIONS:-}" \] || fail/d'; }
+run_case "the session script that may run in CI is rejected" reject setup_session_ci
+setup_session_default_profile() { mutate_session "$1" '/^  \[ "\$AWS_PROFILE" != "default" \] || fail/d'; }
+run_case "the session script that accepts the default profile is rejected" reject setup_session_default_profile
+setup_session_no_env_i() { mutate_session "$1" 's#^  env -i \\$#  env \\#'; }
+run_case "the session script running aws/terraform without env -i is rejected" reject setup_session_no_env_i
+setup_session_no_allowlist() { mutate_session "$1" 's#grep -qx "\$acct" "\$SESSION_ALLOWLIST" || fail#true || fail#'; }
+run_case "the session script that skips the account allowlist is rejected" reject setup_session_no_allowlist
+setup_session_no_allowed_accounts() { mutate_session "$1" '/allowed_account_ids = /d'; }
+run_case "the session script without allowed_account_ids is rejected" reject setup_session_no_allowed_accounts
+setup_session_no_confirm() { mutate_session "$1" 's#\[ "\${CONFIRM:-}" = "yes" \] || fail#true || fail#'; }
+run_case "the session script without CONFIRM=yes is rejected" reject setup_session_no_confirm
+setup_session_stale_plan() { mutate_session "$1" 's#\[ "\$(inputs_sha "\$stack")" = "\$(cat "\$work/plan.sha")" \] || fail#true || fail#'; }
+run_case "the session script that applies a stale saved plan is rejected" reject setup_session_stale_plan
+setup_session_backend() { mutate_session "$1" 's#init -backend=false#init -backend-config=bucket=x#'; }
+run_case "the session script with a backend configuration is rejected" reject setup_session_backend
+setup_session_late_identity() { mutate_session "$1" '/^check_identity$/d'; }
+run_case "the session script that dispatches before the identity check is rejected" reject setup_session_late_identity
+setup_session_workflow() {
+  put_session "$1"
+  printf '\n      - run: bash scripts/terraform/aws-session.sh sweep\n' >> "$1/.github/workflows/validate.yml"
+}
+run_case "a workflow that calls the session script is rejected" reject setup_session_workflow
+
 # --- Phase 5.2b (ADR-0019): check 9d, the static-analysis gate. ---------
 STATIC_SRC="$here/scripts/terraform/static-analysis.sh"
 put_static() {

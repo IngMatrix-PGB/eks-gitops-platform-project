@@ -157,3 +157,22 @@ run "hub_private_subnets_untagged" {
     error_message = "The hub runs no Karpenter, so its subnets carry no discovery tag."
   }
 }
+
+# Phase 6.4a: the session wires the hub's NAT IP into the spoke's
+# eks_public_access_cidrs; the output must exist and carry one IP per NAT.
+run "nat_public_ips_output_per_nat" {
+  command = plan
+
+  variables {
+    aws_region         = "us-east-1"
+    vpc_cidr           = "10.0.0.0/16"
+    availability_zones = ["us-east-1a", "us-east-1b"]
+    owner              = "not-a-real-owner-handle"
+    environment        = "platform"
+  }
+
+  assert {
+    condition     = length(output.nat_public_ips) == 1
+    error_message = "A non-prod VPC has exactly one NAT EIP, so the hub egresses from exactly one public IP."
+  }
+}

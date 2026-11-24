@@ -2,6 +2,11 @@
 
 **`DESIGNED` / `NOT DEPLOYED` / `NOT VALIDATED AGAINST AWS` — `ACTUAL COST: USD 0`.**
 
+> Since Phase 6.4a this order is scripted for one sandbox account by
+> [eks-sandbox-session](eks-sandbox-session.md)
+> ([ADR-0024](../adr/0024-sandbox-aws-session.md)). This runbook stays
+> the reference for the multi-account design.
+
 This runbook documents the future order of operations to bring the
 `aws-eks` GitOps profile from "identity preflight only"
 ([ADR-0014](../adr/0014-eks-application-identity-boundary.md)) to an
@@ -102,8 +107,8 @@ running it requires an AWS account and budget that do not exist today.
    read-only access on this repository for the new cluster's Argo CD —
    never the same credential used by the `local-kind` lab.
 8. **Root Application with the `aws-eks` profile.** Apply a root
-   Application manifest (not yet created — this phase deliberately does
-   not create `root-application-aws-eks.yaml`) whose `gitops/bootstrap`
+   Application manifest (`gitops/root-application-aws-eks.yaml` since
+   Phase 6.4a, applied by `bootstrap.sh` with `EKS_SESSION_APPLY=1`) whose `gitops/bootstrap`
    chart values set `profile: aws-eks`. Since Phase 3.4.4b this runs on
    the hub only: its clusters generator selects the spoke Secrets from
    step 2a (`awsEks` in `gitops/bootstrap/values.yaml`) and creates one

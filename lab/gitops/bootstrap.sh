@@ -14,13 +14,13 @@
 # local-kind - every existing invocation of this script, with no
 # PROFILE set, takes the exact same branch as before this parameter
 # existed, byte-for-byte unchanged messages/exit codes). "aws-eks" is
-# DESIGNED / NOT DEPLOYED / NOT VALIDATED AGAINST AWS - ACTUAL COST:
-# USD 0. It runs the fail-closed EKS identity preflight
-# (check_eks_cluster_identity(), scripts/lab/_lib.sh) and computes a
-# non-secret fingerprint, then stops deliberately - this script does
-# not yet apply any Application for aws-eks (no root-application-aws-
-# eks.yaml exists to apply, and none is created by this phase). Any
-# other PROFILE value fails closed immediately.
+# NOT VALIDATED AGAINST AWS until Phase 6.4b. It runs the fail-closed
+# EKS identity preflight (check_eks_cluster_identity(), scripts/lab/
+# _lib.sh) and computes a non-secret fingerprint, then stops - unless
+# EKS_SESSION_APPLY=1 (Phase 6.4a, set only by lab/eks/session-hub.sh),
+# which applies gitops/root-application-aws-eks.yaml on the EKS hub with
+# the same absent/no-op/drift contract as the local profiles. Any other
+# PROFILE value fails closed immediately.
 #
 # Phase 2.7.4: PROFILE now defaults to the target cluster's own profile
 # (local-kind on lab-lite, unchanged; local-multicluster on the
@@ -188,18 +188,58 @@ eks_region="${EKS_REGION:-}"
 eks_endpoint="${EKS_ENDPOINT:-}"
 revision="${REVISION:-}"
 
-echo "gitops-bootstrap: profile=aws-eks (DESIGNED / NOT DEPLOYED / NOT VALIDATED AGAINST AWS - ACTUAL COST: USD 0). Running identity preflight only - this profile never applies anything yet."
+# Phase 6.4a (ADR-0024): the aws-eks root Application reads the public
+# HTTPS URL, so no Git credential is copied to AWS.
+eks_root_app_file="gitops/root-application-aws-eks.yaml"
+eks_repo_url="https://github.com/${GITOPS_OWNER_REPO}.git"
 
-if ! check_eks_cluster_identity "$profile" "$eks_kubeconfig" "$eks_context" "$eks_cluster_name" "$eks_region" "$eks_endpoint" "$revision" "$GITOPS_REPO_URL"; then
+echo "gitops-bootstrap: profile=aws-eks (NOT VALIDATED AGAINST AWS until Phase 6.4b). Running the identity preflight; the root Application is applied only with EKS_SESSION_APPLY=1 (make eks-session-hub)."
+
+if ! check_eks_cluster_identity "$profile" "$eks_kubeconfig" "$eks_context" "$eks_cluster_name" "$eks_region" "$eks_endpoint" "$revision" "$eks_repo_url"; then
   echo "FAIL: aws-eks identity preflight rejected ($EKS_IDENTITY_CASE): $EKS_IDENTITY_DETAIL" >&2
   exit 1
 fi
 echo "OK: aws-eks identity preflight passed - $EKS_IDENTITY_DETAIL"
 
-eks_fp="$(eks_identity_fingerprint "$profile" "$eks_context" "$eks_cluster_name" "$eks_region" "$eks_endpoint" "$revision" "$GITOPS_REPO_URL")"
+eks_fp="$(eks_identity_fingerprint "$profile" "$eks_context" "$eks_cluster_name" "$eks_region" "$eks_endpoint" "$revision" "$eks_repo_url")"
 echo "OK: identity fingerprint (non-secret - profile/context/cluster/region/endpoint/revision/repoURL only): $eks_fp"
 
-echo "gitops-bootstrap: aws-eks preflight complete. Stopping here by design - no root-application-aws-eks.yaml exists to apply, and this phase (Phase 3.3.4b/3.3.5, EKS identity boundary only) authorizes no mutation against any EKS cluster. A future, separately authorized phase defines the actual apply step, per docs/runbooks/eks-bootstrap-order.md."
+if [ "${EKS_SESSION_APPLY:-0}" != "1" ]; then
+  echo "gitops-bootstrap: aws-eks preflight complete. Stopping here - set EKS_SESSION_APPLY=1 (make eks-session-hub, docs/runbooks/eks-sandbox-session.md) to apply $eks_root_app_file."
+  exit 0
+fi
+
+# Never pkubectl: the EKS hub is reached only through the explicit,
+# already identity-checked kubeconfig and context (ADR-0014).
+ekubectl() { KUBECONFIG="$eks_kubeconfig" "$KUBECTL_BIN" --kubeconfig "$eks_kubeconfig" --context "$eks_context" "$@"; }
+eks_app_get() { ekubectl -n argocd get application "$GITOPS_ROOT_APP_NAME" -o "jsonpath=$1" 2>/dev/null; }
+eks_desired="repoURL=${eks_repo_url}|targetRevision=${revision}|profile=aws-eks"
+eks_live() { printf 'repoURL=%s|targetRevision=%s|profile=%s' "$(eks_app_get '{.spec.source.repoURL}')" "$(eks_app_get '{.spec.source.targetRevision}')" "$(eks_app_get '{.spec.source.helm.parameters[?(@.name=="profile")].value}')"; }
+
+if ekubectl -n argocd get application "$GITOPS_ROOT_APP_NAME" >/dev/null 2>&1; then
+  if [ "$(eks_live)" = "$eks_desired" ]; then
+    echo "OK: root Application '$GITOPS_ROOT_APP_NAME' on the EKS hub already matches ($eks_desired) - true no-op"
+    exit 0
+  fi
+  echo "FAIL: root Application '$GITOPS_ROOT_APP_NAME' on the EKS hub drifted - refusing to reconcile automatically" >&2
+  echo "      desired: $eks_desired" >&2
+  echo "      live:    $(eks_live)" >&2
+  exit 1
+fi
+
+mkdir -p .local/eks-sandbox
+eks_apply_file=".local/eks-sandbox/root-application-aws-eks.${revision##*/}.yaml"
+sed -e "s#targetRevision: ${GITOPS_DEFAULT_REVISION}#targetRevision: ${revision}#" \
+    -e "s#value: ${GITOPS_DEFAULT_REVISION}#value: ${revision}#" \
+    "$eks_root_app_file" > "$eks_apply_file"
+echo "gitops-bootstrap: applying $eks_root_app_file on the EKS hub (revision ${revision}) ..."
+ekubectl apply -f "$eks_apply_file"
+if [ "$(eks_live)" != "$eks_desired" ]; then
+  echo "FAIL: post-apply verification did not match ($(eks_live))" >&2
+  exit 1
+fi
+echo "OK: root Application '$GITOPS_ROOT_APP_NAME' applied on the EKS hub and verified"
+echo "gitops-bootstrap: OK"
 ;;
 
 *)

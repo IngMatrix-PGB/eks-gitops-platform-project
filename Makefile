@@ -27,13 +27,14 @@
 	backup-uninstall backup-now backup-restore-check backup-drill-spoke backup-drill-hub \
 	check-postgres-lab-chart eso-provision-db-secret db-dump-key db-restore-check \
 	check-docs-consistency check-docs-consistency-regression diagrams check-diagrams check-diagrams-regression docs-docx docs-release docs-release-regression \
-	charts-fetch backup-store-regression
+	charts-fetch backup-store-regression \
+	eks-session-preflight eks-session-plan eks-session-apply eks-session-kubeconfig eks-session-hub eks-session-verify eks-session-teardown eks-session-destroy eks-session-sweep eks-session-regression
 
 help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-docs-consistency check-docs-consistency-regression check-diagrams check-diagrams-regression docs-release-regression backup-store-regression check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart gitops-render check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-docs-consistency check-docs-consistency-regression check-diagrams check-diagrams-regression docs-release-regression backup-store-regression check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart gitops-render check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret eks-session-regression image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -282,6 +283,39 @@ lab-test-eks-identity-offline: ## Phase 3.3.4b: fully offline positive/negative 
 
 eks-test-spoke-secret: ## Phase 3.4.4b: offline matrix for lab/eks/spoke-cluster-secret.sh (EKS cluster Secret with awsAuthConfig, no token) + its selection contract with the aws-eks profile
 	@sh tests/eks/test-spoke-cluster-secret.sh
+
+# Phase 6.4a (ADR-0024): the sandbox AWS session, run by an operator in
+# Phase 6.4b only (docs/runbooks/eks-sandbox-session.md). Every target
+# needs AWS_PROFILE set to the sandbox profile; none runs in validate or CI.
+eks-session-preflight: ## Phase 6.4a: read-only check of the sandbox account (profile, allowlist, budget, leftovers, add-on versions)
+	@bash scripts/terraform/aws-session.sh preflight
+
+eks-session-plan: ## Phase 6.4a: saved plan for one stack (STACK=budget|network-platform|eks-platform|network-dev|eks-dev|identity-dev)
+	@bash scripts/terraform/aws-session.sh plan "$(STACK)"
+
+eks-session-apply: ## Phase 6.4a: apply the saved plan of one stack (STACK=..., CONFIRM=yes)
+	@bash scripts/terraform/aws-session.sh apply "$(STACK)"
+
+eks-session-kubeconfig: ## Phase 6.4a: write .local/kubeconfig-eks-hub and .local/kubeconfig-eks-dev
+	@bash scripts/terraform/aws-session.sh kubeconfig
+
+eks-session-hub: ## Phase 6.4a: spoke access + ESO on dev, the dev secret's synthetic value, Argo CD + spoke registration + root Application on the hub
+	@sh lab/eks/session-hub.sh up
+
+eks-session-verify: ## Phase 6.4a: read-only evidence (Applications, ExternalSecret through Pod Identity, /api/info) into .local/eks-sandbox/evidence/
+	@sh lab/eks/session-verify.sh
+
+eks-session-teardown: ## Phase 6.4a: remove what Argo CD deployed and its root, before any destroy
+	@sh lab/eks/session-hub.sh teardown
+
+eks-session-destroy: ## Phase 6.4a: destroy one stack, last one first (STACK=..., CONFIRM=yes)
+	@bash scripts/terraform/aws-session.sh destroy "$(STACK)"
+
+eks-session-sweep: ## Phase 6.4a: read-only; fails while anything billable is left in the sandbox region
+	@bash scripts/terraform/aws-session.sh sweep
+
+eks-session-regression: ## Phase 6.4a: every guard of scripts/terraform/aws-session.sh, with fake aws and terraform (no AWS, no network)
+	@sh tests/eks/test-aws-session-guards.sh
 
 image-build: ## Phase 5.1a: docker build of apps/smoke (unit tests in the build stage) + non-root check, saved as .tools/out/image/smoke.tar
 	@sh scripts/image/image.sh build

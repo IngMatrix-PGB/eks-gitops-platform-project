@@ -228,6 +228,18 @@ run "karpenter_on_spokes" {
   }
 }
 
+run "sandbox_spoke_shares_system_nodes" {
+  command = plan
+  variables {
+    system_nodes_dedicated = false
+  }
+
+  assert {
+    condition     = length(local.eks_managed_node_groups.system.taints) == 0 && length(module.karpenter) == 1
+    error_message = "With system_nodes_dedicated = false (Phase 6.4a sandbox) the spoke's system nodes are untainted; Karpenter's IaC stays in place."
+  }
+}
+
 run "hub_has_no_karpenter" {
   command = plan
   variables {
@@ -299,6 +311,50 @@ run "hub_argocd_identity" {
     condition     = length(aws_iam_role.argocd_manager) == 0 && length(local.argocd_access_entry_resolved) == 0
     error_message = "The hub has no argocd-manager role and no Argo CD access entry of its own."
   }
+}
+
+# --- Phase 6.4a: single-account sandbox (hub and dev spoke in one account) -----
+run "hub_single_account_with_dev_only" {
+  command = plan
+  variables {
+    environment       = "platform"
+    hub_account_id    = null
+    spoke_account_ids = { dev = format("%012d", 3) }
+  }
+
+  assert {
+    condition     = jsondecode(aws_iam_role_policy.argocd_hub[0].policy).Statement[0].Resource == ["arn:aws:iam::${format("%012d", 3)}:role/eks-gitops-dev-argocd-manager"]
+    error_message = "With only dev listed, the hub's Argo CD may assume exactly the dev argocd-manager role."
+  }
+}
+
+run "spoke_trusts_hub_in_the_same_account" {
+  command = plan
+
+  assert {
+    condition     = aws_iam_role.argocd_manager[0].name != local.argocd_hub_role_name
+    error_message = "The spoke's argocd-manager role and the hub's Argo CD role must have different names, so both fit in one account."
+  }
+}
+
+run "rejects_unknown_spoke_key" {
+  command = plan
+  variables {
+    environment       = "platform"
+    hub_account_id    = null
+    spoke_account_ids = { dev = format("%012d", 11), qa = format("%012d", 12) }
+  }
+  expect_failures = [var.spoke_account_ids]
+}
+
+run "rejects_empty_spoke_accounts" {
+  command = plan
+  variables {
+    environment       = "platform"
+    hub_account_id    = null
+    spoke_account_ids = {}
+  }
+  expect_failures = [var.spoke_account_ids]
 }
 
 run "rejects_spoke_without_hub_account" {
