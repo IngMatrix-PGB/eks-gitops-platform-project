@@ -170,7 +170,7 @@ tested offline and against a local emulator only.
 | 6.4b | The authorized session: apply, prove EKS Pod Identity and hub-to-spoke registration, destroy, record the bill | Not started |
 | 7a | Consistency pass: statuses aligned, Definition-of-Done scorecard in the TAD, this README's "What this demonstrates" and quick start, `check-docs-consistency` | Implemented |
 | 7b | Four draw.io diagrams derived from the TAD (topology, delivery, secrets and identity, reference application), source and SVG committed; `make diagrams` exports, `check-diagrams` compares each export with its source | Implemented |
-| 7c | DOCX export of the TAD with pandoc, attached to a GitHub Release | Not started |
+| 7c | DOCX export of the TAD with pandoc (`make docs-docx`, checked after building) and a guarded GitHub Release with the DOCX and SVGs (`make docs-release`) | Implemented; first release after merge |
 | 7d | Fresh lab rebuild following only this README (destructive, needs an explicit go) | Not started |
 
 Full detail and ordering live in the TAD's
@@ -519,6 +519,7 @@ table, the TAD's decisions table and the ADR files agree.
 |---|---|
 | [argocd-upgrade](docs/runbooks/argocd-upgrade.md) | Upgrading Argo CD's values on a running cluster |
 | [backup-restore](docs/runbooks/backup-restore.md) | Backup and restore on lab-multicluster |
+| [docs-release](docs/runbooks/docs-release.md) | Publishing the architecture documents (DOCX and diagrams) |
 | [eks-bootstrap-order](docs/runbooks/eks-bootstrap-order.md) | EKS Bootstrap Order |
 | [eks-destroy-order](docs/runbooks/eks-destroy-order.md) | EKS Destroy Order |
 | [image-promotion](docs/runbooks/image-promotion.md) | Promoting the first-party images dev → uat → prod |

@@ -5,17 +5,17 @@
 | Field | Value |
 |---|---|
 | Document | eks-gitops-platform-project Technical Architecture |
-| Version | 0.39.0 |
+| Version | 0.40.0 |
 | Status | Implementation in progress |
-| Phase | Phases 0–3 and 5 complete (Phase 3 as offline-tested code, never applied); Phase 4 not started; Phase 6.1–6.3 implemented and runtime-tested on `lab-multicluster`; Phase 6.4 planned and blocked on a sandbox AWS account; Phase 7 in progress (7a–7b) |
-| Last updated | 2026-11-20 |
+| Phase | Phases 0–3 and 5 complete (Phase 3 as offline-tested code, never applied); Phase 4 not started; Phase 6.1–6.3 implemented and runtime-tested on `lab-multicluster`; Phase 6.4 planned and blocked on a sandbox AWS account; Phase 7 in progress (7a–7c) |
+| Last updated | 2026-11-23 |
 
 This document is the **single, authoritative source of truth** for the
 project's architecture: scope, principles, topology, control plane,
 identity, secrets, security, risks, evidence, and roadmap. Diagrams are
 inline Mermaid, versioned as part of this file. The four draw.io
 diagrams under "Diagrams (draw.io)" and the DOCX export (Phase 7c) are
-derived from this document, never an independent source: when the
+derived from this document ([docs-release](../runbooks/docs-release.md)), never an independent source: when the
 architecture changes, this document changes first, then the diagrams.
 
 Architectural reasoning here stands on this project's own requirements
@@ -860,6 +860,7 @@ Implementation Status" below.
 | Backup of the state outside Git (ADR-0022, Phase 6.2a) | `CODE-CONFIRMED`, offline-tested, and runtime-tested on lab-multicluster, 2026-11-18 | `make backup-render` (hub/dev/uat/prod: pinned images, exact ClusterRole, no wildcard or `cluster-admin`, restricted pods, own bucket, schedule scope, Helm objects excluded); 5 backup alerts unit-tested with 2 regression mutations. Live: Velero on hub, dev and uat with locations Available; backups hold exactly the out-of-Git Secrets; `make backup-restore-check` restored 15 Secrets identical; store stopped → `VeleroBackupStorageUnavailable` on all three, recovered and resolved after restart; Velero 42–81 Mi per member, store 17 MiB |
 | Documentation consistency and Definition-of-Done scorecard (Phase 7a) | `CODE-CONFIRMED`, offline-tested; live no-op check on lab-multicluster, 2026-11-19 | `make check-docs-consistency` (23 ADRs, 53 README phase rows, 12 runbooks) and its 15 mutation cases in `make validate`; the hub switched to the pushed branch and back to `main` with `make gitops-switch-revision` (root Application UID unchanged, 3 stable reads each way) and all seven Applications stayed Synced/Healthy |
 | draw.io diagrams (Phase 7b) | `CODE-CONFIRMED`, offline-tested | Four `.drawio` sources and their SVG exports (draw.io 31.3.2, source embedded); `make check-diagrams` and its 11 mutation cases in `make validate`; each diagram rendered and reviewed by hand before commit; live no-op check on lab-multicluster, 2026-11-20: the hub switched to the pushed branch and back to `main` with `make gitops-switch-revision` (root Application UID unchanged) and all seven Applications stayed Synced/Healthy |
+| DOCX export and documentation release (Phase 7c) | `CODE-CONFIRMED`; DOCX built and checked locally, 2026-11-23; no release published yet | `make docs-docx` on version 0.39.0: every TAD section and all 23 ADRs found in the DOCX read back as text, no Mermaid source, 4 figures embedded, generic patterns and local denylist clean; rendered to PDF (95 pages) and reviewed by hand. `make docs-release-regression`: 11 cases (every refusal, and publication through a fake `gh`) in `make validate` |
 | Argo CD's production AWS identity provider | `UNKNOWN` | Explicitly undecided pending Phase 3/4 (ADR-0005) |
 | Crossplane-based self-service infrastructure | `OUT OF SCOPE` | Deferred past the MVP (ADR-0001) |
 | Progressive Delivery as primary production gate | `OUT OF SCOPE` | Not the design (see "Application Delivery and Promotion") |
@@ -964,7 +965,7 @@ No capability above `NOT IMPLEMENTED`/`PROPOSED`/`UNKNOWN` is claimed as
 - **Phase 7 — Final evidence, draw.io, and DOCX:** in progress.
   - **7a — Consistency and Definition-of-Done scorecard:** implemented. Statuses aligned across the TAD and README, the "Definition of Done — status" table, README "What this demonstrates" and quick start, and `check-docs-consistency` in `make validate`.
   - **7b — draw.io diagrams:** implemented. Four diagrams under "Diagrams (draw.io)" (topology, delivery and promotion, secrets and identity, reference application), `.drawio` source and SVG export committed; `make diagrams` exports locally, `check-diagrams` in `make validate` compares each SVG's embedded copy with its source without needing draw.io.
-  - **7c — DOCX export:** not started. Generated with pandoc from this document and attached to a GitHub Release, never committed.
+  - **7c — DOCX export:** implemented. `make docs-docx` builds the DOCX locally with pandoc (this document, the draw.io figures as PNG, an appendix with each ADR's Decision section, links pinned to the release tag) and checks what it produced; `make docs-release CONFIRM=yes` publishes it with the SVGs as GitHub Release `docs-v<version>`, refusing unless it runs on a clean, pushed `main` with a DOCX built from that commit ([docs-release](../runbooks/docs-release.md)). The first release is cut after this change merges.
   - **7d — Fresh lab rebuild from the README:** not started; destructive, needs an explicit go. Its result is the evidence for the first Definition-of-Done criterion.
 
 ## Definition of Done
