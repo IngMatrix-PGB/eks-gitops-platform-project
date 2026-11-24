@@ -94,9 +94,18 @@ bk_store_ensure_cluster() {
 # bk_store_ensure_user <user> <bucket> - Phase 6.3d: the same for any user
 # and bucket (the database dumps get dumps-<env>, owned by user
 # dumps-<env>, so Velero's users cannot read them and the reverse).
+#
+# It prints "created" or "kept" only once the store lists the bucket with
+# that owner. The bucket directory is made on the host, and Docker
+# Desktop's bind mount can take a moment to show it inside the store;
+# until then change-bucket-owner answers InternalError (Phase 7d found it
+# on a fresh lab). So the owner change is retried for up to
+# BK_OWNER_TRIES seconds (default 10), and a bucket that never gets its
+# owner fails instead of being reported as owned.
 bk_store_ensure_user() {
   bec_user="$1"; bec_bucket="$2"
-  python3 -I - "$BK_STORE_IAM" "$bec_user" <<'PY' || return 1
+  bec_state="$(python3 -I - "$BK_STORE_IAM" "$bec_user" <<'PY'
+
 import json, os, secrets, string, sys
 path, user = sys.argv[1], sys.argv[2]
 data = {"accessAccounts": {}}
@@ -117,8 +126,19 @@ if user not in acc:
 else:
     print("kept")
 PY
+)" || return 1
   mkdir -p "$BK_STORE_DIR/data/$bec_bucket"
-  bk_store_admin change-bucket-owner --bucket "$bec_bucket" --owner "$bec_user" >/dev/null
+  bec_try=1
+  until bk_store_admin change-bucket-owner --bucket "$bec_bucket" --owner "$bec_user" >/dev/null 2>&1 \
+    && bk_store_admin list-buckets 2>/dev/null | awk -v b="$bec_bucket" -v o="$bec_user" '$1 == b && $2 == o { f = 1 } END { exit !f }'; do
+    if [ "$bec_try" -ge "${BK_OWNER_TRIES:-10}" ]; then
+      echo "FAIL: the store did not give bucket '$bec_bucket' to '$bec_user' after $bec_try tries" >&2
+      return 1
+    fi
+    bec_try=$((bec_try + 1))
+    sleep 1
+  done
+  echo "$bec_state"
 }
 
 # bk_store_secret <cluster> - prints that cluster's S3 secret key (to be

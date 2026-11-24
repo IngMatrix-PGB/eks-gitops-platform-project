@@ -87,10 +87,35 @@ every kubeconfig lives in `.local/`; nothing touches your global
 
 ```bash
 make tools-install          # pinned kind, kubectl, helm, terraform, trivy and the rest into .tools/bin/
+make charts-fetch           # the pinned Argo CD, ESO and metrics-server charts into .tools/charts/
 make validate               # every offline check CI runs
 make mc-up                  # hub + dev + uat: Argo CD, registration, ESO, source Secrets, bootstrap from main
 make lab-mc-status          # identity, registration and memory per member
 ```
+
+`make mc-up` stops once per spoke to ask for its **source value**: a lab
+value you make up (for example `openssl rand -hex 16`), different for
+each spoke, which ESO copies into the workloads' Secret. It is never
+printed. For an unattended run, put it in a mode-600 file and pass its
+path as `MC_SOURCE_VALUE_FILE`.
+
+When `mc-up` ends, `platform-smoke-*` is Healthy, but `platform-notes-*`
+and `platform-postgres-*` stay Degraded until their database
+credentials exist (the reference-app-data runbook below). After that,
+External Secrets and the kubelet retry with backoff, so they can take
+about 15 minutes to turn Healthy on their own.
+
+A second checkout of a repository whose deploy key already exists (for
+example a fresh clone next to your first one) must reuse that key:
+copy `.local/gitops/github-deploy-key` and `github-deploy-key.pub` from
+the first checkout, mode 600. Otherwise `mc-up` generates a new key and
+refuses to replace the one on GitHub. A fork has no key yet, so this
+does not apply.
+
+Measured on a fresh clone (Phase 7d, 8 GiB for Docker): `tools-install`
+about 1 minute, `validate` about 2.5 minutes, cluster creation about
+1.5 minutes; the observability and backup runbooks add about 7 and 6
+minutes.
 
 Then, optionally, in this order:
 
@@ -117,7 +142,7 @@ account are set in `scripts/gitops/_lib.sh`, `gitops/root-application.yaml` and
 | Phase 4 | Human identity and SSO: IAM Identity Center, Keycloak for the lab | Not started |
 | Phase 5 | Image supply chain, promotion, Terraform CI, branch protection | Complete |
 | Phase 6 | Observability, backup and restore, reference application, first AWS deployment | In progress (6.1–6.3 done; 6.4 blocked on an AWS account) |
-| Phase 7 | Consistency, diagrams, DOCX export, fresh rebuild | In progress |
+| Phase 7 | Consistency, diagrams, DOCX export, fresh rebuild | Implemented |
 
 An `Accepted` ADR records an approved decision, not necessarily a fully
 implemented one. Nothing has been deployed to AWS: the AWS code is
@@ -170,8 +195,8 @@ tested offline and against a local emulator only.
 | 6.4b | The authorized session: apply, prove EKS Pod Identity and hub-to-spoke registration, destroy, record the bill | Not started |
 | 7a | Consistency pass: statuses aligned, Definition-of-Done scorecard in the TAD, this README's "What this demonstrates" and quick start, `check-docs-consistency` | Implemented |
 | 7b | Four draw.io diagrams derived from the TAD (topology, delivery, secrets and identity, reference application), source and SVG committed; `make diagrams` exports, `check-diagrams` compares each export with its source | Implemented |
-| 7c | DOCX export of the TAD with pandoc (`make docs-docx`, checked after building) and a guarded GitHub Release with the DOCX and SVGs (`make docs-release`) | Implemented; first release after merge |
-| 7d | Fresh lab rebuild following only this README (destructive, needs an explicit go) | Not started |
+| 7c | DOCX export of the TAD with pandoc (`make docs-docx`, checked after building) and a guarded GitHub Release with the DOCX and SVGs (`make docs-release`) | Implemented; `docs-v0.40.0` published |
+| 7d | Fresh lab rebuild following only this README: destroyed, rebuilt in a fresh clone, every Application Healthy; the gaps it found are fixed in "Quick start" | Implemented |
 
 Full detail and ordering live in the TAD's
 [Delivery Roadmap](docs/architecture/technical-architecture.md#delivery-roadmap).
