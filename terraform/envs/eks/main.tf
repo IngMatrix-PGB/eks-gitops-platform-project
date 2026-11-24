@@ -49,8 +49,10 @@ locals {
       iam_role_attach_cni_policy = false
 
       # On spokes only add-ons and controllers (Karpenter included) run
-      # here; workloads land on Karpenter-provisioned nodes.
-      taints = local.karpenter_enabled ? {
+      # here; workloads land on Karpenter-provisioned nodes. Phase 6.4a:
+      # a sandbox session installs no Karpenter controller, so it sets
+      # system_nodes_dedicated = false and the workloads share these nodes.
+      taints = local.karpenter_enabled && var.system_nodes_dedicated ? {
         critical_addons_only = {
           key    = "CriticalAddonsOnly"
           value  = "true"
@@ -232,8 +234,8 @@ module "karpenter" {
 
 # --- Phase 3.4.4a: hub-to-spoke Argo CD identity (TAD R-05) --------------------
 # Hub (platform): Argo CD's application controller and server get one role
-# through Pod Identity; it may only assume the three spoke argocd-manager
-# roles. Spokes: an argocd-manager role with no IAM permissions, assumable
+# through Pod Identity; it may only assume the argocd-manager roles of the
+# spokes it lists. Spokes: an argocd-manager role with no IAM permissions, assumable
 # only by that hub role, mapped by the access entry above to the
 # argocd-manager Kubernetes group. Argo CD's cluster Secret for a spoke
 # carries awsAuthConfig (clusterName, roleARN) - never a token.

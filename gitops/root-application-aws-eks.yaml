@@ -1,0 +1,49 @@
+# Phase 6.4a (ADR-0024): the root Application of the aws-eks profile,
+# applied once on the EKS hub by lab/gitops/bootstrap.sh
+# (PROFILE=aws-eks EKS_SESSION_APPLY=1, through `make eks-session-hub`).
+# Same chart and shape as gitops/root-application.yaml, with two
+# differences:
+#   - profile=aws-eks: the clusters generator selects the EKS spokes the
+#     hub registered (lab/eks/spoke-cluster-secret.sh), never in-cluster;
+#   - the public HTTPS URL of this repository, so no Git credential is
+#     ever copied to AWS (the repository is public; a private fork needs
+#     a read-only credential here instead).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-bootstrap
+  namespace: argocd
+  labels:
+    eks-gitops-lab-lite.local/owner: gitops-bootstrap
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/IngMatrix-PGB/eks-gitops-platform-project.git
+    targetRevision: main
+    path: gitops/bootstrap
+    helm:
+      parameters:
+        - name: gitRevision
+          value: main
+        - name: profile
+          value: aws-eks
+        - name: repoURL
+          value: https://github.com/IngMatrix-PGB/eks-gitops-platform-project.git
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

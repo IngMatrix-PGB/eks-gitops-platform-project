@@ -172,15 +172,21 @@ variable "hub_account_id" {
 
 variable "spoke_account_ids" {
   type        = map(string)
-  description = "Hub only: the dev, uat and prod account IDs whose argocd-manager roles the hub's Argo CD may assume. Never committed; supplied at apply time."
+  description = "Hub only: the spoke account IDs (keys dev, uat, prod) whose argocd-manager roles the hub's Argo CD may assume. A subset is allowed (Phase 6.4a: a sandbox session registers only dev, in the hub's own account). Never committed; supplied at apply time."
   default     = null
 
   validation {
-    condition     = var.spoke_account_ids == null || try(toset(keys(var.spoke_account_ids)) == toset(["dev", "uat", "prod"]) && alltrue([for id in values(var.spoke_account_ids) : can(regex("^[0-9]{12}$", id))]), false)
-    error_message = "spoke_account_ids must have exactly the keys dev, uat and prod, each a 12-digit AWS account ID."
+    condition     = var.spoke_account_ids == null || try(length(var.spoke_account_ids) > 0 && length(setsubtract(toset(keys(var.spoke_account_ids)), toset(["dev", "uat", "prod"]))) == 0 && alltrue([for id in values(var.spoke_account_ids) : can(regex("^[0-9]{12}$", id))]), false)
+    error_message = "spoke_account_ids must have one or more of the keys dev, uat and prod (no other key), each a 12-digit AWS account ID."
   }
   validation {
     condition     = var.environment != "platform" || var.spoke_account_ids != null
     error_message = "The hub (platform) needs spoke_account_ids to know which spoke roles its Argo CD may assume."
   }
+}
+
+variable "system_nodes_dedicated" {
+  type        = bool
+  description = "Spokes only: taint the system node group CriticalAddonsOnly, so workloads run only on Karpenter nodes. Phase 6.4a: a sandbox session installs no Karpenter controller and sets false; every other use keeps the default."
+  default     = true
 }

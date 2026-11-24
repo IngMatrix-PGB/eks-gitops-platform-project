@@ -141,7 +141,7 @@ account are set in `scripts/gitops/_lib.sh`, `gitops/root-application.yaml` and
 | Phase 3 | Terraform for AWS: organization, accounts, network, EKS, identity, registry (offline-tested, never applied) | Complete |
 | Phase 4 | Human identity and SSO: IAM Identity Center, Keycloak for the lab | Not started |
 | Phase 5 | Image supply chain, promotion, Terraform CI, branch protection | Complete |
-| Phase 6 | Observability, backup and restore, reference application, first AWS deployment | In progress (6.1–6.3 done; 6.4 blocked on an AWS account) |
+| Phase 6 | Observability, backup and restore, reference application, first AWS deployment | In progress (6.1–6.3 done; 6.4a done; 6.4b blocked on an AWS account) |
 | Phase 7 | Consistency, diagrams, DOCX export, fresh rebuild | Implemented |
 
 An `Accepted` ADR records an approved decision, not necessarily a fully
@@ -190,8 +190,8 @@ tested offline and against a local emulator only.
 | 6.3b | `apps/notes` (Python) behind smoke's `/api/notes`, PostgreSQL from `charts/postgres-lab` with credentials through ESO, NetworkPolicies between the three; both images through the signed pipeline (ADR-0023, `docs/runbooks/reference-app-data.md`) | Implemented; tested on the dev spoke with local images (Argo CD delivery in 6.3c) |
 | 6.3c | Delivery of the reference application through Argo CD: one ApplicationSet per component (smoke unchanged), `make promote APP=notes`, per-app ledgers; dev → uat → prod promotions as separate PRs (ADR-0023, `docs/runbooks/image-promotion.md`) | Implemented; dev and uat promoted and verified live, prod promoted and verified offline (prod spoke opt-in) |
 | 6.3d+e | Logical dumps of the notes database every 6 h to the lab store (own bucket per environment), `make db-dump-key`, non-destructive `make db-restore-check`; scrape tells smoke and notes apart, `/api/notes` in smoke's SLO, five alerts and a dashboard (ADR-0022/0021 amendments, `docs/runbooks/backup-restore.md`) | Implemented |
-| 6.4 | First real AWS deployment: hub plus one spoke in a single sandbox account, created and destroyed in one authorized session, measured cost recorded | Planned; blocked until a personal sandbox AWS account exists |
-| 6.4a | Code for the session (offline, USD 0): single-account mode, aws-eks root Application, session scripts with a destroy sweep, budget first | Not started |
+| 6.4 | First real AWS deployment: hub plus one spoke in a single sandbox account, created and destroyed in one authorized session, measured cost recorded | In progress (6.4a implemented; 6.4b blocked until a personal sandbox AWS account exists) |
+| 6.4a | Code for the session (offline, USD 0): single-account mode, aws-eks root Application, session scripts with a destroy sweep, budget first; one guarded runner for real AWS, checked by `check-terraform-offline` (ADR-0024, `docs/runbooks/eks-sandbox-session.md`) | Implemented (offline-tested; first run in 6.4b) |
 | 6.4b | The authorized session: apply, prove EKS Pod Identity and hub-to-spoke registration, destroy, record the bill | Not started |
 | 7a | Consistency pass: statuses aligned, Definition-of-Done scorecard in the TAD, this README's "What this demonstrates" and quick start, `check-docs-consistency` | Implemented |
 | 7b | Four draw.io diagrams derived from the TAD (topology, delivery, secrets and identity, reference application), source and SVG committed; `make diagrams` exports, `check-diagrams` compares each export with its source | Implemented |
@@ -537,6 +537,7 @@ table, the TAD's decisions table and the ADR files agree.
 | [0021](docs/adr/0021-observability.md) | Observability for the hub and the spokes | Accepted |
 | [0022](docs/adr/0022-backup-and-restore.md) | Backup and restore of the state outside Git | Accepted |
 | [0023](docs/adr/0023-reference-application.md) | Reference application with a data store | Accepted |
+| [0024](docs/adr/0024-sandbox-aws-session.md) | First AWS deployment as a single-account sandbox session | Accepted |
 
 ## Runbooks
 
@@ -547,6 +548,7 @@ table, the TAD's decisions table and the ADR files agree.
 | [docs-release](docs/runbooks/docs-release.md) | Publishing the architecture documents (DOCX and diagrams) |
 | [eks-bootstrap-order](docs/runbooks/eks-bootstrap-order.md) | EKS Bootstrap Order |
 | [eks-destroy-order](docs/runbooks/eks-destroy-order.md) | EKS Destroy Order |
+| [eks-sandbox-session](docs/runbooks/eks-sandbox-session.md) | The sandbox AWS session (Phase 6.4b) |
 | [image-promotion](docs/runbooks/image-promotion.md) | Promoting the first-party images dev → uat → prod |
 | [image-publish](docs/runbooks/image-publish.md) | Publishing and verifying the first-party image |
 | [kubernetes-to-aws-secrets-migration](docs/runbooks/kubernetes-to-aws-secrets-migration.md) | Kubernetes-Provider to AWS-Secrets-Manager Migration |

@@ -12,4 +12,5 @@ terraform/envs/identity	ok	fail	skip	ok	EKS pod identity association needs the c
 terraform/envs/network	ok	ok	ok	ok	-
 terraform/envs/org	ok	fail	skip	fail	Organizations EnableAWSServiceAccess rejects malware-protection.guardduty.amazonaws.com; Budgets DescribeSubscribersForNotification returns 500
 terraform/envs/registry	ok	ok	ok	ok	-
+terraform/envs/sandbox-budget	ok	fail	skip	fail	Budgets DescribeSubscribersForNotification returns 500 (the same gap as account-baseline), so apply cannot read back the alerts and destroy cannot find the budget
 terraform/envs/security	ok	fail	skip	ok	AWS managed policy AWSConfigRoleForOrganizations missing; Access Analyzer CreateAnalyzer, GuardDuty organization configuration and Security Hub UpdateSecurityHubConfiguration not implemented

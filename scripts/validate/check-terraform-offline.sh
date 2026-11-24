@@ -350,12 +350,18 @@ plan_apply_pattern='terraform[^"'"'"'\n]*[[:space:]](plan|apply)([[:space:]]|$)'
 # A call to that script (Makefile, workflow) is not itself a Terraform
 # invocation, so its path is removed from a line before matching.
 emulator_script="scripts/terraform/emulator.sh"
+# Phase 6.4a (ADR-0024): the second exception. scripts/terraform/aws-
+# session.sh may run plan/apply/destroy against one allowlisted sandbox
+# account, operator-only; check 9f below fails the whole check if it loses
+# a guard, and no workflow may call it.
+session_script="scripts/terraform/aws-session.sh"
 plan_apply_hits=""
 while IFS= read -r f; do
   [ -z "$f" ] && continue
   [ -f "$f" ] || continue
   [ "$f" = "$emulator_script" ] && continue
-  hit="$(sed 's#scripts/terraform/emulator\.sh##g' "$f" 2>/dev/null | grep -Ein "$plan_apply_pattern" 2>/dev/null || true)"
+  [ "$f" = "$session_script" ] && continue
+  hit="$(sed -e 's#scripts/terraform/emulator\.sh##g' -e 's#scripts/terraform/aws-session\.sh##g' "$f" 2>/dev/null | grep -Ein "$plan_apply_pattern" 2>/dev/null || true)"
   if [ -n "$hit" ]; then
     plan_apply_hits="$plan_apply_hits
 $f:
@@ -409,7 +415,7 @@ while IFS= read -r f; do
   [ -z "$f" ] && continue
   [ -f "$f" ] || continue
   case "$f" in
-    "$emulator_script"|scripts/validate/check-terraform-offline.sh|tests/terraform/test-offline-contract.sh) continue ;;
+    "$emulator_script"|"$session_script"|scripts/validate/check-terraform-offline.sh|tests/terraform/test-offline-contract.sh) continue ;;
   esac
   # A heredoc line or an echo/printf that emits the block's opening line.
   hit="$(grep -En '^[[:space:]]*((echo|printf)[^#]*)?provider[[:space:]]+\\?"aws\\?"[[:space:]]*\{' "$f" 2>/dev/null || true)"
@@ -420,10 +426,42 @@ done <<EOF_FILES
 $real_cmd_files
 EOF_FILES
 if [ -n "$gen_provider_hits" ]; then
-  bad "a provider \"aws\" block is written outside $emulator_script:"
+  bad "a provider \"aws\" block is written outside $emulator_script and $session_script:"
   printf '%s\n' "$gen_provider_hits" >&2
 else
-  ok "no script, Makefile or workflow other than $emulator_script writes a provider \"aws\" block"
+  ok "no script, Makefile or workflow other than $emulator_script and $session_script writes a provider \"aws\" block"
+fi
+
+# --- 9f. The sandbox-session exception keeps every guard (Phase 6.4a,
+# ADR-0024). Each marker is one layer that keeps plan/apply on one
+# allowlisted sandbox account, run by an operator; losing any of them, or
+# any workflow calling the script, fails closed. -------------------------
+if [ -f "$session_script" ]; then
+  ss_missing=""
+  ss_need() { grep -Eq -- "$2" "$session_script" || ss_missing="$ss_missing
+  - $1"; }
+  ss_need "never in CI" '^  \[ -z "\$\{CI:-\}\$\{GITHUB_ACTIONS:-\}" \] \|\| fail'
+  ss_need "AWS_PROFILE=default refused" '^  \[ "\$AWS_PROFILE" != "default" \] \|\| fail'
+  ss_need "aws and terraform run under env -i" '^  env -i \\$'
+  ss_need "account checked against the allowlist" 'grep -qx "\$acct" "\$SESSION_ALLOWLIST" \|\| fail'
+  ss_need "provider pinned to the allowlisted account" 'allowed_account_ids = \[\\"\$SESSION_ACCOUNT\\"\]'
+  ss_need "apply and destroy need CONFIRM=yes" '\[ "\$\{CONFIRM:-\}" = "yes" \] \|\| fail'
+  ss_need "apply takes only an unchanged saved plan" '\[ "\$\(inputs_sha "\$stack"\)" = "\$\(cat "\$work/plan.sha"\)" \] \|\| fail'
+  if grep -Eq 'backend-config|backend "' "$session_script"; then ss_missing="$ss_missing
+  - no backend configuration (local state under .local/ only)"; fi
+  # The guards run, in this order, before the command is dispatched.
+  if [ "$(awk '/^check_not_ci$/{a=NR} /^check_profile$/{b=NR} /^check_identity$/{c=NR} /^case "\$cmd" in$/{d=NR} END{print (a && b && c && d && a < b && b < c && c < d) ? "ok" : "bad"}' "$session_script")" != ok ]; then
+    ss_missing="$ss_missing
+  - CI, profile and identity checked before any command"
+  fi
+  wf_calls="$(grep -rln 'aws-session' "$workflow_dir" 2>/dev/null || true)"
+  if [ -n "$wf_calls" ]; then ss_missing="$ss_missing
+  - no workflow calls it (found in: $(echo $wf_calls))"; fi
+  if [ -n "$ss_missing" ]; then
+    bad "$session_script lost a guard that keeps plan/apply on the sandbox account:$ss_missing"
+  else
+    ok "$session_script keeps every sandbox guard (not in CI, no default profile, env -i, allowlist, allowed_account_ids, CONFIRM=yes, unchanged saved plan, no backend, guards first, no workflow)"
+  fi
 fi
 
 # --- 9e. The emulator workflow keeps its shape (Phase 5.2c, ADR-0018):
