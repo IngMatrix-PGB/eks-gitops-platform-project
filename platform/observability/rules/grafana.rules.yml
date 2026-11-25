@@ -1,0 +1,17 @@
+# Phase 4c (ADR-0025): people sign in to Grafana through Keycloak; the
+# local admin is Grafana's break-glass. grafana_api_login_post_total
+# counts successful sign-ins with a local password only (measured: a
+# refused password does not count, an OAuth sign-in counts in
+# grafana_api_login_oauth_total). SSO users have no local password, so
+# any local sign-in is the admin. The "grafana" job's own scrape gap is
+# not alerted here: Grafana down is visible on its own.
+groups:
+  - name: grafana-access
+    rules:
+      - alert: GrafanaLocalAdminLogin
+        expr: sum by (cluster) (increase(grafana_api_login_post_total{job="grafana"}[10m])) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "Someone signed in to Grafana with a local password (break-glass)"
+          description: "{{ $value }} local sign-in(s) in the last 10 minutes on cluster {{ $labels.cluster }}. People sign in through Keycloak; the local admin is break-glass only."

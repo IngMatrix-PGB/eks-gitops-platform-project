@@ -1,7 +1,7 @@
 # ADR-0025: Lab identity provider and human roles
 
 **Status:** Accepted
-**Date:** 2026-11-24 (4a), amended 2026-11-24 (4b)
+**Date:** 2026-11-24 (4a), amended 2026-11-24 (4b, 4c)
 
 ## Context
 
@@ -22,8 +22,8 @@ Measured on main at `433c558`, before Phase 4:
   observability running.
 
 Phase 4 is split into 4a–4e. This ADR records the decisions of 4a, the
-identity provider itself, and of 4b, Argo CD's login and roles. 4c–4e
-amend it.
+identity provider itself, of 4b, Argo CD's login and roles, and of 4c,
+Grafana's. 4d–4e amend it.
 
 ## Decision
 
@@ -127,6 +127,44 @@ Decision:
   values. SSO login fails there, and access is through kubectl or
   break-glass until 4e decides the AWS identity provider.
 
+### 4c — Grafana login and roles
+
+- **Generic OAuth to Keycloak** in the Grafana values
+  (`scripts/observability/_lib.sh`): client `grafana`, PKCE, and the
+  auth, token and userinfo URLs on the lab issuer. `root_url` is
+  `http://localhost:3000`, so the callback is the realm's allowed
+  redirect.
+- **The client secret is never in the values.** Grafana reads it as
+  `GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET` from the optional Secret
+  `monitoring/obs-grafana-oidc`. `make idp-install` writes it and
+  restarts Grafana only when the value is new or changed, since Grafana
+  reads its environment only at start. Optional means Grafana still
+  starts without it: SSO then fails and the local admin works.
+- **Roles from the `groups` claim:**
+
+  | Group | Grafana role |
+  |---|---|
+  | platform-admins | Admin |
+  | auditors, developers-dev, developers-uat | Viewer |
+  | none | refused |
+
+  `role_attribute_strict` refuses a user whose groups map to no role,
+  the same rule as Argo CD's empty default. That is stricter than the
+  Phase 4 plan, which gave everyone else Viewer. SSO never makes a
+  Grafana server admin, and the role is synced on every sign-in.
+- **The local admin stays** as Grafana's own break-glass (Secret
+  `obs-grafana-admin`), and every local sign-in pages:
+  `GrafanaLocalAdminLogin` fires on any increase of
+  `grafana_api_login_post_total` in 10 minutes. Measured: a refused
+  password does not count, and OAuth sign-ins count in their own
+  counter. SSO users have no local password, so a local sign-in is the
+  admin. Unlike Argo CD there is no on/off switch: the Grafana admin
+  also runs the stack's own checks, through basic auth, which does not
+  count as a sign-in.
+- **Measured:** Grafana 13 lets a Viewer list data sources
+  (`/api/datasources` answers 200). The line between the roles is the
+  `datasources:write` permission, and the live test checks that.
+
 ## Alternatives Considered
 
 - **Keycloak as an Argo CD Application.** Rejected: Argo CD's login
@@ -157,6 +195,12 @@ Decision:
 - **4b: break-glass by deleting the admin password, or a second local
   account.** Rejected: both are harder to undo under pressure than a
   flag, and a second account is one more standing credential.
+- **4c: everyone signed in gets Viewer** (the Phase 4 plan). Rejected:
+  a user with no group would read every dashboard and log, while Argo
+  CD gives the same user nothing.
+- **4c: Grafana's JWT auth with the Keycloak token.** Rejected: it adds
+  a second login path to test and secure. The live test runs the real
+  redirect flow with curl instead.
 - **4b: an alert from Prometheus on the admin flag.** Not possible
   without kube-state-metrics on the hub, which no other need justifies.
   The flag's alert is posted to Alertmanager directly; the use of the
@@ -172,6 +216,9 @@ Decision:
   the Secret `argocd-oidc` exists. `make argocd-test-sso` checks it.
 - The `argocd` namespace may hold `argocd-oidc`; `make argocd-uninstall`
   accepts it in its namespace inventory.
+- 4c: people sign in to Grafana through Keycloak. After `make
+  obs-install` on a fresh hub, `make idp-install` must run again to
+  write `obs-grafana-oidc`; `make obs-uninstall` removes it.
 - The hub runs one more pod of about 0.75 GiB. The install refuses a
   first start with less than 800 MiB of free Docker memory, and
   `IDP_SKIP_MEMORY_CHECK=1` overrides that.
@@ -193,6 +240,9 @@ Decision:
   `argocd-initial-admin-secret`, never printed. Turning the admin off
   ends its sessions at once. The password is not rotated after a
   break-glass; the runbook says how to do it by hand.
+- 4c: Grafana's client secret reaches the pod only through its
+  environment, from a Secret; the values and the Helm release hold none.
+  A user without a mapped group cannot sign in.
 
 ## Validation Method
 
@@ -235,3 +285,24 @@ Decision:
     alert resolved.
   - The rule files have promtool unit tests, and `make obs-status`
     checks the API server is scraped.
+- 4c: `make check-grafana-sso`, in `make validate`, checks on the
+  generated values:
+  - anonymous off, generic OAuth on with the realm's `grafana` client
+    and PKCE, and the three URLs on the lab issuer;
+  - no client secret in the values, only the optional Secret that
+    `idp-install` writes;
+  - a callback the realm allows;
+  - the role expression built from the realm's groups, strict, no
+    server admin, role sync on.
+
+  `make check-grafana-sso-regression` adds 13 mutation cases.
+- 4c, live on the hub: `make obs-test-sso` runs Grafana → Keycloak login
+  form → Grafana callback with curl for each test user:
+  - admin-user is Admin with `datasources:write`;
+  - auditor-user, dev-user and uat-user are Viewers without it;
+  - nogroup-user is refused with no session;
+  - with no session the API answers 401;
+  - the local admin still signs in, and that sign-in raises
+    `GrafanaLocalAdminLogin` in Alertmanager.
+
+  `grafana.rules.yml` has a promtool unit test.

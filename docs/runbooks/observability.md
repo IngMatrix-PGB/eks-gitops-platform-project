@@ -81,9 +81,25 @@ hub's kubeconfig:
 .tools/bin/kubectl --kubeconfig .local/kubeconfig-hub -n monitoring port-forward svc/obs-grafana 3000:80
 ```
 
-The Grafana admin password is in the Secret `obs-grafana-admin`, key
-`admin-password`. Read it into your clipboard. Do not paste it into a
-terminal you share.
+Since Phase 4c, sign in with **Sign in with Keycloak**, as a test user
+of the lab's Keycloak ([identity](identity.md); its "Browser access"
+steps give the browser the issuer's name):
+
+| Group | Grafana role |
+|---|---|
+| platform-admins | Admin |
+| auditors, developers-dev, developers-uat | Viewer |
+| none | refused |
+
+The client secret reaches Grafana from the Secret `obs-grafana-oidc`,
+which `make idp-install` writes (and restarts Grafana to read). After
+`make obs-install` on a fresh hub, run `LAB_CLUSTER=hub make idp-install`
+once more. `LAB_CLUSTER=hub make obs-test-sso` signs each test user in
+through the real redirect flow, with curl, and checks the roles.
+
+The local admin stays as Grafana's own break-glass. Its password is in
+the Secret `obs-grafana-admin`, key `admin-password`. Read it into your
+clipboard. Do not paste it into a terminal you share.
 
 Prometheus is at `svc/obs-prometheus-server`, port 80, and every endpoint
 asks for basic auth. To query it, use the `hub` user. Its password is in
@@ -98,8 +114,10 @@ the Secret `obs-prometheus-self`.
 | `obs-prometheus-self` | hub | password of user `hub` (Prometheus scraping itself) |
 | `obs-grafana-datasource` | hub | password of user `grafana` (the datasource) |
 | `obs-grafana-admin` | hub | Grafana admin user and password |
+| `obs-grafana-oidc` | hub | Grafana's Keycloak client secret (written by `make idp-install`, Phase 4c) |
 
-The install script generates all of them and keeps them on re-runs. They
+The install script generates all of them but `obs-grafana-oidc`, and
+keeps them on re-runs. They
 are never in Git, never printed, and never in a Helm release.
 
 Prometheus re-reads `web.yml` on each request. A user change applies as

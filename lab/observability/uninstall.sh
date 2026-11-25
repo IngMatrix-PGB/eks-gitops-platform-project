@@ -68,7 +68,9 @@ else
   uninstall_release "$OBS_LOKI_RELEASE"
   uninstall_release "$OBS_RELEASE"
   delete_named configmap "$OBS_GRAFANA_DASHBOARDS_CM"
-  for s in "$OBS_SECRET_WEB" "$OBS_SECRET_SELF" "$OBS_SECRET_GRAFANA_ADMIN" "$OBS_SECRET_GRAFANA_DS"; do
+  # Phase 4c: also the SSO client Secret idp-install wrote (make idp-install
+  # writes it again after the next obs-install).
+  for s in "$OBS_SECRET_WEB" "$OBS_SECRET_SELF" "$OBS_SECRET_GRAFANA_ADMIN" "$OBS_SECRET_GRAFANA_DS" "$OBS_SECRET_GRAFANA_OIDC"; do
     delete_named secret "$s"
   done
 fi

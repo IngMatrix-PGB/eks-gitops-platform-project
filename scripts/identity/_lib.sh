@@ -35,6 +35,11 @@ IDP_LOCAL_DIR=".local/identity"
 # lab/argocd/values-lab.yaml: $argocd-oidc:clientSecret).
 IDP_ARGOCD_NAMESPACE="argocd"
 IDP_ARGOCD_SECRET="argocd-oidc"
+# Phase 4c: where Grafana reads its client secret (envFromSecrets in
+# scripts/observability/_lib.sh; must equal OBS_SECRET_GRAFANA_OIDC).
+IDP_GRAFANA_NAMESPACE="monitoring"
+IDP_GRAFANA_DEPLOYMENT="obs-grafana"
+IDP_GRAFANA_SECRET="obs-grafana-oidc"
 # First install refuses with less free Docker memory than this.
 IDP_MIB=800
 

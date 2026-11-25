@@ -112,4 +112,27 @@ if pkubectl get namespace "$IDP_ARGOCD_NAMESPACE" >/dev/null 2>&1; then
 else
   echo "idp-install: namespace $IDP_ARGOCD_NAMESPACE absent - Argo CD's client Secret not written"
 fi
+
+# Phase 4c: Grafana's copy of its client secret, as the env var Grafana
+# reads (GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET). Grafana reads env only at
+# start, so it is restarted when the value is new or changed.
+if pkubectl -n "$IDP_GRAFANA_NAMESPACE" get deployment "$IDP_GRAFANA_DEPLOYMENT" >/dev/null 2>&1; then
+  mkdir -p "$work/grafana-oidc"
+  idp_secret_key pkubectl "$IDP_SECRET_REALM" KC_CLIENT_SECRET_GRAFANA > "$work/grafana-oidc/GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET"
+  [ -s "$work/grafana-oidc/GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET" ] || { echo "FAIL: empty grafana client secret" >&2; exit 1; }
+  have="$(pkubectl -n "$IDP_GRAFANA_NAMESPACE" get secret "$IDP_GRAFANA_SECRET" -o jsonpath='{.data.GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET}' 2>/dev/null | base64 -d 2>/dev/null | shasum -a 256 | awk '{print $1}')"
+  want="$(shasum -a 256 < "$work/grafana-oidc/GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET" | awk '{print $1}')"
+  if [ "$have" = "$want" ]; then
+    echo "OK: Secret $IDP_GRAFANA_NAMESPACE/$IDP_GRAFANA_SECRET already holds the grafana client secret - kept"
+  else
+    pkubectl -n "$IDP_GRAFANA_NAMESPACE" create secret generic "$IDP_GRAFANA_SECRET" --from-file="$work/grafana-oidc" \
+      --dry-run=client -o yaml | pkubectl apply --server-side --field-manager=identity-bootstrap -f - >/dev/null
+    pkubectl -n "$IDP_GRAFANA_NAMESPACE" rollout restart deployment/"$IDP_GRAFANA_DEPLOYMENT" >/dev/null
+    pkubectl -n "$IDP_GRAFANA_NAMESPACE" rollout status deployment/"$IDP_GRAFANA_DEPLOYMENT" --timeout=5m >/dev/null \
+      || { echo "FAIL: Grafana did not become Ready after the restart" >&2; exit 1; }
+    echo "OK: Secret $IDP_GRAFANA_NAMESPACE/$IDP_GRAFANA_SECRET written (never printed); Grafana restarted to read it"
+  fi
+else
+  echo "idp-install: Grafana ($IDP_GRAFANA_NAMESPACE/$IDP_GRAFANA_DEPLOYMENT) absent - its client Secret not written"
+fi
 echo "idp-install: OK - next: make idp-status"
