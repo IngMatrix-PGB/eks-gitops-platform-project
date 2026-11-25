@@ -139,7 +139,7 @@ account are set in `scripts/gitops/_lib.sh`, `gitops/root-application.yaml` and
 | Phase 1 | Documentation foundation (TAD, ADRs, validation) | Complete |
 | Phase 2 | Local GitOps lab: `kind`, Argo CD, ESO, standard chart, hub and spokes, resilience | Complete |
 | Phase 3 | Terraform for AWS: organization, accounts, network, EKS, identity, registry (offline-tested, never applied) | Complete |
-| Phase 4 | Human identity and SSO: IAM Identity Center, Keycloak for the lab | In progress (4a done) |
+| Phase 4 | Human identity and SSO: IAM Identity Center, Keycloak for the lab | In progress (4a–4b done) |
 | Phase 5 | Image supply chain, promotion, Terraform CI, branch protection | Complete |
 | Phase 6 | Observability, backup and restore, reference application, first AWS deployment | In progress (6.1–6.3 done; 6.4a done; 6.4b blocked on an AWS account) |
 | Phase 7 | Consistency, diagrams, DOCX export, fresh rebuild | Implemented |
@@ -166,7 +166,7 @@ tested offline and against a local emulator only.
 | 3.4.4a | Hub-to-spoke Argo CD identity on EKS (plan-only): hub role via Pod Identity, spoke roles and STANDARD access entries with no EKS access policy, one shared namespaced Role (`platform/spoke-access/role.yaml`, `make check-spoke-access`) | Implemented (offline) |
 | 3.4.4b | aws-eks GitOps profile in hub-and-spoke form: clusters generator to `spoke-<env>`/`<env>`, offline EKS cluster Secret renderer with `awsAuthConfig` and no token (`lab/eks/spoke-cluster-secret.sh`, `make eks-test-spoke-secret`) | Implemented (offline) |
 | 4a | Keycloak on the hub, the lab-only identity provider: pinned image, Pod Security restricted, realm from Git with only `${KC_*}` placeholders (secrets generated in-cluster), one test user per role, one issuer for in-cluster and port-forward callers (`make idp-install`/`idp-status`, `make check-identity`; ADR-0025, `docs/runbooks/identity.md`) | Implemented; verified on lab-multicluster |
-| 4b | Argo CD OIDC and RBAC by group (platform-admin, developer per environment, auditor), local admin as guarded break-glass | Not started |
+| 4b | Argo CD OIDC and RBAC by group (platform-admin, developer per environment, auditor), no default role, local admin off with a time-bound, alerted break-glass (`make argocd-test-sso`, `argocd-breakglass`, `check-argocd-rbac`; ADR-0025, `docs/runbooks/argocd-access.md`) | Implemented; verified on lab-multicluster |
 | 4c | Grafana OIDC with group-to-role mapping | Not started |
 | 4d | IAM Identity Center as code (permission sets, EKS access entries per role, prod elevation as a reviewed change with an expiry), offline | Not started |
 | 4e | Argo CD's production identity provider and the OIDC client-secret seeding (R-04), decided in an ADR | Not started |
@@ -507,7 +507,7 @@ Secret lives outside both Git and Helm ownership.
 | Standard workload chart | The one Helm chart every workload uses |
 | EKS Pod Identity / IRSA | Workload-to-AWS identity (default / compatibility) |
 | External Secrets Operator + AWS Secrets Manager | Secrets, never in Git — one ESO instance per cluster |
-| IAM Identity Center + Keycloak | Human access to AWS/EKS, and to Argo CD in the local lab (Keycloak on the hub since 4a; Argo CD login 4b, Identity Center 4d) |
+| IAM Identity Center + Keycloak | Human access to AWS/EKS, and to Argo CD in the local lab (Keycloak on the hub since 4a; Argo CD login since 4b; Identity Center 4d) |
 | `kind` | Local lab with no AWS service charges, for GitOps and identity-contract shape testing |
 
 ## Architecture Decision Records
@@ -549,6 +549,7 @@ table, the TAD's decisions table and the ADR files agree.
 
 | Runbook | Covers |
 |---|---|
+| [argocd-access](docs/runbooks/argocd-access.md) | Signing in to Argo CD, roles and break-glass |
 | [argocd-upgrade](docs/runbooks/argocd-upgrade.md) | Upgrading Argo CD's values on a running cluster |
 | [backup-restore](docs/runbooks/backup-restore.md) | Backup and restore on lab-multicluster |
 | [docs-release](docs/runbooks/docs-release.md) | Publishing the architecture documents (DOCX and diagrams) |

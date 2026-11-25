@@ -97,6 +97,8 @@ if [ "$role" = hub ]; then
   [ "$n_rules" = "$want_rules" ] && [ "$n_bad" = 0 ] && ok "$n_rules rules loaded, all healthy" || bad "rules loaded: $n_rules (want $want_rules), unhealthy: $n_bad"
   curl -s --netrc-file "$work/netrc" -G "$base/api/v1/query" --data-urlencode 'query=up{job="argocd-application-controller"}' \
     | jq -e '.data.result[0].value[1] == "1"' >/dev/null && ok "Argo CD application controller scraped (up=1)" || bad "Argo CD application controller not scraped"
+  curl -s --netrc-file "$work/netrc" -G "$base/api/v1/query" --data-urlencode 'query=up{job="argocd-server"}' \
+    | jq -e '.data.result[0].value[1] == "1"' >/dev/null && ok "Argo CD API server scraped (up=1)" || bad "Argo CD API server not scraped"
   for want in ${EXPECT_CLUSTERS:-}; do
     case " $clusters" in *" ${want}="*) ok "cluster '$want' present" ;; *) bad "cluster '$want' has no series in the hub" ;; esac
   done

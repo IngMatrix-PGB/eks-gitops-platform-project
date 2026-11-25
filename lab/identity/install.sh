@@ -95,4 +95,21 @@ echo "idp-install: waiting for Keycloak to be Ready (first start imports the rea
 pkubectl -n "$IDP_NAMESPACE" rollout status deployment/"$IDP_DEPLOYMENT" --timeout=10m >/dev/null \
   || { echo "FAIL: Keycloak did not become Ready - pkubectl -n $IDP_NAMESPACE logs deploy/$IDP_DEPLOYMENT" >&2; exit 1; }
 echo "OK: Keycloak Ready (image ${IDP_IMAGE%%@*}, issuer $IDP_ISSUER)"
+
+# Phase 4b: Argo CD's copy of its client secret, the Secret its
+# oidc.config names ($argocd-oidc:clientSecret). Argo CD reads only Secrets
+# labeled part-of=argocd. Written whenever Argo CD's namespace exists, so
+# an Argo CD installed later needs one more `make idp-install`.
+if pkubectl get namespace "$IDP_ARGOCD_NAMESPACE" >/dev/null 2>&1; then
+  mkdir -p "$work/argocd-oidc"
+  idp_secret_key pkubectl "$IDP_SECRET_REALM" KC_CLIENT_SECRET_ARGOCD > "$work/argocd-oidc/clientSecret"
+  [ -s "$work/argocd-oidc/clientSecret" ] || { echo "FAIL: empty argocd client secret" >&2; exit 1; }
+  pkubectl -n "$IDP_ARGOCD_NAMESPACE" create secret generic "$IDP_ARGOCD_SECRET" --from-file="$work/argocd-oidc" \
+    --dry-run=client -o yaml \
+    | .tools/bin/yq '.metadata.labels."app.kubernetes.io/part-of" = "argocd"' \
+    | pkubectl apply --server-side --field-manager=identity-bootstrap -f - >/dev/null
+  echo "OK: Secret $IDP_ARGOCD_NAMESPACE/$IDP_ARGOCD_SECRET holds the argocd client secret (never printed)"
+else
+  echo "idp-install: namespace $IDP_ARGOCD_NAMESPACE absent - Argo CD's client Secret not written"
+fi
 echo "idp-install: OK - next: make idp-status"

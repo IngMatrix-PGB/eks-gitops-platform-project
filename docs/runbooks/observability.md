@@ -205,11 +205,13 @@ controller back:
 
 No application is reconciled while the controller is at zero.
 
-The `obs` release adds one object outside `monitoring`: the Service
-`argocd/obs-argocd-application-controller-metrics`. It is removed with
-the release. Run `make obs-uninstall LAB_CLUSTER=hub` before
-`make argocd-uninstall`; otherwise the latter finds that Service and
-keeps the namespace.
+The `obs` release adds two objects outside `monitoring`: the Services
+`argocd/obs-argocd-application-controller-metrics` and, since Phase 4b,
+`argocd/obs-argocd-server-metrics` (the API server, for the break-glass
+login alert `ArgoCDLocalAdminLogin`; see
+[argocd-access](argocd-access.md)). They are removed with the release.
+Run `make obs-uninstall LAB_CLUSTER=hub` before `make argocd-uninstall`;
+otherwise the latter finds those Services and keeps the namespace.
 
 ## Change a config or a dashboard
 

@@ -1,7 +1,7 @@
 # ADR-0025: Lab identity provider and human roles
 
 **Status:** Accepted
-**Date:** 2026-11-24
+**Date:** 2026-11-24 (4a), amended 2026-11-24 (4b)
 
 ## Context
 
@@ -22,7 +22,8 @@ Measured on main at `433c558`, before Phase 4:
   observability running.
 
 Phase 4 is split into 4a–4e. This ADR records the decisions of 4a, the
-identity provider itself. 4b–4e amend it.
+identity provider itself, and of 4b, Argo CD's login and roles. 4c–4e
+amend it.
 
 ## Decision
 
@@ -67,6 +68,65 @@ identity provider itself. 4b–4e amend it.
   so the role tests run without a browser. A production IdP would not
   enable it.
 
+### 4b — Argo CD login, roles and break-glass
+
+Measured on the hub before 4b's design, with the admin still on:
+
+- Argo CD v3.5.2 accepts the `http://` issuer: no TLS or lab CA is
+  needed.
+- An `id_token` from the `argocd` client is accepted as a bearer token,
+  so the role matrix runs on the API without a browser.
+- Turning `admin.enabled` off makes Argo CD refuse the admin's existing
+  token (401 within 5 s) and new logins, with no restart. Turning it on
+  works the same way.
+- A local login increments
+  `grpc_server_handled_total{grpc_service="session.SessionService",grpc_method="Create",grpc_code="OK"}`
+  on the API server. SSO and bearer tokens never call it.
+
+Decision:
+
+- **Direct OIDC to Keycloak** in `lab/argocd/values-lab.yaml`
+  (`oidc.config`): the lab issuer, client `argocd`, and the client secret
+  only by reference, `$argocd-oidc:clientSecret`. `make idp-install`
+  writes the Secret `argocd/argocd-oidc` (label `part-of=argocd`) from
+  `keycloak-realm-secrets`. `url` is `https://localhost:8443`, the
+  address of `make argocd-port-forward`, so the SSO callback is the
+  realm's allowed redirect.
+- **Roles by group, nothing by default:** `policy.default` is empty and
+  `scopes` is `[groups]`.
+
+  | Group | Role | Grants |
+  |---|---|---|
+  | platform-admins | `role:admin` | everything |
+  | auditors | `role:readonly` | read everything, no sync |
+  | developers-dev | `role:developer-dev` | get, sync and logs on `platform/platform-*-dev`; get on project `platform` |
+  | developers-uat | `role:developer-uat` | the same on `platform/platform-*-uat` |
+  | none | none | signed in, sees nothing |
+
+  The root `platform-bootstrap` matches no developer pattern.
+- **The local admin is break-glass only.** `admin.enabled` is `false` in
+  the committed values. `make argocd-breakglass CONFIRM=yes REASON=...
+  [HOURS=1..8]` (default 1) turns it on:
+  - it records who, why, when and the expiry as annotations on
+    `argocd-cm`;
+  - it posts `ArgoCDBreakGlassActive` to the hub's Alertmanager, ending
+    at the expiry.
+
+  `make argocd-breakglass-off` turns the admin off, removes the record
+  and resolves that alert. `make argocd-breakglass-status` fails while
+  the admin is on past its expiry, or on with no record. The next
+  `make argocd-upgrade` also turns it off, since the values say `false`.
+  If Alertmanager is down, break-glass still works and prints a warning:
+  it is for when things are broken.
+- **Every local login pages.** The hub's Prometheus scrapes the API
+  server (Service `obs-argocd-server-metrics`, added by
+  `make obs-install`). `ArgoCDLocalAdminLogin` fires on any successful
+  session create in 10 minutes. `ArgoCDServerDown` (5 minutes unscraped)
+  says when that alert would be blind.
+- **Clusters without Keycloak** (lab-lite, the EKS session) get the same
+  values. SSO login fails there, and access is through kubectl or
+  break-glass until 4e decides the AWS identity provider.
+
 ## Alternatives Considered
 
 - **Keycloak as an Argo CD Application.** Rejected: Argo CD's login
@@ -84,11 +144,34 @@ identity provider itself. 4b–4e amend it.
   clean and restarts lossless.
 - **A different issuer per caller.** Rejected: OIDC validation compares
   `iss` exactly, so in-cluster and operator tokens must agree.
+- **4b: Dex in front of Keycloak.** Rejected, as in ADR-0005: one
+  connector needs no broker, and Dex would be one more pod to pin and
+  run.
+- **4b: `policy.default: role:readonly`.** Rejected: every signed-in
+  user, even one with no group, would read every Application.
+- **4b: developers scoped by AppProject.** Rejected for now: all
+  Applications share project `platform`, and one project per
+  environment would change the generated Applications and their
+  promotion. Name patterns give the same boundary, and
+  `check-argocd-rbac` keeps each pattern on its own environment.
+- **4b: break-glass by deleting the admin password, or a second local
+  account.** Rejected: both are harder to undo under pressure than a
+  flag, and a second account is one more standing credential.
+- **4b: an alert from Prometheus on the admin flag.** Not possible
+  without kube-state-metrics on the hub, which no other need justifies.
+  The flag's alert is posted to Alertmanager directly; the use of the
+  admin is alerted from Prometheus.
 
 ## Consequences
 
-- 4b and 4c configure Argo CD and Grafana against a running, tested
-  IdP, with test users already in place for the role matrix.
+- 4b configured Argo CD against the running IdP; 4c does the same for
+  Grafana.
+- People sign in to Argo CD through Keycloak and get their group's role.
+  The local admin is no longer a standing path.
+- `make idp-install` must run again after Argo CD is (re)installed, so
+  the Secret `argocd-oidc` exists. `make argocd-test-sso` checks it.
+- The `argocd` namespace may hold `argocd-oidc`; `make argocd-uninstall`
+  accepts it in its namespace inventory.
 - The hub runs one more pod of about 0.75 GiB. The install refuses a
   first start with less than 800 MiB of free Docker memory, and
   `IDP_SKIP_MEMORY_CHECK=1` overrides that.
@@ -105,6 +188,11 @@ identity provider itself. 4b–4e amend it.
 - The password grant and the `start-dev` mode are lab-only choices,
   recorded here so they are never copied to a real deployment.
 - Brute-force protection is on in the realm.
+- 4b: no Argo CD credential is in Git. The client secret is a Secret
+  reference, and the admin password stays in
+  `argocd-initial-admin-secret`, never printed. Turning the admin off
+  ends its sessions at once. The password is not rotated after a
+  break-glass; the runbook says how to do it by hand.
 
 ## Validation Method
 
@@ -125,3 +213,25 @@ identity provider itself. 4b–4e amend it.
   - a wrong password is refused.
 
   It also measures the pod's memory.
+- 4b: `make check-argocd-rbac`, in `make validate`, checks:
+  - the admin and anonymous access are off, and there is no other local
+    account;
+  - the OIDC issuer and client, the secret by reference only, and a
+    callback the realm allows;
+  - no default role, roles from `groups`;
+  - every realm group mapped to exactly its role, only platform-admins
+    as admin, no redefined built-in role, and developer grants limited
+    to get/sync/logs on their own environment.
+
+  `make check-argocd-rbac-regression` adds 18 mutation cases.
+- 4b, live on the hub:
+  - `make argocd-test-sso`: one Keycloak token per test user against the
+    Argo CD API, with list, get and dry-run sync. It proves the table
+    above, plus a forged token 401 and the admin login 401.
+  - `make argocd-test-breakglass`: off, login 401; on, login 200, the
+    token works, `ArgoCDBreakGlassActive` active, status passes, and an
+    expiry in the past makes status fail; the login raises
+    `ArgoCDLocalAdminLogin`; off, the earlier token 401, login 401, the
+    alert resolved.
+  - The rule files have promtool unit tests, and `make obs-status`
+    checks the API server is scraped.

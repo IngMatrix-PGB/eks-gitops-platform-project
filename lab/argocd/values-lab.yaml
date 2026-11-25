@@ -69,8 +69,26 @@ crds:
 
 configs:
   cm:
-    admin.enabled: true
+    # Phase 4b (ADR-0025): the local admin is break-glass only. It stays
+    # off here; `make argocd-breakglass` turns it on for a time, with a
+    # reason and an alert, and `make argocd-breakglass-off` turns it off.
+    admin.enabled: false
     users.anonymous.enabled: "false"   # chart's own key type: quoted string, not YAML boolean
+    # The address people open (make argocd-port-forward); the SSO
+    # redirect is <url>/auth/callback, the one the realm's argocd client
+    # allows.
+    url: https://localhost:8443
+    # Direct OIDC to the lab's Keycloak on the hub (ADR-0005: no Dex).
+    # The client secret is read from the Secret argocd-oidc, which
+    # `make idp-install` writes; it is never in Git. On a cluster with no
+    # Keycloak (lab-lite, the EKS session) SSO login fails and access is
+    # through kubectl or break-glass.
+    oidc.config: |
+      name: Keycloak
+      issuer: http://keycloak.keycloak.svc.cluster.local:8080/realms/platform
+      clientID: argocd
+      clientSecret: $argocd-oidc:clientSecret
+      requestedScopes: ["openid", "profile", "email"]
     # Phase 2.7.3 (ADR-0015, plan D1): which resource kinds Argo CD's
     # cluster cache watches. In-cluster (lab-lite, and the hub's own
     # argocd namespace) stays unrestricted - identical to the chart
@@ -107,5 +125,25 @@ configs:
       - apiGroups: ["batch"]
         kinds: ["Job", "CronJob"]
         clusters: ["https://eks-gitops-*-control-plane:6443"]
+  # Phase 4b: roles come from the token's flat `groups` claim. A signed-in
+  # user with no group gets nothing (policy.default empty). Developers
+  # see, sync and read logs of their own environment's Applications only.
+  rbac:
+    policy.default: ""
+    scopes: "[groups]"
+    policy.matchMode: glob
+    policy.csv: |
+      g, platform-admins, role:admin
+      g, auditors, role:readonly
+      p, role:developer-dev, applications, get, platform/platform-*-dev, allow
+      p, role:developer-dev, applications, sync, platform/platform-*-dev, allow
+      p, role:developer-dev, logs, get, platform/platform-*-dev, allow
+      p, role:developer-dev, projects, get, platform, allow
+      g, developers-dev, role:developer-dev
+      p, role:developer-uat, applications, get, platform/platform-*-uat, allow
+      p, role:developer-uat, applications, sync, platform/platform-*-uat, allow
+      p, role:developer-uat, logs, get, platform/platform-*-uat, allow
+      p, role:developer-uat, projects, get, platform, allow
+      g, developers-uat, role:developer-uat
   params:
     server.insecure: "false"            # same: quoted string, per argocd-cmd-params-cm.yaml

@@ -31,6 +31,10 @@ grafana|KC_CLIENT_SECRET_GRAFANA"
 # Operator-side copies of the test users' passwords (mode 600), for the
 # token tests of 4a and the role matrix of 4b.
 IDP_LOCAL_DIR=".local/identity"
+# Phase 4b: where Argo CD reads its client secret (oidc.config in
+# lab/argocd/values-lab.yaml: $argocd-oidc:clientSecret).
+IDP_ARGOCD_NAMESPACE="argocd"
+IDP_ARGOCD_SECRET="argocd-oidc"
 # First install refuses with less free Docker memory than this.
 IDP_MIB=800
 
