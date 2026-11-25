@@ -1,0 +1,30 @@
+# Unit tests for grafana.rules.yml (promtool test rules, Phase 4c; run by
+# make check-observability).
+rule_files:
+  - ../grafana.rules.yml
+evaluation_interval: 1m
+
+tests:
+  # One local sign-in pages at once and clears 10 minutes later; OAuth
+  # sign-ins never fire.
+  - name: a local sign-in fires, OAuth sign-ins do not
+    interval: 1m
+    input_series:
+      - series: 'grafana_api_login_post_total{job="grafana",cluster="hub"}'
+        values: '0x4 1x20'
+      - series: 'grafana_api_login_oauth_total{job="grafana",cluster="hub"}'
+        values: '0+3x25'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: GrafanaLocalAdminLogin
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: GrafanaLocalAdminLogin
+        exp_alerts:
+          - exp_labels: {severity: page, cluster: hub}
+            exp_annotations:
+              summary: "Someone signed in to Grafana with a local password (break-glass)"
+              description: "1 local sign-in(s) in the last 10 minutes on cluster hub. People sign in through Keycloak; the local admin is break-glass only."
+      - eval_time: 16m
+        alertname: GrafanaLocalAdminLogin
+        exp_alerts: []

@@ -26,6 +26,11 @@ LAB_CLUSTER=hub make idp-status
   `argocd/argocd-oidc`, which Argo CD's SSO reads. Run `idp-install`
   again after Argo CD is (re)installed. See
   [argocd-access](argocd-access.md).
+- **Grafana (Phase 4c):** when Grafana runs on the hub, the `grafana`
+  client secret is written to the Secret `monitoring/obs-grafana-oidc`,
+  and Grafana is restarted only when that value is new or changed. Run
+  `idp-install` again after `make obs-install` on a fresh hub. See
+  [observability](observability.md).
 
 `idp-status` changes nothing. It checks the issuer from inside the
 cluster and gets one token per test user, through a port-forward on
