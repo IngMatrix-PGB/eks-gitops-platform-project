@@ -1,7 +1,7 @@
 # ADR-0025: Lab identity provider and human roles
 
 **Status:** Accepted
-**Date:** 2026-11-24 (4a), amended 2026-11-24 (4b, 4c)
+**Date:** 2026-11-24 (4a), amended 2026-11-24 (4b, 4c) and 2026-11-25 (4d)
 
 ## Context
 
@@ -22,8 +22,8 @@ Measured on main at `433c558`, before Phase 4:
   observability running.
 
 Phase 4 is split into 4a–4e. This ADR records the decisions of 4a, the
-identity provider itself, of 4b, Argo CD's login and roles, and of 4c,
-Grafana's. 4d–4e amend it.
+identity provider itself, of 4b, Argo CD's login and roles, of 4c,
+Grafana's, and of 4d, human access to AWS as code. 4e amends it.
 
 ## Decision
 
@@ -165,6 +165,65 @@ Decision:
   (`/api/datasources` answers 200). The line between the roles is the
   `datasources:write` permission, and the live test checks that.
 
+### 4d — Human access to AWS through IAM Identity Center (code only)
+
+A new root, `terraform/envs/identity-center`, offline-tested and never
+applied. It belongs in the account that holds the Identity Center
+instance: the management account, or its delegated administrator.
+
+- **Inputs, not lookups:** the instance ARN, the identity store ID and
+  the account IDs (`terraform/envs/org` output `account_ids`) are
+  variables. No data source, so a plan never calls AWS.
+- **Groups in Identity Center's own directory,** with the lab realm's
+  names plus `breakglass`: platform-admins, developers-dev,
+  developers-uat, auditors, breakglass. People join groups outside
+  Terraform.
+- **Four permission sets, AWS managed policies only:**
+
+  | Permission set | Policies | Session |
+  |---|---|---|
+  | PlatformAdmin | AdministratorAccess | 1 h |
+  | Developer | ViewOnlyAccess, plus an inline `eks:DescribeCluster` on the project's clusters | 1 h |
+  | ReadOnly | ReadOnlyAccess, SecurityAudit | 4 h |
+  | BreakGlass | AdministratorAccess | 1 h |
+
+  The inline policy has no wildcard action and no `Resource "*"`.
+- **Standing access as data:**
+  - admins administer platform, dev and uat, and read security and
+    prod;
+  - developers see their own environment's account;
+  - auditors read every account;
+  - break-glass has nothing.
+
+  Prod has ReadOnly only.
+- **Time-bound elevation as code (D-5):**
+  - `elevations.auto.tfvars.json` lists the grants beyond standing
+    access, each `{group, permission_set, account, starts_at,
+    expires_at, reason}`;
+  - Terraform refuses an entry with no expiry, times other than UTC
+    `Z`, an expiry not after the start, more than 8 hours, a short
+    reason, a duplicate, or one repeating standing access;
+  - `make check-elevations`, in `validate`, fails once an entry has
+    expired, or when it starts more than 7 days ahead. An expired grant
+    therefore blocks every pull request until a change removes it, and
+    that change's apply removes it from AWS.
+- **EKS:** `terraform/envs/eks` takes two optional, path-less Identity
+  Center role ARNs:
+  - `developer_principal_arn`: `AmazonEKSViewPolicy` in the
+    environment's namespace, dev and uat only;
+  - `readonly_principal_arn`: `AmazonEKSViewPolicy` on the cluster.
+
+  PlatformAdmin and BreakGlass map to the existing admin and breakglass
+  entries.
+- **The emulator now routes `ssoadmin` and `identitystore`.**
+  `check-terraform-offline` (9b) maps each resource and data source type
+  to its AWS service and fails when one has no emulator endpoint, or
+  when a type has no mapping. Before 4d, that check was promised by a
+  comment in `scripts/terraform/emulator.sh` but did not exist.
+  Measured: the first emulator apply of this root sent its Identity
+  Center calls to the real endpoint, which refused the emulator's fake
+  credentials. Nothing was created.
+
 ## Alternatives Considered
 
 - **Keycloak as an Argo CD Application.** Rejected: Argo CD's login
@@ -201,6 +260,16 @@ Decision:
 - **4c: Grafana's JWT auth with the Keycloak token.** Rejected: it adds
   a second login path to test and secure. The live test runs the real
   redirect flow with curl instead.
+- **4d: AWS's TEAM solution for elevation** (the Phase 4 plan's other
+  option for D-5). Rejected: it is a deployed application with its own
+  approval flow, it cannot be tested offline, and it adds a standing
+  service to a project that runs nothing in AWS.
+- **4d: PowerUserAccess for developers in their account.** Rejected:
+  developers change their environment through Git and Argo CD, so
+  standing write access in the console would bypass review.
+- **4d: looking up the instance and groups with data sources.**
+  Rejected: data sources call AWS during plan, and
+  `check-terraform-offline` allows none outside its narrow list.
 - **4b: an alert from Prometheus on the admin flag.** Not possible
   without kube-state-metrics on the hub, which no other need justifies.
   The flag's alert is posted to Alertmanager directly; the use of the
@@ -216,6 +285,10 @@ Decision:
   the Secret `argocd-oidc` exists. `make argocd-test-sso` checks it.
 - The `argocd` namespace may hold `argocd-oidc`; `make argocd-uninstall`
   accepts it in its namespace inventory.
+- 4d: changing who has AWS access, standing or elevated, is a reviewed
+  pull request. An expired elevation blocks CI until it is removed.
+  Applying any of it is for a real deployment (6.4b or later); nothing
+  here has been applied.
 - 4c: people sign in to Grafana through Keycloak. After `make
   obs-install` on a fresh hub, `make idp-install` must run again to
   write `obs-grafana-oidc`; `make obs-uninstall` removes it.
@@ -240,6 +313,10 @@ Decision:
   `argocd-initial-admin-secret`, never printed. Turning the admin off
   ends its sessions at once. The password is not rotated after a
   break-glass; the runbook says how to do it by hand.
+- 4d: no standing admin, developer or break-glass access in prod;
+  every elevation is reviewed, bounded to 8 hours and visible in Git.
+  Sessions are one hour (four for ReadOnly). Identity Center has no
+  charge.
 - 4c: Grafana's client secret reaches the pod only through its
   environment, from a Secret; the values and the Helm release hold none.
   A user without a mapped group cannot sign in.
@@ -306,3 +383,17 @@ Decision:
     `GrafanaLocalAdminLogin` in Alertmanager.
 
   `grafana.rules.yml` has a promtool unit test.
+- 4d, offline:
+  - `terraform test` in `identity-center` (14 runs): the permission
+    sets, their policies and sessions, the twelve standing assignments
+    with prod ReadOnly only, and each elevation rule accepted or
+    refused;
+  - `terraform test` in `eks` (31 runs, 5 new): the two view entries,
+    their scopes, none by default, no developer in prod, no ARN with a
+    path;
+  - `make check-elevations` and 12 regression cases with a fixed clock;
+  - `check-terraform-offline` 9b and 3 new regression cases (endpoint
+    present, endpoint missing, unmapped type);
+  - the emulator coverage row for `identity-center`: plan ok; apply and
+    destroy blocked by the emulator lacking SSO Admin
+    ListTagsForResource.

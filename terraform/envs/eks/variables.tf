@@ -76,6 +76,32 @@ variable "breakglass_principal_arn" {
   description = "IAM principal ARN granted the same cluster-admin Access Entry, reserved for break-glass use only (see docs/adr/0012-network-eks-iac-foundation.md, S9.1). No default - distinct from admin_principal_arn."
 }
 
+variable "developer_principal_arn" {
+  type        = string
+  description = "Phase 4d: the account's Identity Center Developer role ARN without its path (arn:aws:iam::<account>:role/AWSReservedSSO_Developer_<random>), granted AmazonEKSViewPolicy in the environment's own namespace. Null (default): no developer access entry. Only dev and uat have developers."
+  default     = null
+
+  validation {
+    condition     = var.developer_principal_arn == null || can(regex("^arn:aws:iam::[^:/]+:role/AWSReservedSSO_Developer_[0-9a-f]+$", var.developer_principal_arn))
+    error_message = "developer_principal_arn must be an Identity Center Developer role ARN without its path: arn:aws:iam::<account>:role/AWSReservedSSO_Developer_<hex>."
+  }
+  validation {
+    condition     = var.developer_principal_arn == null || contains(["dev", "uat"], var.environment)
+    error_message = "Only dev and uat have a developer access entry; prod and the hub have none."
+  }
+}
+
+variable "readonly_principal_arn" {
+  type        = string
+  description = "Phase 4d: the account's Identity Center ReadOnly role ARN without its path, granted AmazonEKSViewPolicy on the whole cluster. Null (default): no read-only access entry."
+  default     = null
+
+  validation {
+    condition     = var.readonly_principal_arn == null || can(regex("^arn:aws:iam::[^:/]+:role/AWSReservedSSO_ReadOnly_[0-9a-f]+$", var.readonly_principal_arn))
+    error_message = "readonly_principal_arn must be an Identity Center ReadOnly role ARN without its path: arn:aws:iam::<account>:role/AWSReservedSSO_ReadOnly_<hex>."
+  }
+}
+
 variable "node_instance_types" {
   type        = list(string)
   description = "Managed node group instance types. Graviton/ARM64 default (canonical plan S8.2) - a sensible starting default, not a security- or cost-invariant value."

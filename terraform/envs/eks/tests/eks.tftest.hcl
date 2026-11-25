@@ -133,6 +133,68 @@ run "correct_access_entries_wiring" {
   }
 }
 
+# Phase 4d (ADR-0025): Identity Center read access.
+run "identity_center_view_entries" {
+  command = plan
+  variables {
+    developer_principal_arn = "arn:aws:iam::aws:role/AWSReservedSSO_Developer_0123456789abcdef"
+    readonly_principal_arn  = "arn:aws:iam::aws:role/AWSReservedSSO_ReadOnly_0123456789abcdef"
+  }
+
+  assert {
+    condition     = toset(keys(module.eks.access_entries)) == toset(["admin", "breakglass", "argocd", "developer", "readonly"])
+    error_message = "With both ARNs, the developer and read-only entries are added to the three existing ones."
+  }
+  assert {
+    condition = (
+      local.human_access_entries.developer.policy_associations.view.policy_arn == "arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy" &&
+      local.human_access_entries.developer.policy_associations.view.access_scope.type == "namespace" &&
+      local.human_access_entries.developer.policy_associations.view.access_scope.namespaces == ["dev"]
+    )
+    error_message = "A developer gets view in its own environment's namespace only."
+  }
+  assert {
+    condition = (
+      local.human_access_entries.readonly.policy_associations.view.policy_arn == "arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy" &&
+      local.human_access_entries.readonly.policy_associations.view.access_scope.type == "cluster"
+    )
+    error_message = "Read-only gets view on the whole cluster."
+  }
+}
+
+run "identity_center_entries_are_optional" {
+  command = plan
+  assert {
+    condition     = length(local.human_access_entries) == 0
+    error_message = "Without the ARNs there is no human view entry."
+  }
+}
+
+run "rejects_developer_entry_in_prod" {
+  command = plan
+  variables {
+    environment             = "prod"
+    developer_principal_arn = "arn:aws:iam::aws:role/AWSReservedSSO_Developer_0123456789abcdef"
+  }
+  expect_failures = [var.developer_principal_arn]
+}
+
+run "rejects_identity_center_role_with_its_path" {
+  command = plan
+  variables {
+    readonly_principal_arn = "arn:aws:iam::aws:role/aws-reserved/sso.amazonaws.com/us-east-1/AWSReservedSSO_ReadOnly_0123456789abcdef"
+  }
+  expect_failures = [var.readonly_principal_arn]
+}
+
+run "rejects_a_non_developer_role_as_developer" {
+  command = plan
+  variables {
+    developer_principal_arn = "arn:aws:iam::aws:role/AWSReservedSSO_PlatformAdmin_0123456789abcdef"
+  }
+  expect_failures = [var.developer_principal_arn]
+}
+
 run "cluster_name_and_capacity_per_environment" {
   command = plan
 
