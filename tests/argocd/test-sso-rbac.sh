@@ -39,10 +39,20 @@ only() { printf '%s\n' $all | grep -E -e "$1" | tr '\n' ' '; }
 
 # 2
 B='{"dryRun":true,"prune":false}'
+# idle <app> - waits (up to 60 s) until the Application runs no operation:
+# a dry-run sync is an operation too, and a second one while the first
+# runs is refused with "another operation is already in progress".
+idle() {
+  for _ in $(seq 1 30); do
+    ph="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$1" -o jsonpath='{.status.operationState.phase}' 2>/dev/null || true)"
+    [ "$ph" != Running ] && [ "$ph" != Terminating ] && return 0
+    sleep 2
+  done
+}
 # expect <user> <METHOD> <app|-> <code> - one API call, compared.
 expect() {
   if [ "$3" = - ]; then path="/api/v1/applications"; else path="/api/v1/applications/$3"; fi
-  if [ "$2" = SYNC ]; then code="$(sso_api "$work/tok.$1" POST "$path/sync" "$B")"
+  if [ "$2" = SYNC ]; then idle "$3"; code="$(sso_api "$work/tok.$1" POST "$path/sync" "$B")"
   else code="$(sso_api "$work/tok.$1" GET "$path")"; fi
   [ "$code" = "$4" ] && ok "$1: $2 ${3} -> $code" || bad "$1: $2 ${3} -> $code (want $4; $(head -c 160 "$work/body"))"
 }
