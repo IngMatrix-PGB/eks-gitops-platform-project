@@ -23,6 +23,28 @@ groups:
           summary: "Argo CD application {{ $labels.name }} has been OutOfSync for 30 minutes"
           description: "Destination {{ $labels.dest_server }}, project {{ $labels.project }}. Git and the cluster differ and automated sync has not closed the gap."
 
+      # A lost spoke connection (an expired lab token, a stopped spoke, a
+      # revoked credential): Argo CD reconciles nothing there. Measured on
+      # 2026-11-25: both lab tokens expired, connection_status went 0 and
+      # six Applications Unknown, with no alert for two hours.
+      - alert: ArgoCDClusterUnreachable
+        expr: max by (server) (argocd_cluster_connection_status) == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Argo CD cannot reach cluster {{ $labels.server }}"
+          description: "Argo CD has had no working connection to {{ $labels.server }} for 5 minutes, so nothing there is reconciled. In the lab, run make mc-spoke-rotate first (an expired spoke token); then make lab-mc-status."
+
+      - alert: ArgoCDApplicationUnknown
+        expr: max by (name, project, dest_server) (argocd_app_info{sync_status="Unknown"}) == 1
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Argo CD application {{ $labels.name }} has had an Unknown sync status for 15 minutes"
+          description: "Destination {{ $labels.dest_server }}, project {{ $labels.project }}. Argo CD cannot compare Git with the cluster; check its conditions (a ComparisonError usually means a lost cluster connection)."
+
       - alert: ArgoCDApplicationSyncFailed
         expr: sum by (name, project, dest_server) (increase(argocd_app_sync_total{phase=~"Error|Failed"}[10m])) > 0
         labels:

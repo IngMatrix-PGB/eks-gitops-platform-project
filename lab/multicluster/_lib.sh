@@ -13,7 +13,10 @@ LAB_MC_ACCESS_SA="argocd-manager"
 LAB_MC_OWNER_LABEL_KEY="eks-gitops-lab-lite.local/owner"
 LAB_MC_OWNER_LABEL_VALUE="multicluster-registration"
 LAB_MC_ENV_LABEL_KEY="platform.environment"
-LAB_MC_TOKEN_DURATION="24h"
+# 24h by default (D2 of 2.7.3). LAB_MC_TOKEN_DURATION may shorten it, for
+# the rotation tests only: spoke-register.sh refuses anything outside
+# 10m (the TokenRequest minimum) to 24h.
+LAB_MC_TOKEN_DURATION="${LAB_MC_TOKEN_DURATION:-24h}"
 LAB_MC_FIELD_MANAGER="eks-gitops-multicluster-registration"
 
 # Per-member memory budget in MiB for the preflight, from the Phase
@@ -141,4 +144,42 @@ lab_mc_spoke_role() {
     && grep -qE "^    ${LAB_MC_OWNER_LABEL_KEY}: ${LAB_MC_OWNER_LABEL_VALUE}$" "$msr_file" \
     || { echo "FAIL: $msr_file name/owner label no longer match the registration constants" >&2; return 1; }
   sed "s/SPOKE_NAMESPACE/$1/" "$msr_file" | grep -v '^#'
+}
+
+# lab_mc_token_needs_rotation <expires> <hours> - succeeds (rotate) when
+# the recorded expiry (the token-expires annotation, UTC, ...Z) is empty,
+# unreadable, or less than <hours> away; fails (keep) otherwise.
+# SPOKE_TOKEN_NOW (UTC, ...Z) overrides the clock, for the tests only.
+lab_mc_token_needs_rotation() {
+  python3 -I - "$1" "$2" "${SPOKE_TOKEN_NOW:-}" <<'PY'
+import datetime as dt, sys
+exp_s, hours_s, now_s = sys.argv[1], sys.argv[2], sys.argv[3]
+fmt = "%Y-%m-%dT%H:%M:%SZ"
+utc = dt.timezone.utc
+try:
+    hours = float(hours_s)
+except ValueError:
+    sys.exit(2)
+now = dt.datetime.strptime(now_s, fmt).replace(tzinfo=utc) if now_s else dt.datetime.now(utc)
+try:
+    exp = dt.datetime.strptime(exp_s, fmt).replace(tzinfo=utc)
+except ValueError:
+    sys.exit(0)  # missing or unreadable: rotate
+sys.exit(0 if exp - now < dt.timedelta(hours=hours) else 1)
+PY
+}
+
+# lab_mc_token_expiry <spoke> - prints the hub Secret's recorded expiry,
+# empty when the Secret or the annotation is missing.
+lab_mc_token_expiry() {
+  ckubectl "$LAB_MC_HUB" -n argocd get secret "spoke-$1" -o jsonpath='{.metadata.annotations.eks-gitops-lab-lite\.local/token-expires}' 2>/dev/null || true
+}
+
+# lab_mc_token_duration_ok <duration> - 10m to 24h, the only token
+# lifetimes spoke-register.sh issues (10m is the TokenRequest minimum).
+lab_mc_token_duration_ok() {
+  case "$1" in
+    24h|1[0-9]h|2[0-3]h|[1-9]h|[1-5][0-9]m) return 0 ;;
+    *) return 1 ;;
+  esac
 }

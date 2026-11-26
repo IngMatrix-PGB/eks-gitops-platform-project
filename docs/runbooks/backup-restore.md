@@ -162,8 +162,9 @@ It rebuilds in this order:
 6. bootstrap.
 
 Argo CD reconnects with the restored cluster Secrets while their 24 h
-tokens are valid. With expired tokens, re-register the spokes with
-`make mc-up`. The rebuilt Loki starts empty.
+tokens are valid. The drill first rotates any token with less than 2
+hours left (`lab/multicluster/token-preflight.sh`); if a token expires
+anyway, run `make mc-spoke-rotate`. The rebuilt Loki starts empty.
 
 Measured RTO: 350 s.
 

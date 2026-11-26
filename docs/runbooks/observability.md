@@ -189,9 +189,12 @@ The hub loads the rules in `platform/observability/rules/`:
 
 - **The smoke availability SLO.** Four burn-rate alerts, `page` at 14.4x
   and 6x, `ticket` at 3x and 1x.
-- **Argo CD.** Four alerts: an application Degraded for 10 minutes, an
-  application OutOfSync for 30 minutes, a failed sync, and the
-  application controller down.
+- **Argo CD.** Six alerts: an application Degraded for 10 minutes, an
+  application OutOfSync for 30 minutes, an application Unknown for 15
+  minutes, a failed sync, a cluster unreachable for 5 minutes, and the
+  application controller down. For `ArgoCDClusterUnreachable` on the
+  lab, run `make mc-spoke-rotate` first: an expired spoke token is the
+  usual cause.
 - **Reference application (Phase 6.3e).** `NotesDown`, `NotesNotReady`,
   `PostgresDown`, `NotesDumpFailed` and `NotesDumpMissing`, all `ticket`.
   smoke's SLO also counts `/api/notes`. Dashboard: "Platform / Reference
