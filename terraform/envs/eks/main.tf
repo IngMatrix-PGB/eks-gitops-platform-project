@@ -171,7 +171,7 @@ module "eks" {
     }
   }
 
-  access_entries = merge(local.argocd_access_entry_resolved, {
+  access_entries = merge(local.argocd_access_entry_resolved, local.human_access_entries, {
     admin = {
       principal_arn = var.admin_principal_arn
       policy_associations = {
@@ -230,6 +230,47 @@ module "karpenter" {
   node_iam_role_additional_policies = local.karpenter_node_additional_policies
 
   tags = module.tags.tags
+}
+
+# --- Phase 4d: human read access through IAM Identity Center (ADR-0025) ------
+# The Identity Center roles (AWSReservedSSO_<set>_<random>, created in the
+# account by terraform/envs/identity-center) are supplied at apply time,
+# like the admin and break-glass ARNs, without their IAM path (EKS access
+# entries refuse the path). Both are optional.
+#   developer: AmazonEKSViewPolicy in its own environment's namespace only
+#              (dev or uat; never prod or the hub);
+#   readonly:  AmazonEKSViewPolicy on the whole cluster.
+# AmazonEKSViewPolicy does not read Secrets.
+locals {
+  human_access_entries = merge(
+    var.developer_principal_arn == null ? {} : {
+      developer = {
+        principal_arn = var.developer_principal_arn
+        policy_associations = {
+          view = {
+            policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy"
+            access_scope = {
+              type       = "namespace"
+              namespaces = [var.environment]
+            }
+          }
+        }
+      }
+    },
+    var.readonly_principal_arn == null ? {} : {
+      readonly = {
+        principal_arn = var.readonly_principal_arn
+        policy_associations = {
+          view = {
+            policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy"
+            access_scope = {
+              type = "cluster"
+            }
+          }
+        }
+      }
+    },
+  )
 }
 
 # --- Phase 3.4.4a: hub-to-spoke Argo CD identity (TAD R-05) --------------------

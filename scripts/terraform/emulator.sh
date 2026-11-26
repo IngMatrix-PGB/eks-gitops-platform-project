@@ -44,8 +44,9 @@ COVERAGE_TABLE="$(pwd)/terraform/emulator-coverage.tsv"
 EMULATOR_ACCOUNT="123456789$(printf '%03d' 12)"
 # Every service a root module here can call. Anything not listed would
 # fall back to the real AWS endpoint, so check-terraform-offline requires
-# this list to cover every service the code uses (see emulator_services).
-EMULATOR_SERVICES="accessanalyzer budgets cloudtrail cloudwatch configservice ec2 ecr eks events guardduty iam kms logs organizations s3 s3control secretsmanager securityhub sqs ssm sts"
+# this list to cover every service the code uses (check 9b maps each
+# resource and data source type to its service).
+EMULATOR_SERVICES="accessanalyzer budgets cloudtrail cloudwatch configservice ec2 ecr eks events guardduty iam identitystore kms logs organizations s3 s3control secretsmanager securityhub sqs ssm ssoadmin sts"
 # A step that has not finished by then is reported as a timeout: an API the
 # emulator lacks makes the provider retry instead of failing.
 TF_EMULATOR_STEP_TIMEOUT="${TF_EMULATOR_STEP_TIMEOUT:-240}"

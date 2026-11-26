@@ -400,10 +400,50 @@ if [ -f "$emulator_script" ]; then
     em_missing="$em_missing
   - emulator identity checked before any plan/apply"
   fi
+  # Phase 4d: every AWS service the repository's own Terraform calls must
+  # have an emulator endpoint; a missing one would send that service's
+  # calls to the real AWS endpoint. Resource and data source types map to
+  # endpoint names here; an unknown prefix fails closed until mapped.
+  # (The pinned upstream modules' extra services - sqs, events, logs,
+  # cloudwatch - are kept in EMULATOR_SERVICES by hand.)
+  em_services="$(sed -n 's/^EMULATOR_SERVICES="\([^"]*\)"$/\1/p' "$emulator_script")"
+  em_types="$(grep_over_tf_files '^[[:space:]]*(resource|data)[[:space:]]+"aws_[a-z0-9_]+"' | sed -E 's/^[^:]+:[0-9]+:[[:space:]]*(resource|data)[[:space:]]+"(aws_[a-z0-9_]+)".*$/\2/' | sort -u)"
+  for t in $em_types; do
+    case "$t" in
+      aws_iam_policy_document|aws_region) continue ;;  # rendered client-side, no API call
+      aws_caller_identity) svc=sts ;;
+      aws_accessanalyzer_*) svc=accessanalyzer ;;
+      aws_budgets_*) svc=budgets ;;
+      aws_cloudtrail*) svc=cloudtrail ;;
+      aws_cloudwatch_log_*) svc=logs ;;
+      aws_cloudwatch_event_*) svc=events ;;
+      aws_cloudwatch_*) svc=cloudwatch ;;
+      aws_config_*) svc=configservice ;;
+      aws_ebs_*|aws_ec2_*|aws_vpc*|aws_subnet*|aws_security_group*) svc=ec2 ;;
+      aws_ecr_*) svc=ecr ;;
+      aws_eks_*) svc=eks ;;
+      aws_guardduty_*) svc=guardduty ;;
+      aws_iam_*) svc=iam ;;
+      aws_identitystore_*) svc=identitystore ;;
+      aws_kms_*) svc=kms ;;
+      aws_organizations_*) svc=organizations ;;
+      aws_s3_account_*) svc=s3control ;;
+      aws_s3_*) svc=s3 ;;
+      aws_secretsmanager_*) svc=secretsmanager ;;
+      aws_securityhub_*) svc=securityhub ;;
+      aws_sqs_*) svc=sqs ;;
+      aws_ssm_*) svc=ssm ;;
+      aws_ssoadmin_*) svc=ssoadmin ;;
+      *) em_missing="$em_missing
+  - $t: no emulator service mapped for it in check-terraform-offline (9b) - map it and add its endpoint to EMULATOR_SERVICES"; continue ;;
+    esac
+    case " $em_services " in *" $svc "*) : ;; *) em_missing="$em_missing
+  - $t calls '$svc', which has no emulator endpoint in EMULATOR_SERVICES (its calls would reach real AWS)" ;; esac
+  done
   if [ -n "$em_missing" ]; then
     bad "$emulator_script lost a guard that keeps plan/apply on the local emulator:$em_missing"
   else
-    ok "$emulator_script keeps every emulator guard (pinned image, loopback, env -i, no AWS config, allowed_account_ids, all endpoints, no backend, identity first)"
+    ok "$emulator_script keeps every emulator guard (pinned image, loopback, env -i, no AWS config, allowed_account_ids, all endpoints, an endpoint for every service the code calls, no backend, identity first)"
   fi
 fi
 

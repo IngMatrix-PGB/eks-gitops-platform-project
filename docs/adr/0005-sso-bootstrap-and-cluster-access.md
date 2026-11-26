@@ -128,3 +128,18 @@ OIDC/RBAC mechanism, not a production IdP choice; a check that no
 Terraform state file contains the OIDC secret's plaintext value; and,
 once a remote-cluster topology exists, a least-privilege review of Argo
 CD's cluster credentials. All `NOT IMPLEMENTED` today.
+
+## Amendment (Phase 4e, 2026-11-26): the two `UNKNOWN`s decided
+
+[ADR-0025](0025-lab-identity-provider.md) (4e) decides both open
+questions from vendor documentation; nothing is deployed:
+
+- **Argo CD's identity provider in AWS:** the EKS Argo CD capability,
+  signed in through IAM Identity Center. Fallback: self-managed Argo CD
+  with a Cognito user pool federated to Identity Center. Dex is still
+  not used: Identity Center would need its SAML connector, which Dex
+  reports as unmaintained.
+- **Seeding the OIDC client secret:** none exists with the capability.
+  For the fallback, Terraform creates the secret empty and the operator
+  writes the value with `put-secret-value`, so it never reaches
+  Terraform state. ESO reconciles it, in the order this ADR set.

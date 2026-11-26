@@ -967,6 +967,24 @@ run_case "the emulator script that skips the identity check before plan/apply is
 setup_emulator_backend() { mutate_emulator "$1" 's#init -backend=false#init -backend-config=bucket=x#'; }
 run_case "the emulator script with a backend configuration is rejected" reject setup_emulator_backend
 
+# Phase 4d: every service the Terraform code calls needs an emulator
+# endpoint (check 9b). The real identity-center root calls ssoadmin and
+# identitystore.
+put_identity_center() {
+  mkdir -p "$1/terraform/envs"
+  cp -R "$here/terraform/envs/identity-center" "$1/terraform/envs/identity-center"
+  rm -rf "$1/terraform/envs/identity-center/.terraform"
+}
+setup_emulator_covers_identity_center() { put_emulator "$1"; put_identity_center "$1"; }
+run_case "the real emulator script with the identity-center root (ssoadmin, identitystore endpoints) is accepted" accept setup_emulator_covers_identity_center
+setup_emulator_without_ssoadmin() { put_identity_center "$1"; mutate_emulator "$1" 's#^\(EMULATOR_SERVICES=".*\) ssoadmin\(.*"\)$#\1\2#'; }
+run_case "the emulator script without the ssoadmin endpoint, while a root uses aws_ssoadmin_*, is rejected" reject setup_emulator_without_ssoadmin
+setup_emulator_unmapped_type() {
+  put_emulator "$1"; put_identity_center "$1"
+  printf 'resource "aws_lightsail_instance" "x" {\n  name = "x"\n}\n' > "$1/terraform/envs/identity-center/zz_unmapped.tf"
+}
+run_case "a resource type with no emulator service mapping is rejected (fail closed)" reject setup_emulator_unmapped_type
+
 setup_other_script_plan() {
   mkdir -p "$1/scripts"
   printf '#!/bin/sh\n.tools/bin/terraform -chdir=terraform %s\n' "$PLAN_WORD" > "$1/scripts/other.sh"

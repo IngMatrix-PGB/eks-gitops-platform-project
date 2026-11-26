@@ -1,7 +1,7 @@
 # ADR-0025: Lab identity provider and human roles
 
 **Status:** Accepted
-**Date:** 2026-11-24 (4a), amended 2026-11-24 (4b, 4c)
+**Date:** 2026-11-24 (4a), amended 2026-11-24 (4b, 4c), 2026-11-25 (4d) and 2026-11-26 (4e)
 
 ## Context
 
@@ -22,8 +22,10 @@ Measured on main at `433c558`, before Phase 4:
   observability running.
 
 Phase 4 is split into 4a–4e. This ADR records the decisions of 4a, the
-identity provider itself, of 4b, Argo CD's login and roles, and of 4c,
-Grafana's. 4d–4e amend it.
+identity provider itself, of 4b, Argo CD's login and roles, of 4c,
+Grafana's, of 4d, human access to AWS as code, and of 4e, the two
+questions ADR-0005 left `UNKNOWN`: Argo CD's identity provider in AWS
+and how its OIDC client secret is first seeded (R-04).
 
 ## Decision
 
@@ -165,6 +167,153 @@ Decision:
   (`/api/datasources` answers 200). The line between the roles is the
   `datasources:write` permission, and the live test checks that.
 
+### 4d — Human access to AWS through IAM Identity Center (code only)
+
+A new root, `terraform/envs/identity-center`, offline-tested and never
+applied. It belongs in the account that holds the Identity Center
+instance: the management account, or its delegated administrator.
+
+- **Inputs, not lookups:** the instance ARN, the identity store ID and
+  the account IDs (`terraform/envs/org` output `account_ids`) are
+  variables. No data source, so a plan never calls AWS.
+- **Groups in Identity Center's own directory,** with the lab realm's
+  names plus `breakglass`: platform-admins, developers-dev,
+  developers-uat, auditors, breakglass. People join groups outside
+  Terraform.
+- **Four permission sets, AWS managed policies only:**
+
+  | Permission set | Policies | Session |
+  |---|---|---|
+  | PlatformAdmin | AdministratorAccess | 1 h |
+  | Developer | ViewOnlyAccess, plus an inline `eks:DescribeCluster` on the project's clusters | 1 h |
+  | ReadOnly | ReadOnlyAccess, SecurityAudit | 4 h |
+  | BreakGlass | AdministratorAccess | 1 h |
+
+  The inline policy has no wildcard action and no `Resource "*"`.
+- **Standing access as data:**
+  - admins administer platform, dev and uat, and read security and
+    prod;
+  - developers see their own environment's account;
+  - auditors read every account;
+  - break-glass has nothing.
+
+  Prod has ReadOnly only.
+- **Time-bound elevation as code (D-5):**
+  - `elevations.auto.tfvars.json` lists the grants beyond standing
+    access, each `{group, permission_set, account, starts_at,
+    expires_at, reason}`;
+  - Terraform refuses an entry with no expiry, times other than UTC
+    `Z`, an expiry not after the start, more than 8 hours, a short
+    reason, a duplicate, or one repeating standing access;
+  - `make check-elevations`, in `validate`, fails once an entry has
+    expired, or when it starts more than 7 days ahead. An expired grant
+    therefore blocks every pull request until a change removes it, and
+    that change's apply removes it from AWS.
+- **EKS:** `terraform/envs/eks` takes two optional, path-less Identity
+  Center role ARNs:
+  - `developer_principal_arn`: `AmazonEKSViewPolicy` in the
+    environment's namespace, dev and uat only;
+  - `readonly_principal_arn`: `AmazonEKSViewPolicy` on the cluster.
+
+  PlatformAdmin and BreakGlass map to the existing admin and breakglass
+  entries.
+- **The emulator now routes `ssoadmin` and `identitystore`.**
+  `check-terraform-offline` (9b) maps each resource and data source type
+  to its AWS service and fails when one has no emulator endpoint, or
+  when a type has no mapping. Before 4d, that check was promised by a
+  comment in `scripts/terraform/emulator.sh` but did not exist.
+  Measured: the first emulator apply of this root sent its Identity
+  Center calls to the real endpoint, which refused the emulator's fake
+  credentials. Nothing was created.
+
+### 4e — Argo CD's identity provider in AWS, and secret seeding
+
+Decided from vendor documentation read on 2026-11-26 (sources below).
+Nothing is deployed; the checks marked "to verify" belong to the first
+real deployment (6.4b or later).
+
+What the documentation says:
+
+- **Identity Center signs people in to a self-hosted application only
+  through SAML 2.0.** OAuth 2.0 grant flows are available only to AWS
+  managed applications; for customer managed ones, OAuth 2.0 appears
+  only as trusted identity propagation, which is for reaching AWS data,
+  not for signing in.
+- **Argo CD speaks OIDC natively and needs Dex for SAML.** Its own
+  Identity Center guide uses Dex's SAML connector and notes that group
+  attribute mapping is not officially supported by AWS.
+- **Dex's SAML connector is unmaintained,** described by Dex as likely
+  vulnerable to authentication bypass and under consideration for
+  deprecation.
+- **Amazon EKS offers Argo CD as a managed capability.** It runs in the
+  AWS control plane and signs people in with Identity Center only.
+  Identity Center groups map to three global roles (ADMIN, EDITOR,
+  VIEWER), and an AppProject role can list group IDs with its own
+  policies, so a group can be limited to one project. Target clusters
+  are reached through the capability's IAM role and access entries,
+  private clusters included. It costs USD 0.03 per hour plus USD 0.0015
+  per Application per hour (us-east-1).
+
+The decision:
+
+- **Argo CD in AWS uses the EKS Argo CD capability, signed in through
+  Identity Center.** One source of human identity for AWS, EKS and Argo
+  CD, with no IdP and no OIDC client for this project to run.
+  - Groups reuse 4d's names. platform-admins get ADMIN; auditors get
+    VIEWER.
+  - Developers get VIEWER globally and an AppProject role per
+    environment, by group ID. This needs the AppProject per environment
+    that 4b deferred: the capability scopes groups by project, not by
+    Application name pattern. To verify on the first deployment:
+    developers-dev can sync `dev` and only `dev`, as
+    `make argocd-test-sso` proves in the lab.
+  - Break-glass is Identity Center's: the `breakglass` group with an
+    elevation (4d). The capability's own admin account is for setup;
+    its tokens last at most 12 hours. To verify: how the capability
+    behaves when Identity Center is unavailable.
+  - The capability replaces the hub's self-managed Argo CD in AWS. The
+    spoke model is unchanged: one cluster entry per spoke, by EKS
+    cluster ARN, with a namespace-scoped access entry. To verify: the
+    capability accepts the namespaced Role of 3.4.4a instead of an EKS
+    access policy.
+- **Fallback, if a check above fails:** the self-managed Argo CD of
+  3.4.4/6.4a with a Cognito user pool as its OIDC provider, federated
+  to Identity Center by SAML. Cognito handles the SAML, not Dex.
+  `UNKNOWN`: whether the Identity Center groups reach the Cognito ID
+  token as a claim Argo CD can map; the Cognito pages read do not say.
+  That is the first thing to measure if the fallback is needed.
+- **Seeding the OIDC client secret (R-04):**
+  - With the capability there is no client secret: AWS operates the
+    sign-in. R-04 does not apply to that path.
+  - For the fallback: Terraform creates the Secrets Manager secret with
+    no value. The operator generates the value locally and writes it
+    with `put-secret-value` from a file, as `aws-session.sh
+    seed-secret` does since 6.4a. ESO on the hub reconciles it into
+    `argocd-oidc`. Argo CD starts with the local admin (ADR-0005's
+    order) and turns it off once OIDC works. The value never enters
+    Git, Terraform state, argv or a log.
+
+  R-04 is closed as a design for both paths.
+
+Sources (read 2026-11-26):
+
+- IAM Identity Center, customer managed applications:
+  <https://docs.aws.amazon.com/singlesignon/latest/userguide/customermanagedapps.html>
+  and
+  <https://docs.aws.amazon.com/singlesignon/latest/userguide/customermanagedapps-saml2-oauth2.html>
+- Argo CD, user management and Identity Center:
+  <https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/>
+  and
+  <https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/identity-center/>
+- Dex SAML connector: <https://dexidp.io/docs/connectors/saml/>
+- EKS Argo CD capability:
+  <https://docs.aws.amazon.com/eks/latest/userguide/argocd.html>,
+  <https://docs.aws.amazon.com/eks/latest/userguide/argocd-considerations.html>
+  and <https://docs.aws.amazon.com/eks/latest/userguide/argocd-permissions.html>;
+  pricing: <https://aws.amazon.com/eks/pricing/>
+- Cognito SAML federation:
+  <https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-saml-idp.html>
+
 ## Alternatives Considered
 
 - **Keycloak as an Argo CD Application.** Rejected: Argo CD's login
@@ -201,6 +350,28 @@ Decision:
 - **4c: Grafana's JWT auth with the Keycloak token.** Rejected: it adds
   a second login path to test and secure. The live test runs the real
   redirect flow with curl instead.
+- **4d: AWS's TEAM solution for elevation** (the Phase 4 plan's other
+  option for D-5). Rejected: it is a deployed application with its own
+  approval flow, it cannot be tested offline, and it adds a standing
+  service to a project that runs nothing in AWS.
+- **4d: PowerUserAccess for developers in their account.** Rejected:
+  developers change their environment through Git and Argo CD, so
+  standing write access in the console would bypass review.
+- **4d: looking up the instance and groups with data sources.**
+  Rejected: data sources call AWS during plan, and
+  `check-terraform-offline` allows none outside its narrow list.
+- **4e: self-managed Argo CD with Identity Center through Dex's SAML
+  connector** (Argo CD's own guide). Rejected: the connector is
+  unmaintained and flagged by Dex as likely vulnerable, and group
+  mapping relies on a workaround AWS does not support.
+- **4e: Keycloak in AWS.** Rejected: an IdP with its own database, TLS,
+  upgrades and backups to run, beside an Identity Center that already
+  holds the same people. ADR-0005 keeps Keycloak to the lab.
+- **4e: Identity Center as Argo CD's OIDC provider directly.** Not
+  possible: Identity Center offers OAuth 2.0 sign-in only to AWS managed
+  applications.
+- **4e: Terraform writes the OIDC client secret.** Rejected, as in
+  ADR-0005: the value would sit in state.
 - **4b: an alert from Prometheus on the admin flag.** Not possible
   without kube-state-metrics on the hub, which no other need justifies.
   The flag's alert is posted to Alertmanager directly; the use of the
@@ -216,6 +387,14 @@ Decision:
   the Secret `argocd-oidc` exists. `make argocd-test-sso` checks it.
 - The `argocd` namespace may hold `argocd-oidc`; `make argocd-uninstall`
   accepts it in its namespace inventory.
+- 4d: changing who has AWS access, standing or elevated, is a reviewed
+  pull request. An expired elevation blocks CI until it is removed.
+  Applying any of it is for a real deployment (6.4b or later); nothing
+  here has been applied.
+- 4e: the first AWS deployment changes shape. The hub's Argo CD is the
+  EKS capability, and the generated Applications move to one AppProject
+  per environment. The checks marked "to verify" are its acceptance
+  tests. The lab keeps Keycloak and self-managed Argo CD.
 - 4c: people sign in to Grafana through Keycloak. After `make
   obs-install` on a fresh hub, `make idp-install` must run again to
   write `obs-grafana-oidc`; `make obs-uninstall` removes it.
@@ -240,6 +419,16 @@ Decision:
   `argocd-initial-admin-secret`, never printed. Turning the admin off
   ends its sessions at once. The password is not rotated after a
   break-glass; the runbook says how to do it by hand.
+- 4d: no standing admin, developer or break-glass access in prod;
+  every elevation is reviewed, bounded to 8 hours and visible in Git.
+  Sessions are one hour (four for ReadOnly). Identity Center has no
+  charge.
+- 4e: the capability adds about USD 0.03 per hour plus USD 0.0015 per
+  Application per hour: about USD 30 per month for the lab's seven
+  Applications. That buys an Argo CD with no pods, upgrades or IdP to
+  run. Nothing is spent until 6.4b or later, with its own go. With the
+  capability no OIDC client secret exists; with the fallback, the
+  secret's value never reaches Terraform state.
 - 4c: Grafana's client secret reaches the pod only through its
   environment, from a Secret; the values and the Helm release hold none.
   A user without a mapped group cannot sign in.
@@ -306,3 +495,20 @@ Decision:
     `GrafanaLocalAdminLogin` in Alertmanager.
 
   `grafana.rules.yml` has a promtool unit test.
+- 4d, offline:
+  - `terraform test` in `identity-center` (14 runs): the permission
+    sets, their policies and sessions, the twelve standing assignments
+    with prod ReadOnly only, and each elevation rule accepted or
+    refused;
+  - `terraform test` in `eks` (31 runs, 5 new): the two view entries,
+    their scopes, none by default, no developer in prod, no ARN with a
+    path;
+  - `make check-elevations` and 12 regression cases with a fixed clock;
+  - `check-terraform-offline` 9b and 3 new regression cases (endpoint
+    present, endpoint missing, unmapped type);
+  - the emulator coverage row for `identity-center`: plan ok; apply and
+    destroy blocked by the emulator lacking SSO Admin
+    ListTagsForResource.
+- 4e, documentation only: `make check-docs-consistency` (statuses,
+  roadmap) and a review of the sources listed in 4e. The capability's
+  checks ("to verify") run on the first real deployment.

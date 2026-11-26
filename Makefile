@@ -5,7 +5,7 @@
 	tools-check tools-install lab-create lab-status lab-destroy lab-test lab-test-lifecycle lab-test-eks-identity-offline eks-test-spoke-secret image-build image-scan image-sbom image-all image-build-multi image-publish image-scan-remote image-sign image-verify image-test-verify promote promotion-verify check-promotion promote-test \
 	argocd-chart-fetch argocd-render argocd-install argocd-status argocd-uninstall argocd-port-forward \
 	argocd-test-runtime-health argocd-test-lifecycle \
-	argocd-breakglass argocd-breakglass-off argocd-breakglass-status argocd-test-sso argocd-test-breakglass check-argocd-rbac check-argocd-rbac-regression check-grafana-sso check-grafana-sso-regression obs-test-sso \
+	argocd-breakglass argocd-breakglass-off argocd-breakglass-status argocd-test-sso argocd-test-breakglass check-argocd-rbac check-argocd-rbac-regression check-grafana-sso check-grafana-sso-regression obs-test-sso check-elevations check-elevations-regression \
 	gitops-repo-setup gitops-repo-check gitops-repo-remove gitops-render gitops-bootstrap \
 	gitops-status gitops-test gitops-uninstall gitops-test-lifecycle \
 	gitops-switch-revision gitops-retire-appproject-kind gitops-resume-appproject-kind \
@@ -36,7 +36,7 @@ help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-docs-consistency check-docs-consistency-regression check-diagrams check-diagrams-regression docs-release-regression backup-store-regression check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart gitops-render check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret eks-session-regression check-identity check-identity-regression check-argocd-rbac check-argocd-rbac-regression check-grafana-sso check-grafana-sso-regression image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-docs-consistency check-docs-consistency-regression check-diagrams check-diagrams-regression docs-release-regression backup-store-regression check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart gitops-render check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret eks-session-regression check-identity check-identity-regression check-argocd-rbac check-argocd-rbac-regression check-grafana-sso check-grafana-sso-regression check-elevations check-elevations-regression image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -308,6 +308,12 @@ check-argocd-rbac: ## Phase 4b: offline checks of Argo CD's SSO and roles: admin
 
 check-argocd-rbac-regression: ## Phase 4b: mutation cases for check-argocd-rbac (admin on, wildcard grant, cross-environment developer, literal secret, ...)
 	@sh tests/argocd/test-rbac-check.sh
+
+check-elevations: ## Phase 4d: offline - fails when an Identity Center elevation in terraform/envs/identity-center/elevations.auto.tfvars.json has expired or starts more than 7 days ahead
+	@sh scripts/validate/check-elevations.sh
+
+check-elevations-regression: ## Phase 4d: 12 accept/reject cases for check-elevations with a fixed clock
+	@sh tests/validate/test-elevations.sh
 
 check-grafana-sso: ## Phase 4c: offline checks of Grafana's Keycloak sign-in: lab issuer, PKCE, no secret in the values, callback allowed by the realm, roles from the realm's groups, unmapped users refused
 	@sh lab/observability/sso-check.sh
