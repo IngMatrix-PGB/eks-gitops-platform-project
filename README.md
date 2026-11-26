@@ -38,11 +38,51 @@ boundaries.
   CI; never applied to AWS
   ([ADR-0016](docs/adr/0016-aws-organization-and-guardrails.md),
   [ADR-0018](docs/adr/0018-terraform-against-a-local-aws-emulator.md)).
+- **Human identity and least-privilege access.** In the lab, Argo CD
+  and Grafana sign people in through Keycloak with roles by group, and
+  the local admin is an alerted, time-bound break-glass. On AWS, IAM
+  Identity Center is code: no standing admin in prod, and elevation is a
+  reviewed entry that CI refuses once it expires
+  ([ADR-0025](docs/adr/0025-lab-identity-provider.md),
+  [aws-access](docs/runbooks/aws-access.md)).
 - **Honest status.** Each Definition-of-Done criterion has a status and
   its evidence in the TAD's
   [Definition of Done — status](docs/architecture/technical-architecture.md#definition-of-done--status);
   `make validate` checks that the TAD, the ADRs and this README agree.
 
+## At a glance
+
+| Measure | Value |
+|---|---|
+| Phases delivered, one reviewed pull request each | 0–7 (75 merged pull requests) |
+| Architecture decisions and runbooks | 25 ADRs, 17 runbooks |
+| Checks in `make validate`, required on every pull request | 41 targets |
+| Terraform roots and `terraform test` runs (offline, mocked AWS) | 10 roots, 119 runs |
+| Measured restore time (RTO), rebuilt from Git plus backup | spoke 556 s, hub 350 s |
+| AWS spend so far | USD 0: nothing applied without an explicit go, enforced by `check-terraform-offline` |
+
+## A 10-minute tour for reviewers
+
+1. **The design:** the [TAD](docs/architecture/technical-architecture.md)
+   and its [Definition of Done](docs/architecture/technical-architecture.md#definition-of-done--status),
+   which says what is met and what is not, with evidence.
+2. **GitOps in action:** `make gitops-switch-revision REVISION=<branch>`
+   moves the hub to another revision in place, waits for three stable
+   reads, and rolls back by itself if it does not converge
+   ([`lab/gitops/switch-revision.sh`](lab/gitops/switch-revision.sh)).
+3. **Supply chain:** [image-promotion](docs/runbooks/image-promotion.md):
+   a signed digest moves `dev` → `uat` → `prod` only through a pull
+   request, with a ledger.
+4. **Access:** `make argocd-test-sso` signs in as each role and proves
+   what it can and cannot do; `make argocd-breakglass` shows the
+   emergency path and its alert
+   ([argocd-access](docs/runbooks/argocd-access.md)).
+5. **Resilience:** `make backup-drill-spoke` deletes a spoke and
+   rebuilds it, checking every secret by hash
+   ([backup-restore](docs/runbooks/backup-restore.md)).
+6. **AWS without spending:** `terraform/envs/*` with its tests, and the
+   emulator run in CI
+   ([ADR-0018](docs/adr/0018-terraform-against-a-local-aws-emulator.md)).
 
 ## Target architecture, in brief
 
