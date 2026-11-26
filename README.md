@@ -56,7 +56,7 @@ boundaries.
 |---|---|
 | Phases delivered, one reviewed pull request each | 0–7 (75 merged pull requests) |
 | Architecture decisions and runbooks | 25 ADRs, 17 runbooks |
-| Checks in `make validate`, required on every pull request | 41 targets |
+| Checks in `make validate`, required on every pull request | 42 targets |
 | Terraform roots and `terraform test` runs (offline, mocked AWS) | 10 roots, 119 runs |
 | Measured restore time (RTO), rebuilt from Git plus backup | spoke 556 s, hub 350 s |
 | AWS spend so far | USD 0: nothing applied without an explicit go, enforced by `check-terraform-offline` |
@@ -400,6 +400,8 @@ make argocd-install LAB_CLUSTER=hub           # Argo CD on the hub only
 make gitops-repo-setup LAB_CLUSTER=hub        # repository Secret on the hub
 make mc-spoke-register SPOKE=dev              # namespace-scoped credential, 24h token; re-run rotates it
 make mc-spoke-register SPOKE=uat
+make mc-spoke-rotate                          # rotate any spoke token with < 8h left (MIN_HOURS=<n>)
+make mc-spoke-rotate-schedule                 # optional: a LaunchAgent rotates every 6h (unschedule removes it)
 make lab-mc-status                            # identity, registration (never the token), memory per member
 make mc-test-registration REVISION=<branch>   # mutating end-to-end registration proof
 make lab-mc-destroy

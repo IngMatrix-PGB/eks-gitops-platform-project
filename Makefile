@@ -17,6 +17,7 @@
 	check-terraform-offline check-terraform-offline-regression \
 	tf-emulator-up tf-emulator-down tf-emulator-plan tf-emulator-apply tf-emulator-coverage tf-emulator-ci tf-static \
 	lab-mc-create lab-mc-destroy lab-mc-status mc-spoke-register mc-spoke-deregister \
+	mc-spoke-rotate mc-spoke-rotate-schedule mc-spoke-rotate-unschedule mc-spoke-rotate-schedule-status mc-spoke-rotate-regression \
 	lab-mc-test-lifecycle mc-test-registration \
 	mc-spoke-eso-install mc-spoke-source-secret mc-bootstrap mc-up mc-test-e2e \
 	workload-test-resilience \
@@ -36,7 +37,7 @@ help: ## Show this help
 	@echo "eks-gitops-platform-project - available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-validate: check-markdown check-links check-adr check-docs-consistency check-docs-consistency-regression check-diagrams check-diagrams-regression docs-release-regression backup-store-regression check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart gitops-render check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret eks-session-regression check-identity check-identity-regression check-argocd-rbac check-argocd-rbac-regression check-grafana-sso check-grafana-sso-regression check-elevations check-elevations-regression image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
+validate: check-markdown check-links check-adr check-docs-consistency check-docs-consistency-regression check-diagrams check-diagrams-regression docs-release-regression backup-store-regression check-secrets check-forbidden-terms check-forbidden-terms-regression check-tad check-private-untracked check-standard-workload-chart check-spoke-access check-spoke-access-regression check-postgres-lab-chart gitops-render check-supply-chain check-repo-governance check-repo-governance-regression check-promotion check-tool-platforms-regression check-terraform-offline check-terraform-offline-regression lab-test-eks-identity-offline eks-test-spoke-secret eks-session-regression check-identity check-identity-regression check-argocd-rbac check-argocd-rbac-regression check-grafana-sso check-grafana-sso-regression check-elevations check-elevations-regression mc-spoke-rotate-regression image-test-verify promote-test check-observability check-observability-regression ## Run every Phase 1 documentation validation check plus the standard-workload chart contract
 
 check-markdown: ## Basic Markdown formatting checks on every versionable .md file
 	@bash scripts/validate/check-markdown-basic.sh
@@ -173,6 +174,18 @@ lab-mc-status: ## Phase 2.7.3: read-only identity, registration (never the token
 mc-spoke-register: ## Phase 2.7.3: register SPOKE=<dev|uat|prod> with the hub's Argo CD (namespace-scoped RBAC, 24h token; re-run rotates it)
 	@sh lab/multicluster/spoke-register.sh $(SPOKE)
 
+mc-spoke-rotate: ## Rotate every registered spoke's hub token with less than MIN_HOURS left (default 8); skips unregistered spokes and a stopped lab
+	@MIN_HOURS="$(or $(MIN_HOURS),8)" sh lab/multicluster/spoke-rotate.sh
+
+mc-spoke-rotate-schedule: ## Opt-in: install a user LaunchAgent (macOS) running mc-spoke-rotate every 6 hours; on Linux, print the crontab line
+	@sh lab/multicluster/rotate-schedule.sh install
+
+mc-spoke-rotate-unschedule: ## Remove the LaunchAgent installed by mc-spoke-rotate-schedule
+	@sh lab/multicluster/rotate-schedule.sh uninstall
+
+mc-spoke-rotate-schedule-status: ## Report whether the rotation LaunchAgent is installed and its last log lines
+	@sh lab/multicluster/rotate-schedule.sh status
+
 mc-spoke-deregister: ## Phase 2.7.3: remove SPOKE=<dev|uat|prod> from the hub and delete its access objects (keeps the workload namespace)
 	@sh lab/multicluster/spoke-deregister.sh $(SPOKE)
 
@@ -197,6 +210,7 @@ mc-up: ## Phase 2.7.4: idempotent end-to-end bring-up - clusters, hub Argo CD + 
 	@sh lab/multicluster/up.sh
 
 mc-test-e2e: ## Phase 2.7.4: mutating end-to-end proof - generator selection, per-spoke ESO/rotation/self-heal isolation, safe deregistration, hub uninstall (requires REVISION=<pushed branch>)
+	@sh lab/multicluster/token-preflight.sh
 	@sh tests/multicluster/test-e2e.sh
 
 metrics-server-chart-fetch: ## Phase 2.8.2: download and checksum-verify the pinned metrics-server chart into .tools/charts/
@@ -266,9 +280,11 @@ backup-restore-check: ## Phase 6.2a: non-destructive - restore the newest backup
 	@sh lab/backup/restore-check.sh
 
 backup-drill-spoke: ## Phase 6.2b: DESTRUCTIVE drill - delete SPOKE=<dev|uat|prod>, rebuild it from Git plus its newest backup, verify by hashes, print the RTO (needs CONFIRM=yes)
+	@sh lab/multicluster/token-preflight.sh
 	@sh lab/backup/drill-spoke.sh "$(SPOKE)" $(if $(filter yes,$(CONFIRM)),--confirm,)
 
 backup-drill-hub: ## Phase 6.2b: DESTRUCTIVE drill - delete the hub, rebuild it, restore argocd and monitoring, verify the spokes reconnect and keep writing, print the RTO (needs CONFIRM=yes)
+	@sh lab/multicluster/token-preflight.sh
 	@sh lab/backup/drill-hub.sh $(if $(filter yes,$(CONFIRM)),--confirm,)
 
 workload-hpa-handover: ## Phase 2.8.2: before Git enables an HPA for an existing Deployment, give its current spec.replicas a second field owner so Argo CD letting go never drops it to 1 (NS= DEPLOYMENT=, LAB_CLUSTER=)
@@ -315,6 +331,9 @@ check-elevations: ## Phase 4d: offline - fails when an Identity Center elevation
 check-elevations-regression: ## Phase 4d: 12 accept/reject cases for check-elevations with a fixed clock
 	@sh tests/validate/test-elevations.sh
 
+mc-spoke-rotate-regression: ## 18 cases for the spoke token rotation decision and the token lifetime bound, with a fixed clock (no cluster)
+	@sh tests/multicluster/test-spoke-rotate.sh
+
 check-grafana-sso: ## Phase 4c: offline checks of Grafana's Keycloak sign-in: lab issuer, PKCE, no secret in the values, callback allowed by the realm, roles from the realm's groups, unmapped users refused
 	@sh lab/observability/sso-check.sh
 
@@ -334,6 +353,7 @@ argocd-breakglass-status: ## Phase 4b: read-only - is the local admin on, by who
 	@sh lab/argocd/breakglass.sh status
 
 argocd-test-sso: ## Phase 4b: read-only live role matrix on the hub - a Keycloak token per test user against the Argo CD API (list, get, dry-run sync), local admin refused
+	@sh lab/multicluster/token-preflight.sh
 	@sh tests/argocd/test-sso-rbac.sh
 
 argocd-test-breakglass: ## Phase 4b: live break-glass cycle on the hub - on, admin login works and the alert is active, off, old token and login refused, alert resolved
@@ -495,6 +515,7 @@ gitops-uninstall: ## Two-phase transactional uninstall (Phase 2.6.3a): read-only
 	@sh lab/gitops/uninstall.sh
 
 gitops-switch-revision: ## Phase 2.6.3a: safely switch the root Application's targetRevision in place (patch, never delete+recreate); preserves UID/finalizers; requires 3 stable reads; rolls back automatically on failure (REVISION=<value>)
+	@if [ "$(LAB_CLUSTER)" = hub ]; then sh lab/multicluster/token-preflight.sh; fi
 	@sh lab/gitops/switch-revision.sh
 
 gitops-retire-appproject-kind: ## Phase 2.6.3a: drain SecretStore/ExternalSecret from one environment before narrowing the AppProject whitelist (ENV=dev|uat|prod ACTION=--drain)

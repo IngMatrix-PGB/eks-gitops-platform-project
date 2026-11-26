@@ -62,15 +62,14 @@ else
   LAB_CLUSTER=hub sh lab/gitops/repo-setup.sh
 fi
 
-threshold="$(date -u -v+"${min_h}"H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "+${min_h} hours" +%Y-%m-%dT%H:%M:%SZ)"
 escaped_env_key="$(printf '%s' "$LAB_MC_ENV_LABEL_KEY" | sed 's/\./\\./g')"
 for s in $spokes; do
   echo "mc-up: [4/5] spoke '$s' ..."
-  expires="$(ckubectl "$LAB_MC_HUB" -n argocd get secret "spoke-${s}" -o jsonpath='{.metadata.annotations.eks-gitops-lab-lite\.local/token-expires}' 2>/dev/null || true)"
+  expires="$(lab_mc_token_expiry "$s")"
   env_label="$(ckubectl "$LAB_MC_HUB" -n argocd get secret "spoke-${s}" -o jsonpath="{.metadata.labels.${escaped_env_key}}" 2>/dev/null || true)"
   if [ -z "$expires" ] || [ "$env_label" != "$s" ]; then
     sh lab/multicluster/spoke-register.sh "$s"
-  elif [ "$expires" \< "$threshold" ]; then
+  elif lab_mc_token_needs_rotation "$expires" "$min_h"; then
     echo "mc-up: token for '$s' expires $expires (< ${min_h}h left) - rotating"
     sh lab/multicluster/spoke-register.sh "$s"
   else

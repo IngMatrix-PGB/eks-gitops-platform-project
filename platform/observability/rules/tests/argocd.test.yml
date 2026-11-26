@@ -157,3 +157,46 @@ tests:
             exp_annotations:
               summary: "The hub's Argo CD API server has not been scraped for 5 minutes"
               description: "A break-glass login would not raise ArgoCDLocalAdminLogin while it is down."
+
+  # A lost cluster connection must last 5 minutes; the hub's own cluster
+  # and a spoke that recovers sooner never fire.
+  - name: a spoke unreachable for 5 minutes pages, a short blip does not
+    interval: 1m
+    input_series:
+      - series: 'argocd_cluster_connection_status{job="argocd-application-controller",server="https://eks-gitops-uat-control-plane:6443",k8s_version="v1.36.4"}'
+        values: '1x5 0x10'
+      - series: 'argocd_cluster_connection_status{job="argocd-application-controller",server="https://eks-gitops-dev-control-plane:6443",k8s_version="v1.36.4"}'
+        values: '1x5 0x3 1x7'
+      - series: 'argocd_cluster_connection_status{job="argocd-application-controller",server="https://kubernetes.default.svc",k8s_version="v1.36.4"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ArgoCDClusterUnreachable
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ArgoCDClusterUnreachable
+        exp_alerts:
+          - exp_labels: {severity: page, server: "https://eks-gitops-uat-control-plane:6443"}
+            exp_annotations:
+              summary: "Argo CD cannot reach cluster https://eks-gitops-uat-control-plane:6443"
+              description: "Argo CD has had no working connection to https://eks-gitops-uat-control-plane:6443 for 5 minutes, so nothing there is reconciled. In the lab, run make mc-spoke-rotate first (an expired spoke token); then make lab-mc-status."
+
+  # Unknown must last 15 minutes; Synced never fires.
+  - name: an application Unknown for 15 minutes opens a ticket
+    interval: 1m
+    input_series:
+      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-notes-uat",project="platform",dest_server="https://eks-gitops-uat-control-plane:6443",health_status="Healthy",sync_status="Unknown"}'
+        values: '1x20'
+      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-notes-dev",project="platform",dest_server="https://eks-gitops-dev-control-plane:6443",health_status="Healthy",sync_status="Synced"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: ArgoCDApplicationUnknown
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: ArgoCDApplicationUnknown
+        exp_alerts:
+          - exp_labels: {severity: ticket, name: platform-notes-uat, project: platform, dest_server: "https://eks-gitops-uat-control-plane:6443"}
+            exp_annotations:
+              summary: "Argo CD application platform-notes-uat has had an Unknown sync status for 15 minutes"
+              description: "Destination https://eks-gitops-uat-control-plane:6443, project platform. Argo CD cannot compare Git with the cluster; check its conditions (a ComparisonError usually means a lost cluster connection)."

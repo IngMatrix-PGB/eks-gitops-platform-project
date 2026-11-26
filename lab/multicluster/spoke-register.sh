@@ -32,6 +32,8 @@ fi
 require_repo_root
 require_tools
 . lab/multicluster/_lib.sh
+lab_mc_token_duration_ok "$LAB_MC_TOKEN_DURATION" || {
+  echo "FAIL: LAB_MC_TOKEN_DURATION '$LAB_MC_TOKEN_DURATION' - expected 10m to 24h (e.g. 10m, 6h, 24h)" >&2; exit 1; }
 
 spoke="${1:-}"
 lab_mc_require_spoke "$spoke"
