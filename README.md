@@ -139,7 +139,7 @@ account are set in `scripts/gitops/_lib.sh`, `gitops/root-application.yaml` and
 | Phase 1 | Documentation foundation (TAD, ADRs, validation) | Complete |
 | Phase 2 | Local GitOps lab: `kind`, Argo CD, ESO, standard chart, hub and spokes, resilience | Complete |
 | Phase 3 | Terraform for AWS: organization, accounts, network, EKS, identity, registry (offline-tested, never applied) | Complete |
-| Phase 4 | Human identity and SSO: IAM Identity Center, Keycloak for the lab | In progress (4a–4d done) |
+| Phase 4 | Human identity and SSO: IAM Identity Center, Keycloak for the lab | Complete |
 | Phase 5 | Image supply chain, promotion, Terraform CI, branch protection | Complete |
 | Phase 6 | Observability, backup and restore, reference application, first AWS deployment | In progress (6.1–6.3 done; 6.4a done; 6.4b blocked on an AWS account) |
 | Phase 7 | Consistency, diagrams, DOCX export, fresh rebuild | Implemented |
@@ -169,7 +169,7 @@ tested offline and against a local emulator only.
 | 4b | Argo CD OIDC and RBAC by group (platform-admin, developer per environment, auditor), no default role, local admin off with a time-bound, alerted break-glass (`make argocd-test-sso`, `argocd-breakglass`, `check-argocd-rbac`; ADR-0025, `docs/runbooks/argocd-access.md`) | Implemented; verified on lab-multicluster |
 | 4c | Grafana sign-in through Keycloak: platform-admins Admin, auditors and developers Viewer, no group refused; the local admin as alerted break-glass (`make obs-test-sso`, `check-grafana-sso`; ADR-0025, `docs/runbooks/observability.md`) | Implemented; verified on lab-multicluster |
 | 4d | IAM Identity Center as code: four permission sets, standing access with prod ReadOnly only, time-bound elevation as a reviewed entry failing CI once expired, EKS view entries for Developer and ReadOnly (`terraform/envs/identity-center`, `make check-elevations`; ADR-0025, `docs/runbooks/aws-access.md`) | Implemented (offline-tested; never applied) |
-| 4e | Argo CD's production identity provider and the OIDC client-secret seeding (R-04), decided in an ADR | Not started |
+| 4e | Argo CD's production identity provider (EKS Argo CD capability with IAM Identity Center; Cognito fallback) and the OIDC client-secret seeding (R-04 closed as a design), decided in ADR-0025 | Implemented (docs only; not deployed) |
 | 5.1a | Image CI: first-party `apps/smoke`, build with tests, Trivy scan failing on fixable HIGH/CRITICAL, CycloneDX SBOM (`make image-all`, `make check-supply-chain`, `.github/workflows/image.yml`) | Implemented |
 | 5.1b | Multi-platform image pushed to GHCR from `main` only, cosign keyless signature, SBOM attestation per platform, SLSA provenance, verified against the exact main-workflow identity (`make image-verify`, `docs/runbooks/image-publish.md`) | Implemented (published from `main`, package public) |
 | 5.1c-1 | Promotion tooling: `make promote` (dev ← signed digest from main, uat ← dev, prod ← uat), append-only ledger, `make check-promotion`, `promotion.yml`; lab tests independent of the workload image (`docs/runbooks/image-promotion.md`) | Implemented |
