@@ -1,5 +1,6 @@
 # Terraform root modules against the local AWS emulator (ADR-0018).
-# Measured with `make tf-emulator-coverage` on 2026-11-17, moto 5.2.5.
+# Measured with `make tf-emulator-coverage` on 2026-11-17 (identity-center
+# on 2026-11-25), moto 5.2.5.
 # Columns (tab-separated): root, plan, apply, replan, destroy, gaps.
 # replan=ok means a second plan after apply showed no changes.
 # gaps names what the emulator lacks; none of them is a defect in the code.
@@ -9,6 +10,7 @@ terraform/bootstrap	ok	ok	drift	ok	S3 Control ListTagsForResource does not retur
 terraform/envs/account-baseline	ok	fail	skip	fail	Config recorder resource-type enum lacks AWS::EKS::Nodegroup; EC2 instance metadata defaults not implemented; Budgets DescribeSubscribersForNotification returns 500
 terraform/envs/eks	fail	skip	skip	skip	no SSM public parameter for the EKS optimized AMI release version (read by the upstream EKS module during plan)
 terraform/envs/identity	ok	fail	skip	ok	EKS pod identity association needs the cluster from terraform/envs/eks, which cannot be planned here
+terraform/envs/identity-center	ok	fail	skip	fail	SSO Admin ListTagsForResource not implemented (500), so apply cannot read back the tagged permission sets and destroy cannot refresh them
 terraform/envs/network	ok	ok	ok	ok	-
 terraform/envs/org	ok	fail	skip	fail	Organizations EnableAWSServiceAccess rejects malware-protection.guardduty.amazonaws.com; Budgets DescribeSubscribersForNotification returns 500
 terraform/envs/registry	ok	ok	ok	ok	-
