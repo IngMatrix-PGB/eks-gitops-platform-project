@@ -108,7 +108,7 @@ if pkubectl -n "$ARGOCD_NAMESPACE" get application "$probe" >/dev/null 2>&1; the
   pkubectl -n "$ARGOCD_NAMESPACE" patch application "$probe" --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]' >/dev/null 2>&1 || true
   pkubectl -n "$ARGOCD_NAMESPACE" delete application "$probe" --wait=false >/dev/null 2>&1 || true
   bad "an Application in platform-dev aimed at spoke-uat was CREATED ($code) - removed again; the project does not hold the boundary"
-elif grep -q "not permitted" "$work/body"; then
+elif grep -q "do not match any of the allowed destinations in project" "$work/body"; then
   ok "platform-dev refuses a destination in uat ($code: $(head -c 140 "$work/body"))"
 else
   bad "the probe was refused, but not for its destination ($code: $(head -c 160 "$work/body"))"
