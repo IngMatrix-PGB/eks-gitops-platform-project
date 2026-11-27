@@ -20,6 +20,9 @@ GITOPS_REPO_SECRET_NAME="eks-gitops-platform-project-repo"
 GITOPS_NS_OWNER_LABEL_KEY="eks-gitops-lab-lite.local/owner"
 GITOPS_NS_OWNER_LABEL_VALUE="gitops-bootstrap"
 GITOPS_PROJECT_NAME="platform"
+# ADR-0026: one AppProject per environment, plus the all-environment one
+# until no Application uses it.
+GITOPS_PROJECT_NAMES="platform platform-dev platform-uat platform-prod"
 GITOPS_APPSET_NAME="platform-environments"
 GITOPS_ROOT_APP_NAME="platform-bootstrap"
 GITOPS_ROOT_APP_FILE="gitops/root-application.yaml"
@@ -176,8 +179,19 @@ gitops_appset_exists() {
   pkubectl -n "$ARGOCD_NAMESPACE" get applicationset "$GITOPS_APPSET_NAME" >/dev/null 2>&1
 }
 
+# every AppProject in GITOPS_PROJECT_NAMES exists
 gitops_appproject_exists() {
-  pkubectl -n "$ARGOCD_NAMESPACE" get appproject "$GITOPS_PROJECT_NAME" >/dev/null 2>&1
+  for p in $GITOPS_PROJECT_NAMES; do
+    pkubectl -n "$ARGOCD_NAMESPACE" get appproject "$p" >/dev/null 2>&1 || return 1
+  done
+}
+
+# prints the AppProjects of GITOPS_PROJECT_NAMES that still exist
+gitops_appprojects_present() {
+  for p in $GITOPS_PROJECT_NAMES; do
+    pkubectl -n "$ARGOCD_NAMESPACE" get appproject "$p" >/dev/null 2>&1 && printf '%s ' "$p"
+  done
+  return 0
 }
 
 gitops_generated_app_exists() {

@@ -196,8 +196,9 @@ else
 fi
 
 cascade_fail=0
-if gitops_appproject_exists; then
-  echo "FAIL: AppProject '$GITOPS_PROJECT_NAME' still present after root Application deletion" >&2
+left="$(gitops_appprojects_present)"
+if [ -n "$left" ]; then
+  echo "FAIL: AppProject(s) still present after root Application deletion: $left" >&2
   cascade_fail=1
 fi
 if gitops_appset_exists; then

@@ -127,7 +127,9 @@ configs:
         clusters: ["https://eks-gitops-*-control-plane:6443"]
   # Phase 4b: roles come from the token's flat `groups` claim. A signed-in
   # user with no group gets nothing (policy.default empty). Developers
-  # see, sync and read logs of their own environment's Applications only.
+  # are not here (ADR-0026): each environment's AppProject, platform-<env>
+  # in gitops/bootstrap, gives its developer group a role that sees, syncs
+  # and reads logs of that project's Applications only.
   rbac:
     policy.default: ""
     scopes: "[groups]"
@@ -135,15 +137,5 @@ configs:
     policy.csv: |
       g, platform-admins, role:admin
       g, auditors, role:readonly
-      p, role:developer-dev, applications, get, platform/platform-*-dev, allow
-      p, role:developer-dev, applications, sync, platform/platform-*-dev, allow
-      p, role:developer-dev, logs, get, platform/platform-*-dev, allow
-      p, role:developer-dev, projects, get, platform, allow
-      g, developers-dev, role:developer-dev
-      p, role:developer-uat, applications, get, platform/platform-*-uat, allow
-      p, role:developer-uat, applications, sync, platform/platform-*-uat, allow
-      p, role:developer-uat, logs, get, platform/platform-*-uat, allow
-      p, role:developer-uat, projects, get, platform, allow
-      g, developers-uat, role:developer-uat
   params:
     server.insecure: "false"            # same: quoted string, per argocd-cmd-params-cm.yaml

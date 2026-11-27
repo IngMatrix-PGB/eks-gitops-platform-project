@@ -34,12 +34,14 @@ else
   echo "root Application '$GITOPS_ROOT_APP_NAME': absent"
 fi
 
-echo "--- AppProject ---"
-if gitops_appproject_exists; then
-  pkubectl -n "$ARGOCD_NAMESPACE" get appproject "$GITOPS_PROJECT_NAME" -o jsonpath='name={.metadata.name} sourceRepos={.spec.sourceRepos} destinations={.spec.destinations}{"\n"}'
-else
-  echo "AppProject '$GITOPS_PROJECT_NAME': absent"
-fi
+echo "--- AppProjects ---"
+for p in $GITOPS_PROJECT_NAMES; do
+  if pkubectl -n "$ARGOCD_NAMESPACE" get appproject "$p" >/dev/null 2>&1; then
+    pkubectl -n "$ARGOCD_NAMESPACE" get appproject "$p" -o jsonpath='name={.metadata.name} sourceRepos={.spec.sourceRepos} destinations={.spec.destinations} roles={.spec.roles[*].name}{"\n"}'
+  else
+    echo "AppProject '$p': absent"
+  fi
+done
 
 echo "--- ApplicationSet ---"
 if gitops_appset_exists; then

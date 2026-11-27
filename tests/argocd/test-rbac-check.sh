@@ -15,8 +15,9 @@ setup() {
   cp "$here/lab/argocd/values-lab.yaml" "$here/lab/argocd/rbac-check.sh" "$d/lab/argocd/"
   cp "$here/scripts/identity/_lib.sh" "$d/scripts/identity/"
   cp "$here/platform/identity/realm-platform.json" "$d/platform/identity/"
-  cp "$here/gitops/bootstrap/values.yaml" "$d/gitops/bootstrap/"
+  cp -R "$here/gitops/bootstrap/." "$d/gitops/bootstrap/"
   ln -s "$here/.tools/bin/yq" "$d/.tools/bin/yq"
+  ln -s "$here/.tools/bin/helm" "$d/.tools/bin/helm"
 }
 # $1=description $2=accept|reject $3=mutation (a shell snippet run in the tree)
 run_case() {
@@ -27,7 +28,11 @@ run_case() {
     echo "FAIL: $1 (expected $2, got $got)" >&2; sed 's/^/    /' "$d.out" >&2; fail=$((fail + 1)); fi
 }
 V=lab/argocd/values-lab.yaml
-yqe() { printf '.tools/bin/yq -i %s %s' "'$1'" "$V"; }
+B=gitops/bootstrap/values.yaml
+T=gitops/bootstrap/templates/appproject.yaml
+yqe() { printf '.tools/bin/yq -i %s %s' "'$1'" "${2:-$V}"; }
+# tpl <old> <new>: replace one exact line fragment of the AppProject template
+tpl() { printf "python3 -I -c 'import sys; p=\"%s\"; s=open(p).read(); a=sys.argv[1]; assert s.count(a)==1, a; open(p,\"w\").write(s.replace(a, sys.argv[2]))' %s %s" "$T" "'$1'" "'$2'"; }
 csv() { # replace one policy.csv line ($1) with $2 (empty = delete)
   printf "python3 -I -c 'import sys; p=\"%s\"; s=open(p).read(); a=\"      %s\\\\n\"; assert a in s, a; s=s.replace(a, (\"      %s\\\\n\" if \"%s\" else \"\")); open(p,\"w\").write(s)'" "$V" "$1" "$2" "$2"
 }
@@ -43,13 +48,17 @@ run_case "a url whose callback the realm refuses is rejected" reject "$(yqe '.co
 run_case "a default role for every signed-in user is rejected" reject "$(yqe '.configs.rbac."policy.default" = "role:readonly"')"
 run_case "roles from another claim are rejected" reject "$(yqe '.configs.rbac.scopes = "[email]"')"
 run_case "role:admin for a second group is rejected" reject "$(csv 'g, auditors, role:readonly' 'g, auditors, role:admin')"
-run_case "a realm group with no role is rejected" reject "$(csv 'g, developers-uat, role:developer-uat' '')"
-run_case "a developer reaching another environment is rejected" reject "$(csv 'p, role:developer-dev, applications, sync, platform/platform-*-dev, allow' 'p, role:developer-dev, applications, sync, platform/platform-*-uat, allow')"
-run_case "a developer on every application is rejected" reject "$(csv 'p, role:developer-dev, applications, get, platform/platform-*-dev, allow' 'p, role:developer-dev, applications, get, platform/*, allow')"
-run_case "a wildcard action is rejected" reject "$(csv 'p, role:developer-uat, applications, sync, platform/platform-*-uat, allow' 'p, role:developer-uat, applications, *, platform/platform-*-uat, allow')"
-run_case "a developer allowed to delete is rejected" reject "$(csv 'p, role:developer-dev, logs, get, platform/platform-*-dev, allow' 'p, role:developer-dev, applications, delete, platform/platform-*-dev, allow')"
-run_case "a redefined built-in role is rejected" reject "$(csv 'p, role:developer-dev, projects, get, platform, allow' 'p, role:readonly, applications, sync, */*, allow')"
-run_case "a developer that cannot sync is rejected" reject "$(csv 'p, role:developer-uat, applications, sync, platform/platform-*-uat, allow' '')"
+run_case "a developer policy line in policy.csv is rejected" reject "$(yqe '.configs.rbac."policy.csv" += "p, role:developer-dev, applications, sync, platform-dev/*, allow\n"')"
+run_case "a redefined built-in role is rejected" reject "$(yqe '.configs.rbac."policy.csv" += "p, role:readonly, applications, sync, */*, allow\n"')"
+run_case "a realm group with no access is rejected" reject "$(yqe 'del(.multicluster.developerGroups.uat)' "$B")"
+run_case "a developer group in another environment's project is rejected" reject "$(yqe '.multicluster.developerGroups.dev = "developers-uat"' "$B")"
+run_case "a project role with no realm group behind it is rejected" reject "$(yqe '.multicluster.developerGroups.prod = "developers-prod"' "$B")"
+run_case "a developer on another project's applications is rejected" reject "$(tpl 'applications, sync, {{ $p }}/*, allow' 'applications, sync, platform-*/*, allow')"
+run_case "a wildcard action is rejected" reject "$(tpl 'applications, sync, {{ $p }}/*, allow' 'applications, *, {{ $p }}/*, allow')"
+run_case "a developer allowed to delete is rejected" reject "$(tpl 'logs, get, {{ $p }}/*, allow' 'applications, delete, {{ $p }}/*, allow')"
+run_case "a developer that cannot sync is rejected" reject "$(tpl '        - p, proj:{{ $p }}:developer, applications, sync, {{ $p }}/*, allow
+' '')"
+run_case "a deny policy is rejected" reject "$(tpl 'logs, get, {{ $p }}/*, allow' 'logs, get, {{ $p }}/*, deny')"
 
 echo ""
 echo "test-rbac-check: $pass passed, $fail failed"

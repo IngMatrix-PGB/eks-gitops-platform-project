@@ -118,16 +118,22 @@ echo "OK: step 3 - ESO CRDs present, root Application applied"
 echo "test-lifecycle(gitops): step 4 - wait for root Application Synced/Healthy"
 gitops_wait_for_synced_healthy "$GITOPS_ROOT_APP_NAME" 180
 
-echo "test-lifecycle(gitops): step 5 - verify AppProject"
+echo "test-lifecycle(gitops): step 5 - verify AppProjects"
 if ! gitops_appproject_exists; then
-  echo "FAIL: AppProject '$GITOPS_PROJECT_NAME' was not created" >&2
+  echo "FAIL: AppProjects '$GITOPS_PROJECT_NAMES' were not all created (present: $(gitops_appprojects_present))" >&2
   exit 1
 fi
-src_repos="$(pkubectl -n "$ARGOCD_NAMESPACE" get appproject "$GITOPS_PROJECT_NAME" -o jsonpath='{.spec.sourceRepos}')"
-case "$src_repos" in
-  *'"*"'*) echo "FAIL: AppProject has a wildcard sourceRepos entry: $src_repos" >&2; exit 1 ;;
-esac
-echo "OK: step 5 - AppProject present, no wildcard sourceRepos ($src_repos)"
+for p in $GITOPS_PROJECT_NAMES; do
+  src_repos="$(pkubectl -n "$ARGOCD_NAMESPACE" get appproject "$p" -o jsonpath='{.spec.sourceRepos}')"
+  case "$src_repos" in
+    *'"*"'*) echo "FAIL: AppProject $p has a wildcard sourceRepos entry: $src_repos" >&2; exit 1 ;;
+  esac
+done
+for e in dev uat prod; do
+  proj="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "platform-smoke-$e" -o jsonpath='{.spec.project}' 2>/dev/null || true)"
+  [ "$proj" = "platform-$e" ] || { echo "FAIL: platform-smoke-$e is in project '$proj', want platform-$e" >&2; exit 1; }
+done
+echo "OK: step 5 - AppProjects $GITOPS_PROJECT_NAMES present, no wildcard sourceRepos; each Application in its environment's project"
 
 echo "test-lifecycle(gitops): step 6 - verify ApplicationSet"
 if ! gitops_appset_exists; then
@@ -317,7 +323,7 @@ echo "OK: step 10 - all three environments' Deployment/Service/ServiceAccount/Co
 
 echo "test-lifecycle(gitops): step 11-12 - bootstrap again, prove true no-op via resourceVersions"
 root_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$GITOPS_ROOT_APP_NAME" -o jsonpath='{.metadata.resourceVersion}')"
-proj_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get appproject "$GITOPS_PROJECT_NAME" -o jsonpath='{.metadata.resourceVersion}')"
+proj_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get appproject platform-dev -o jsonpath='{.metadata.resourceVersion}')"
 appset_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get applicationset "$GITOPS_APPSET_NAME" -o jsonpath='{.metadata.resourceVersion}')"
 uat_app_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get application platform-smoke-uat -o jsonpath='{.metadata.resourceVersion}')"
 prod_app_rv_before="$(pkubectl -n "$ARGOCD_NAMESPACE" get application platform-smoke-prod -o jsonpath='{.metadata.resourceVersion}')"

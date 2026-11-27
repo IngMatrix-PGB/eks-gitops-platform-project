@@ -8,30 +8,37 @@
 #     idp-install writes, and the SSO callback on `url` is a redirect the
 #     realm's argocd client allows;
 #   - rbac: no default role, roles from the `groups` claim, glob matching;
-#   - policy.csv: every realm group (except none) mapped to exactly its
-#     role; only platform-admins gets role:admin; the built-in roles are
-#     not redefined; a developer-<env> role grants only get/sync on
-#     applications, get on logs (both on platform/platform-*-<env> of its
-#     own environment) and get on the project; no wildcard action, no
-#     deny.
+#   - policy.csv: only group mappings - platform-admins to role:admin,
+#     auditors to role:readonly - and no policy line (no developer role,
+#     no redefined built-in);
+#   - developers (ADR-0026): each realm group developers-<env> is the only
+#     group of the role `developer` of AppProject <project>-<env> in the
+#     lab hub's render of gitops/bootstrap, with exactly get/sync on
+#     applications and get on logs of <project>-<env>/*; no other project
+#     has a role, and no realm group is left without access.
 set -eu
 [ -f scripts/identity/_lib.sh ] || { echo "FAIL: run from the repository root" >&2; exit 1; }
 . scripts/identity/_lib.sh
 VALUES="lab/argocd/values-lab.yaml"
 YQ="${YQ_BIN:-.tools/bin/yq}"
+HELM="${HELM_BIN:-.tools/bin/helm}"
 [ -x "$YQ" ] || { echo "FAIL: $YQ missing - run 'make tools-install'" >&2; exit 1; }
+[ -x "$HELM" ] || { echo "FAIL: $HELM missing - run 'make tools-install'" >&2; exit 1; }
 
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT INT TERM
 "$YQ" -o=json '.configs' "$VALUES" > "$work/configs.json"
 "$YQ" -o=json '.configs.cm."oidc.config" // "" | from_yaml' "$VALUES" > "$work/oidc.json" 2>/dev/null || echo '{}' > "$work/oidc.json"
 project="$("$YQ" -N '.project.name' gitops/bootstrap/values.yaml)"
+"$HELM" template gitops/bootstrap --set profile=local-multicluster > "$work/bootstrap.yaml" || { echo "FAIL: gitops/bootstrap does not render for the lab hub" >&2; exit 1; }
+"$YQ" -o=json ea '[select(.kind == "AppProject")]' "$work/bootstrap.yaml" > "$work/projects.json"
 groups="$(printf '%s\n' "$IDP_USERS" | awk -F'|' 'NF && $2 != "" {print $2}' | sort -u | tr '\n' ' ')"
 
-python3 -I - "$work/configs.json" "$work/oidc.json" "$IDP_REALM_FILE" "$IDP_ISSUER" "$IDP_ARGOCD_SECRET" "$project" "$groups" <<'PY'
+python3 -I - "$work/configs.json" "$work/oidc.json" "$IDP_REALM_FILE" "$IDP_ISSUER" "$IDP_ARGOCD_SECRET" "$project" "$groups" "$work/projects.json" <<'PY'
 import json, re, sys
 configs = json.load(open(sys.argv[1])); oidc = json.load(open(sys.argv[2]) ) or {}
 realm = json.load(open(sys.argv[3])); issuer, secret, project = sys.argv[4], sys.argv[5], sys.argv[6]
 groups = sys.argv[7].split()
+projects = {p["metadata"]["name"]: p.get("spec") or {} for p in json.load(open(sys.argv[8]))}
 cm, rbac = configs.get("cm") or {}, configs.get("rbac") or {}
 fail = 0
 def ok(m): print("OK: " + m); return True
@@ -76,29 +83,41 @@ for n, line in enumerate((rbac.get("policy.csv") or "").splitlines(), 1):
         g[f[1]] = f[2]
     elif f[0] == "p" and len(f) == 6: p.append((n, f[1:]))
     else: bad(f"policy.csv:{n}: not a 'g, group, role' or 'p, sub, res, act, obj, eff' line")
-want = {}
+for n, _ in p: bad(f"policy.csv:{n}: a policy line - developers get access only through their AppProject's role (ADR-0026), and built-ins are not redefined")
+want = {"platform-admins": "role:admin", "auditors": "role:readonly"}
 for grp in groups:
-    if grp == "platform-admins": want[grp] = "role:admin"
-    elif grp == "auditors": want[grp] = "role:readonly"
-    elif grp.startswith("developers-"): want[grp] = "role:developer-" + grp[len("developers-"):]
-    else: bad(f"realm group {grp} has no role in this design")
-g == want and ok(f"every realm group mapped to its role ({len(g)})") or bad(f"group mappings {g}, want {want}")
-[k for k, v in g.items() if v == "role:admin"] == ["platform-admins"] or bad("role:admin granted to a group other than platform-admins")
-allowed = {("applications", "get"), ("applications", "sync"), ("logs", "get"), ("projects", "get")}
-seen = {}
-for n, (sub, res, act, obj, eff) in p:
-    m = re.fullmatch(r"role:developer-([a-z]+)", sub)
-    if not m: bad(f"policy.csv:{n}: grant to {sub} - only role:developer-<env> roles are defined here (built-ins are not redefined)"); continue
-    env = m.group(1)
-    if eff != "allow": bad(f"policy.csv:{n}: effect {eff!r} - use no deny, grant only what is needed")
-    if (res, act) not in allowed: bad(f"policy.csv:{n}: {sub} gets {res}/{act} - developers get only {sorted(allowed)}")
-    want_obj = project if res == "projects" else f"{project}/platform-*-{env}"
-    if obj != want_obj: bad(f"policy.csv:{n}: {sub} on {obj!r} - want {want_obj!r} (its own environment only)")
-    seen.setdefault(sub, set()).add((res, act))
-for grp, role in want.items():
-    if role.startswith("role:developer-") and not {("applications", "get"), ("applications", "sync")} <= seen.get(role, set()):
-        bad(f"{role} cannot get and sync its own applications")
-not fail and ok(f"{len(p)} developer grants, each limited to its own environment in project {project}")
+    if grp not in want and not grp.startswith("developers-"): bad(f"realm group {grp} has no role in this design")
+g == {k: v for k, v in want.items() if k in groups} and ok(f"policy.csv maps exactly platform-admins to role:admin and auditors to role:readonly ({len(g)})") \
+    or bad(f"policy.csv group mappings {g}, want {want} only")
+
+# Developers: AppProject roles (ADR-0026).
+allowed = {"applications get", "applications sync", "logs get"}
+dev_groups = sorted(x for x in groups if x.startswith("developers-"))
+for grp in dev_groups:
+    env = grp[len("developers-"):]
+    name = f"{project}-{env}"
+    roles = projects.get(name, {}).get("roles") or []
+    if name not in projects: bad(f"{grp}: AppProject {name} is not rendered"); continue
+    if [r.get("name") for r in roles] != ["developer"]: bad(f"{name}: roles {[r.get('name') for r in roles]}, want exactly ['developer']"); continue
+    r = roles[0]
+    r.get("groups") == [grp] or bad(f"{name}: role developer groups {r.get('groups')}, want exactly [{grp!r}]")
+    got = set()
+    for line in r.get("policies") or []:
+        f = [x.strip() for x in line.split(",")]
+        if len(f) != 6 or f[0] != "p": bad(f"{name}: policy {line!r} is not 'p, sub, res, act, obj, eff'"); continue
+        _, sub, res, act, obj, eff = f
+        sub == f"proj:{name}:developer" or bad(f"{name}: policy subject {sub!r}, want 'proj:{name}:developer'")
+        eff == "allow" or bad(f"{name}: effect {eff!r} - use no deny, grant only what is needed")
+        f"{res} {act}" in allowed or bad(f"{name}: developers get {res}/{act} - only {sorted(allowed)}")
+        obj == f"{name}/*" or bad(f"{name}: policy on {obj!r} - want {name + '/*'!r} (its own project only)")
+        got.add(f"{res} {act}")
+    {"applications get", "applications sync"} <= got or bad(f"{name}: developers cannot get and sync its applications")
+for name, spec in projects.items():
+    rs = spec.get("roles") or []
+    if not rs: continue
+    env = name[len(project) + 1:] if name.startswith(project + "-") else None
+    if f"developers-{env}" not in dev_groups: bad(f"AppProject {name} has roles {[x.get('name') for x in rs]} but no realm group developers-{env}")
+not fail and ok(f"{len(dev_groups)} developer groups, each only in the role of its own AppProject ({', '.join(project + '-' + x[len('developers-'):] for x in dev_groups)})")
 sys.exit(fail)
 PY
 echo "check-argocd-rbac: OK"

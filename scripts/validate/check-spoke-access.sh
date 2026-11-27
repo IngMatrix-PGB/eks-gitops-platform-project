@@ -17,6 +17,8 @@
 set -euo pipefail
 
 ROLE="platform/spoke-access/role.yaml"
+# ADR-0026: the kinds are written once, in the template's
+# bootstrap.kindWhitelists, shared by every AppProject.
 PROJECT="gitops/bootstrap/templates/appproject.yaml"
 fail=0
 bad() { echo "FAIL: $*" >&2; fail=1; }
@@ -45,7 +47,7 @@ role_pairs="$(printf '%s\n' "$body" | awk '
                  n = split(r, a, ","); for (i = 1; i <= n; i++) print g "/" a[i] }' | sort)"
 
 # (group/resource) pairs the AppProject allows; Kind -> plural resource
-project_pairs="$(awk '/namespaceResourceWhitelist:/ {f=1; next} f && /^  [a-zA-Z]/ {f=0}
+project_pairs="$(awk '/namespaceResourceWhitelist:/ {f=1; next} f && (/^  [a-zA-Z]/ || /^\{\{-? *end/) {f=0}
   f && /group:/ { g = $0; sub(/.*group: */, "", g); gsub(/"/, "", g) }
   f && /kind:/  { k = $0; sub(/.*kind: */, "", k); print g "/" k }' "$PROJECT" \
   | awk -F/ '{ r = tolower($2); if (r ~ /y$/) { sub(/y$/, "ies", r) } else { r = r "s" }; print $1 "/" r }' | sort)"
@@ -64,7 +66,7 @@ fi
 # lab spokes) must name exactly the AppProject's kinds, or the hub's cache
 # would not see (or would try to list) a kind the Role does not match.
 VALUES="${ARGOCD_VALUES:-lab/argocd/values-lab.yaml}"
-project_kinds="$(awk '/namespaceResourceWhitelist:/ {f=1; next} f && /^  [a-zA-Z]/ {f=0}
+project_kinds="$(awk '/namespaceResourceWhitelist:/ {f=1; next} f && (/^  [a-zA-Z]/ || /^\{\{-? *end/) {f=0}
   f && /group:/ { g = $0; sub(/.*group: */, "", g); gsub(/"/, "", g) }
   f && /kind:/  { k = $0; sub(/.*kind: */, "", k); print g "/" k }' "$PROJECT" | sort)"
 incl_kinds="$(awk '/resource.inclusions: \|/ {f=1; next} f && /^  [a-zA-Z]/ {f=0}
