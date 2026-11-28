@@ -9,7 +9,7 @@
 #     no access policy - terraform/envs/eks).
 # SPOKE_NAMESPACE is replaced with the spoke's namespace (dev, uat, prod).
 #
-# Exactly the namespaced kinds the platform AppProject allows
+# Exactly the namespaced kinds the platform-<env> AppProjects allow
 # (gitops/bootstrap/templates/appproject.yaml namespaceResourceWhitelist),
 # never Secret, never a wildcard, never a ClusterRole -
 # scripts/validate/check-spoke-access.sh enforces all of it.

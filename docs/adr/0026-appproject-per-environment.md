@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11-27
+**Amended:** 2026-11-27 - `platform` removed (see Decision)
 
 ## Context
 
@@ -46,10 +47,18 @@ Two problems follow:
   `gitops/bootstrap/values.yaml`; prod has none. `argocd-rbac-cm` keeps
   only the global mappings: platform-admins to `role:admin`, auditors
   to `role:readonly`, and no policy line.
-- **`platform` stays, unchanged and unused, for one release.** A switch
-  back to a revision whose Applications still name it then never leaves
-  them without their project. A later change removes it, once no
-  Application uses it.
+- **`platform` stayed, unchanged and unused, for one release.** A switch
+  back to a revision whose Applications still name it then never left
+  them without their project.
+- **Amended 2026-11-27: `platform` is removed.** Measured on the lab hub
+  before the change: no Application used it. There is no
+  all-environment project any more; every project that can deploy to an
+  environment is `platform-<env>`. `project.name` (`platform`) stays as
+  the prefix of the projects and the ApplicationSets: renaming it would
+  rename the ApplicationSets, which deletes their Applications and
+  everything they manage. A switch back to a revision that still
+  renders `platform` creates it again at sync wave 0, before the
+  ApplicationSets (wave 1) move any Application back to it.
 
 ## Alternatives Considered
 
@@ -78,7 +87,7 @@ Two problems follow:
 - Amends ADR-0025: the 4b alternative "developers scoped by AppProject"
   is now the lab's design, and 4e's "the generated Applications move to
   one AppProject per environment" is done in the lab.
-- `platform` is removed in a follow-up change.
+- `platform` was removed in a second change (amendment above).
 
 ## Security and Cost Implications
 
@@ -88,20 +97,21 @@ Two problems follow:
   environment's Applications, and no Application in `platform-dev` can
   deploy outside dev, whoever creates it. Grants stay the same: get and
   sync on applications and get on logs, no delete, no wildcard, no
-  deny, no default role. Until it is removed, `platform` still allows
-  every environment; only admins can create an Application, and none is
-  in it.
+  deny, no default role. With `platform` removed, no project other than
+  `default` (the root Application's) can deploy to any environment but
+  its own.
 - Cost: none. AppProjects are Kubernetes objects in the hub; the EKS
   capability charges per Application, not per project.
 
 ## Validation Method
 
 - `make gitops-render`: for each profile, the AppProjects are exactly
-  `platform` and `platform-<env>`; each `platform-<env>` has one
+  `platform-<env>`, with no `platform`; each `platform-<env>` has one
   destination, its own environment; source and kinds are the same
   everywhere; roles only on the lab hub; every ApplicationSet names
   `platform-<env>`. A self-test proves that an Application back on
-  `platform` and a second destination in `platform-dev` are refused.
+  `platform`, a second destination in `platform-dev` and the project
+  `platform` rendered again are refused.
 - `make check-argocd-rbac`: `policy.csv` has only the two global
   mappings and no policy line; each realm group `developers-<env>` is
   the only group of the `developer` role of `platform-<env>`, with

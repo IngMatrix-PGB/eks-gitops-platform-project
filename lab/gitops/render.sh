@@ -49,8 +49,8 @@ fi
 fail=0
 
 # check_projects <render> <profile> (ADR-0026): the AppProjects are
-# exactly <project> (every environment, until no Application uses it) and
-# <project>-<env> per environment; each <project>-<env> has exactly one
+# exactly <project>-<env> per environment, with no all-environment
+# <project> (ADR-0026); each <project>-<env> has exactly one
 # destination, its own environment (by spoke name on hub-and-spoke
 # profiles, never a server; the in-cluster namespace on local-kind); every
 # project has the one source repo and the same kinds; developer roles only
@@ -66,7 +66,7 @@ fail = 0
 def bad(m):
     global fail; fail = 1; print(f"FAIL: {prof}: {m}", file=sys.stderr)
 projs = {d["metadata"]["name"]: d["spec"] for d in docs if d["kind"] == "AppProject"}
-want = [project] + [f"{project}-{e}" for e in envs]
+want = [f"{project}-{e}" for e in envs]
 sorted(projs) == sorted(want) or bad(f"AppProjects {sorted(projs)}, want exactly {want}")
 def dest(e): return {"name": f"spoke-{e}", "namespace": e} if multi else {"server": "https://kubernetes.default.svc", "namespace": e}
 kinds = None
@@ -77,10 +77,7 @@ for name, spec in projs.items():
     elif k != kinds: bad(f"{name}: kind whitelists differ from the other projects'")
     cw = spec.get("clusterResourceWhitelist")
     (cw == [] if multi else cw == [{"group": "", "kind": "Namespace"}]) or bad(f"{name}: clusterResourceWhitelist {cw}")
-    if name == project:
-        spec.get("destinations") == [dest(e) for e in envs] or bad(f"{name}: destinations {spec.get('destinations')}, want every environment")
-        spec.get("roles") and bad(f"{name}: has roles")
-        continue
+    if name not in want: continue
     e = name[len(project) + 1:]
     spec.get("destinations") == [dest(e)] or bad(f"{name}: destinations {spec.get('destinations')}, want exactly [{dest(e)}]")
     roles = [r["name"] for r in spec.get("roles") or []]
@@ -96,16 +93,19 @@ sys.exit(fail)
 PY
 }
 check_projects "$render_out" local-kind || fail=1
-# self-test: an Application template back on the all-environment project,
-# and a second destination in platform-dev, are both caught.
+# self-test: an Application template back on the removed all-environment
+# project, a second destination in platform-dev, and the project
+# `platform` rendered again are all caught.
 st="$(mktemp)"
 "$HELM_BIN" template gitops/bootstrap --set profile=local-multicluster | sed 's#project: "platform-{{.values.env}}"#project: "platform"#' > "$st"
 if check_projects "$st" local-multicluster >/dev/null 2>&1; then echo "FAIL: check_projects missed an Application template on the all-environment project - check is broken" >&2; fail=1; fi
 "$HELM_BIN" template gitops/bootstrap --set profile=local-multicluster | awk '{print} /^  name: platform-dev$/{d=1} d && /^  destinations:$/{print "    - name: spoke-prod"; print "      namespace: prod"; d=0}' > "$st"
 if check_projects "$st" local-multicluster >/dev/null 2>&1; then echo "FAIL: check_projects missed a second destination in platform-dev - check is broken" >&2; fail=1; fi
 grep -q 'name: spoke-prod' "$st" || { echo "FAIL: self-test mutation not applied" >&2; fail=1; }
+{ "$HELM_BIN" template gitops/bootstrap --set profile=local-multicluster; printf '%s\n' '---' 'apiVersion: argoproj.io/v1alpha1' 'kind: AppProject' 'metadata:' '  name: platform' '  namespace: argocd' 'spec:' '  sourceRepos: []' '  destinations: []'; } > "$st"
+if check_projects "$st" local-multicluster >/dev/null 2>&1; then echo "FAIL: check_projects missed the all-environment project 'platform' coming back - check is broken" >&2; fail=1; fi
 rm -f "$st" "$st.json"
-echo "OK: check_projects self-test: an Application on the all-environment project and a widened platform-dev are both refused"
+echo "OK: check_projects self-test: an Application on the all-environment project, a widened platform-dev and the project platform back are all refused"
 
 appset_count="$(grep -c '^kind: ApplicationSet$' "$render_out" || true)"
 if [ "$appset_count" != "1" ]; then

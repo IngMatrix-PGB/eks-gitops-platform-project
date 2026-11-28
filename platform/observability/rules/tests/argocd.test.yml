@@ -9,9 +9,9 @@ tests:
   - name: an application Degraded for 10 minutes fires, a healthy one does not
     interval: 1m
     input_series:
-      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-smoke-dev",project="platform",dest_server="https://eks-gitops-dev-control-plane:6443",health_status="Degraded",sync_status="Synced"}'
+      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-smoke-dev",project="platform-dev",dest_server="https://eks-gitops-dev-control-plane:6443",health_status="Degraded",sync_status="Synced"}'
         values: '1x20'
-      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-smoke-uat",project="platform",dest_server="https://eks-gitops-uat-control-plane:6443",health_status="Healthy",sync_status="Synced"}'
+      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-smoke-uat",project="platform-uat",dest_server="https://eks-gitops-uat-control-plane:6443",health_status="Healthy",sync_status="Synced"}'
         values: '1x20'
     alert_rule_test:
       - eval_time: 9m
@@ -20,18 +20,18 @@ tests:
       - eval_time: 11m
         alertname: ArgoCDApplicationDegraded
         exp_alerts:
-          - exp_labels: {severity: page, name: platform-smoke-dev, project: platform, dest_server: "https://eks-gitops-dev-control-plane:6443"}
+          - exp_labels: {severity: page, name: platform-smoke-dev, project: platform-dev, dest_server: "https://eks-gitops-dev-control-plane:6443"}
             exp_annotations:
               summary: "Argo CD application platform-smoke-dev has been Degraded for 10 minutes"
-              description: "Destination https://eks-gitops-dev-control-plane:6443, project platform."
+              description: "Destination https://eks-gitops-dev-control-plane:6443, project platform-dev."
 
   # OutOfSync must last 30 minutes; recovering at 20m resets it.
   - name: OutOfSync fires after 30 minutes, not when it recovers sooner
     interval: 1m
     input_series:
-      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-smoke-dev",project="platform",dest_server="https://eks-gitops-dev-control-plane:6443",health_status="Healthy",sync_status="OutOfSync"}'
+      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-smoke-dev",project="platform-dev",dest_server="https://eks-gitops-dev-control-plane:6443",health_status="Healthy",sync_status="OutOfSync"}'
         values: '1x40'
-      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-smoke-uat",project="platform",dest_server="https://eks-gitops-uat-control-plane:6443",health_status="Healthy",sync_status="OutOfSync"}'
+      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-smoke-uat",project="platform-uat",dest_server="https://eks-gitops-uat-control-plane:6443",health_status="Healthy",sync_status="OutOfSync"}'
         values: '1x20 _x20'
     alert_rule_test:
       - eval_time: 29m
@@ -40,19 +40,19 @@ tests:
       - eval_time: 31m
         alertname: ArgoCDApplicationOutOfSync
         exp_alerts:
-          - exp_labels: {severity: ticket, name: platform-smoke-dev, project: platform, dest_server: "https://eks-gitops-dev-control-plane:6443"}
+          - exp_labels: {severity: ticket, name: platform-smoke-dev, project: platform-dev, dest_server: "https://eks-gitops-dev-control-plane:6443"}
             exp_annotations:
               summary: "Argo CD application platform-smoke-dev has been OutOfSync for 30 minutes"
-              description: "Destination https://eks-gitops-dev-control-plane:6443, project platform. Git and the cluster differ and automated sync has not closed the gap."
+              description: "Destination https://eks-gitops-dev-control-plane:6443, project platform-dev. Git and the cluster differ and automated sync has not closed the gap."
 
   # A failed sync fires at once and clears 10 minutes after the last one;
   # successful syncs never fire.
   - name: a failed sync fires, successful syncs do not
     interval: 1m
     input_series:
-      - series: 'argocd_app_sync_total{job="argocd-application-controller",name="platform-smoke-dev",project="platform",dest_server="https://eks-gitops-dev-control-plane:6443",phase="Failed"}'
+      - series: 'argocd_app_sync_total{job="argocd-application-controller",name="platform-smoke-dev",project="platform-dev",dest_server="https://eks-gitops-dev-control-plane:6443",phase="Failed"}'
         values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
-      - series: 'argocd_app_sync_total{job="argocd-application-controller",name="platform-smoke-uat",project="platform",dest_server="https://eks-gitops-uat-control-plane:6443",phase="Succeeded"}'
+      - series: 'argocd_app_sync_total{job="argocd-application-controller",name="platform-smoke-uat",project="platform-uat",dest_server="https://eks-gitops-uat-control-plane:6443",phase="Succeeded"}'
         values: '0+1x20'
     alert_rule_test:
       - eval_time: 2m
@@ -61,7 +61,7 @@ tests:
       - eval_time: 5m
         alertname: ArgoCDApplicationSyncFailed
         exp_alerts:
-          - exp_labels: {severity: ticket, name: platform-smoke-dev, project: platform, dest_server: "https://eks-gitops-dev-control-plane:6443"}
+          - exp_labels: {severity: ticket, name: platform-smoke-dev, project: platform-dev, dest_server: "https://eks-gitops-dev-control-plane:6443"}
             exp_annotations:
               summary: "Argo CD failed to sync application platform-smoke-dev"
               description: "1 failed sync operation(s) in the last 10 minutes; destination https://eks-gitops-dev-control-plane:6443."
@@ -185,9 +185,9 @@ tests:
   - name: an application Unknown for 15 minutes opens a ticket
     interval: 1m
     input_series:
-      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-notes-uat",project="platform",dest_server="https://eks-gitops-uat-control-plane:6443",health_status="Healthy",sync_status="Unknown"}'
+      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-notes-uat",project="platform-uat",dest_server="https://eks-gitops-uat-control-plane:6443",health_status="Healthy",sync_status="Unknown"}'
         values: '1x20'
-      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-notes-dev",project="platform",dest_server="https://eks-gitops-dev-control-plane:6443",health_status="Healthy",sync_status="Synced"}'
+      - series: 'argocd_app_info{job="argocd-application-controller",name="platform-notes-dev",project="platform-dev",dest_server="https://eks-gitops-dev-control-plane:6443",health_status="Healthy",sync_status="Synced"}'
         values: '1x20'
     alert_rule_test:
       - eval_time: 14m
@@ -196,7 +196,7 @@ tests:
       - eval_time: 16m
         alertname: ArgoCDApplicationUnknown
         exp_alerts:
-          - exp_labels: {severity: ticket, name: platform-notes-uat, project: platform, dest_server: "https://eks-gitops-uat-control-plane:6443"}
+          - exp_labels: {severity: ticket, name: platform-notes-uat, project: platform-uat, dest_server: "https://eks-gitops-uat-control-plane:6443"}
             exp_annotations:
               summary: "Argo CD application platform-notes-uat has had an Unknown sync status for 15 minutes"
-              description: "Destination https://eks-gitops-uat-control-plane:6443, project platform. Argo CD cannot compare Git with the cluster; check its conditions (a ComparisonError usually means a lost cluster connection)."
+              description: "Destination https://eks-gitops-uat-control-plane:6443, project platform-uat. Argo CD cannot compare Git with the cluster; check its conditions (a ComparisonError usually means a lost cluster connection)."

@@ -49,7 +49,7 @@ echo "test-appproject-kind-retirement: step 0 - capture pre-test state"
 pre_target_hash="$(pkubectl get secret "$target_secret_name" -n "$env_name" -o jsonpath='{.data.message}' | base64 -d | shasum -a 256 | awk '{print $1}')"
 echo "OK: pre-test target Secret hash captured ($pre_target_hash)"
 
-whitelist_before="$(pkubectl get appproject platform -n "$ARGOCD_NAMESPACE" -o jsonpath='{.spec.namespaceResourceWhitelist}')"
+whitelist_before="$(pkubectl get appproject "platform-$env_name" -n "$ARGOCD_NAMESPACE" -o jsonpath='{.spec.namespaceResourceWhitelist}')"
 if ! printf '%s' "$whitelist_before" | grep -q "SecretStore"; then
   echo "FAIL: precondition failed - AppProject does not currently whitelist SecretStore (step 2 of the drain requires it to)" >&2
   exit 1
@@ -143,7 +143,7 @@ else
 fi
 
 echo "test-appproject-kind-retirement: verifying AppProject whitelist is exactly unchanged (this test never edits it)"
-whitelist_after="$(pkubectl get appproject platform -n "$ARGOCD_NAMESPACE" -o jsonpath='{.spec.namespaceResourceWhitelist}')"
+whitelist_after="$(pkubectl get appproject "platform-$env_name" -n "$ARGOCD_NAMESPACE" -o jsonpath='{.spec.namespaceResourceWhitelist}')"
 if [ "$whitelist_after" = "$whitelist_before" ]; then
   echo "OK: AppProject namespaceResourceWhitelist is byte-for-byte unchanged"
 else

@@ -7,8 +7,11 @@
 repoURL: git@github.com:IngMatrix-PGB/eks-gitops-platform-project.git
 gitRevision: main
 
-# ADR-0026: one AppProject per environment, <name>-<env>; the project
-# <name> itself (every environment) stays until no Application uses it.
+# ADR-0026: one AppProject per environment, <name>-<env>; there is no
+# project <name> itself. <name> is also the prefix of the ApplicationSet
+# names (<name>-environments, <name>-<component>): never change it -
+# renaming an ApplicationSet cascade-deletes its Applications and
+# everything they manage, data store volumes included.
 project:
   name: platform
 
