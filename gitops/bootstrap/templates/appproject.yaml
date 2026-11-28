@@ -5,10 +5,9 @@ the Application's name. The kind whitelists are the same for every
 project and live once, in bootstrap.kindWhitelists below
 (scripts/validate/check-spoke-access.sh reads them from this file).
 
-The project `platform` (every environment) stays, unchanged, until no
-Application uses it; a later change removes it. Keeping it means a
-switch back to a revision whose Applications still name it never leaves
-them without their project.
+There is no all-environment project: the former `platform` was removed
+once no Application used it (ADR-0026). Every project that can deploy to
+an environment is platform-<env>, and it can deploy only there.
 */ -}}
 {{- define "bootstrap.kindWhitelists" -}}
 {{- if .multi }}
@@ -87,10 +86,15 @@ Center group IDs at its first deployment; local-kind has no SSO.
 {{- fail (printf "gitops/bootstrap: developerGroups names environment %q, which profile %q does not have" $env $.Values.profile) }}
 {{- end }}
 {{- end }}
+{{- range $i, $env := $envs }}
+{{- $p := printf "%s-%s" $.Values.project.name $env }}
+{{- if $i }}
+---
+{{- end }}
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
-  name: {{ .Values.project.name }}
+  name: {{ $p }}
   namespace: argocd
   labels:
     eks-gitops-lab-lite.local/owner: gitops-bootstrap
@@ -101,44 +105,6 @@ metadata:
     # observed empirically to sometimes delete the AppProject first,
     # leaving generated Applications unable to resolve their project
     # reference until a slow informer-resync retry clears it.
-    argocd.argoproj.io/sync-wave: "0"
-spec:
-  description: >-
-    Phase 2.6.2 platform environments. Exact-scoped: one source repo,
-    dev/uat/prod destinations only, one minimal cluster grant
-    (Namespace), exactly the 9 kinds the workload chart renders.
-  sourceRepos:
-    - {{ .Values.repoURL }}
-  destinations:
-    {{- if $multi }}
-    {{- /*
-    Phase 2.7.4 / 3.4.4b: spokes only, by cluster name - never the hub's
-    in-cluster server. The real EKS cluster name lives only in the
-    cluster Secret's awsAuthConfig.clusterName.
-    */}}
-    {{- range $envs }}
-    - name: {{ $hs.clusterNamePrefix }}{{ . }}
-      namespace: {{ . }}
-    {{- end }}
-    {{- else }}
-    {{- range .Values.environments }}
-    - server: https://kubernetes.default.svc
-      namespace: {{ .namespace }}
-    {{- end }}
-    {{- end }}
-  {{- include "bootstrap.kindWhitelists" (dict "multi" $multi) | nindent 2 }}
-{{- range $env := $envs }}
-{{- $p := printf "%s-%s" $.Values.project.name $env }}
----
-apiVersion: argoproj.io/v1alpha1
-kind: AppProject
-metadata:
-  name: {{ $p }}
-  namespace: argocd
-  labels:
-    eks-gitops-lab-lite.local/owner: gitops-bootstrap
-  annotations:
-    # Same reverse-order deletion as above: after the ApplicationSets.
     argocd.argoproj.io/sync-wave: "0"
 spec:
   description: >-

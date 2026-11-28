@@ -19,10 +19,8 @@ GITOPS_DEPLOY_KEY_PUB=".local/gitops/github-deploy-key.pub"
 GITOPS_REPO_SECRET_NAME="eks-gitops-platform-project-repo"
 GITOPS_NS_OWNER_LABEL_KEY="eks-gitops-lab-lite.local/owner"
 GITOPS_NS_OWNER_LABEL_VALUE="gitops-bootstrap"
-GITOPS_PROJECT_NAME="platform"
-# ADR-0026: one AppProject per environment, plus the all-environment one
-# until no Application uses it.
-GITOPS_PROJECT_NAMES="platform platform-dev platform-uat platform-prod"
+# ADR-0026: one AppProject per environment, and no all-environment one.
+GITOPS_PROJECT_NAMES="platform-dev platform-uat platform-prod"
 GITOPS_APPSET_NAME="platform-environments"
 GITOPS_ROOT_APP_NAME="platform-bootstrap"
 GITOPS_ROOT_APP_FILE="gitops/root-application.yaml"
