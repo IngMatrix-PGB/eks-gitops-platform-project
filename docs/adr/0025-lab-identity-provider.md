@@ -103,6 +103,11 @@ Decision:
   | auditors | `role:readonly` | read everything, no sync |
   | developers-dev | `role:developer-dev` | get, sync and logs on `platform/platform-*-dev`; get on project `platform` |
   | developers-uat | `role:developer-uat` | the same on `platform/platform-*-uat` |
+
+  Amended by [ADR-0026](0026-appproject-per-environment.md): developers
+  now get the role `developer` of their environment's AppProject,
+  `platform-<env>`, with the same grants on `platform-<env>/*`;
+  `policy.csv` keeps only platform-admins and auditors.
   | none | none | signed in, sees nothing |
 
   The root `platform-bootstrap` matches no developer pattern.
@@ -341,6 +346,8 @@ Sources (read 2026-11-26):
   environment would change the generated Applications and their
   promotion. Name patterns give the same boundary, and
   `check-argocd-rbac` keeps each pattern on its own environment.
+  Superseded by [ADR-0026](0026-appproject-per-environment.md), which
+  measured that the patterns do not bound where an Application deploys.
 - **4b: break-glass by deleting the admin password, or a second local
   account.** Rejected: both are harder to undo under pressure than a
   flag, and a second account is one more standing credential.
@@ -393,8 +400,10 @@ Sources (read 2026-11-26):
   here has been applied.
 - 4e: the first AWS deployment changes shape. The hub's Argo CD is the
   EKS capability, and the generated Applications move to one AppProject
-  per environment. The checks marked "to verify" are its acceptance
-  tests. The lab keeps Keycloak and self-managed Argo CD.
+  per environment (done in the lab by
+  [ADR-0026](0026-appproject-per-environment.md)). The checks marked "to
+  verify" are its acceptance tests. The lab keeps Keycloak and
+  self-managed Argo CD.
 - 4c: people sign in to Grafana through Keycloak. After `make
   obs-install` on a fresh hub, `make idp-install` must run again to
   write `obs-grafana-oidc`; `make obs-uninstall` removes it.

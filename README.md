@@ -42,8 +42,11 @@ boundaries.
   and Grafana sign people in through Keycloak with roles by group, and
   the local admin is an alerted, time-bound break-glass. On AWS, IAM
   Identity Center is code: no standing admin in prod, and elevation is a
-  reviewed entry that CI refuses once it expires
+  reviewed entry that CI refuses once it expires. Each environment has
+  its own Argo CD project, so a developer role and a deployment both
+  stop at their environment
   ([ADR-0025](docs/adr/0025-lab-identity-provider.md),
+  [ADR-0026](docs/adr/0026-appproject-per-environment.md),
   [aws-access](docs/runbooks/aws-access.md)).
 - **Honest status.** Each Definition-of-Done criterion has a status and
   its evidence in the TAD's
@@ -55,7 +58,7 @@ boundaries.
 | Measure | Value |
 |---|---|
 | Phases delivered, one reviewed pull request each | 0–7 (75 merged pull requests) |
-| Architecture decisions and runbooks | 25 ADRs, 17 runbooks |
+| Architecture decisions and runbooks | 26 ADRs, 17 runbooks |
 | Checks in `make validate`, required on every pull request | 42 targets |
 | Terraform roots and `terraform test` runs (offline, mocked AWS) | 10 roots, 119 runs |
 | Measured restore time (RTO), rebuilt from Git plus backup | spoke 556 s, hub 350 s |
@@ -210,6 +213,7 @@ tested offline and against a local emulator only.
 | 4c | Grafana sign-in through Keycloak: platform-admins Admin, auditors and developers Viewer, no group refused; the local admin as alerted break-glass (`make obs-test-sso`, `check-grafana-sso`; ADR-0025, `docs/runbooks/observability.md`) | Implemented; verified on lab-multicluster |
 | 4d | IAM Identity Center as code: four permission sets, standing access with prod ReadOnly only, time-bound elevation as a reviewed entry failing CI once expired, EKS view entries for Developer and ReadOnly (`terraform/envs/identity-center`, `make check-elevations`; ADR-0025, `docs/runbooks/aws-access.md`) | Implemented (offline-tested; never applied) |
 | 4e | Argo CD's production identity provider (EKS Argo CD capability with IAM Identity Center; Cognito fallback) and the OIDC client-secret seeding (R-04 closed as a design), decided in ADR-0025 | Implemented (docs only; not deployed) |
+| 4f | One AppProject per environment: `platform-<env>` deploys only to its own environment, developers through the `developer` role of their project, `policy.csv` with admins and auditors only (`make gitops-render`, `check-argocd-rbac`, `argocd-test-sso`; ADR-0026, `docs/runbooks/argocd-access.md`) | Implemented; verified on lab-multicluster |
 | 5.1a | Image CI: first-party `apps/smoke`, build with tests, Trivy scan failing on fixable HIGH/CRITICAL, CycloneDX SBOM (`make image-all`, `make check-supply-chain`, `.github/workflows/image.yml`) | Implemented |
 | 5.1b | Multi-platform image pushed to GHCR from `main` only, cosign keyless signature, SBOM attestation per platform, SLSA provenance, verified against the exact main-workflow identity (`make image-verify`, `docs/runbooks/image-publish.md`) | Implemented (published from `main`, package public) |
 | 5.1c-1 | Promotion tooling: `make promote` (dev ← signed digest from main, uat ← dev, prod ← uat), append-only ledger, `make check-promotion`, `promotion.yml`; lab tests independent of the workload image (`docs/runbooks/image-promotion.md`) | Implemented |
@@ -586,6 +590,7 @@ table, the TAD's decisions table and the ADR files agree.
 | [0023](docs/adr/0023-reference-application.md) | Reference application with a data store | Accepted |
 | [0024](docs/adr/0024-sandbox-aws-session.md) | First AWS deployment as a single-account sandbox session | Accepted |
 | [0025](docs/adr/0025-lab-identity-provider.md) | Lab identity provider and human roles | Accepted |
+| [0026](docs/adr/0026-appproject-per-environment.md) | One AppProject per environment | Accepted |
 
 ## Runbooks
 

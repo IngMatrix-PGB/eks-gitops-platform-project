@@ -9,7 +9,11 @@
 #        syncs them; 403 on the other environment and the root;
 #      - auditors: every Application, 403 on sync;
 #      - no group: lists nothing, 403 on get;
-#   3. a forged token gets 401, and the local admin's login 401.
+#   3. ADR-0026: every generated Application is in its environment's
+#      AppProject, and the project refuses a destination in another
+#      environment - an Application in platform-dev aimed at spoke-uat is
+#      rejected at create, even for an admin (nothing is created);
+#   4. a forged token gets 401, and the local admin's login 401.
 set -eu
 [ -f scripts/lab/_lib.sh ] || { echo "FAIL: must be run from the repository root" >&2; exit 1; }
 [ "${LAB_CLUSTER:-}" = hub ] || { echo "FAIL: the role matrix runs on the hub (Keycloak and Argo CD) - LAB_CLUSTER=hub" >&2; exit 1; }
@@ -90,6 +94,27 @@ expect nogroup-user GET platform-smoke-dev 403
 expect nogroup-user SYNC platform-smoke-dev 403
 
 # 3
+for a in $all; do
+  case "$a" in platform-*-dev|platform-*-uat|platform-*-prod) ;; *) continue ;; esac
+  want="platform-${a##*-}"
+  got="$(pkubectl -n "$ARGOCD_NAMESPACE" get application "$a" -o jsonpath='{.spec.project}')"
+  [ "$got" = "$want" ] && ok "$a is in project $got" || bad "$a is in project '$got', want $want"
+done
+repo="$(pkubectl -n "$ARGOCD_NAMESPACE" get appproject platform-dev -o jsonpath='{.spec.sourceRepos[0]}')"
+probe="probe-project-boundary"
+P="{\"metadata\":{\"name\":\"$probe\"},\"spec\":{\"project\":\"platform-dev\",\"source\":{\"repoURL\":\"$repo\",\"path\":\"charts/standard-workload\",\"targetRevision\":\"main\"},\"destination\":{\"name\":\"spoke-uat\",\"namespace\":\"uat\"}}}"
+code="$(sso_api "$work/tok.admin-user" POST /api/v1/applications "$P")"
+if pkubectl -n "$ARGOCD_NAMESPACE" get application "$probe" >/dev/null 2>&1; then
+  pkubectl -n "$ARGOCD_NAMESPACE" patch application "$probe" --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]' >/dev/null 2>&1 || true
+  pkubectl -n "$ARGOCD_NAMESPACE" delete application "$probe" --wait=false >/dev/null 2>&1 || true
+  bad "an Application in platform-dev aimed at spoke-uat was CREATED ($code) - removed again; the project does not hold the boundary"
+elif grep -q "do not match any of the allowed destinations in project" "$work/body"; then
+  ok "platform-dev refuses a destination in uat ($code: $(head -c 140 "$work/body"))"
+else
+  bad "the probe was refused, but not for its destination ($code: $(head -c 160 "$work/body"))"
+fi
+
+# 4
 printf 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.' > "$work/tok.forged"
 code="$(sso_api "$work/tok.forged" GET /api/v1/applications)"
 [ "$code" = 401 ] && ok "a forged token -> 401" || bad "a forged token -> $code (want 401)"

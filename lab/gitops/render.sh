@@ -1,6 +1,7 @@
 #!/bin/sh
 # Fully offline Helm render of gitops/bootstrap, plus proof that it
-# renders exactly the authorized shape: one AppProject, one
+# renders exactly the authorized shape: one AppProject per environment
+# plus the all-environment one (ADR-0026, check_projects), one
 # ApplicationSet with exactly three list elements (local-kind) or exactly
 # one clusters generator (local-multicluster, Phase 2.7.4; aws-eks,
 # Phase 3.4.4b), zero Secrets, no
@@ -35,7 +36,7 @@ fi
 echo "OK: helm lint passed"
 
 render_out="$(mktemp)"
-cleanup() { rm -f "$render_out"; }
+cleanup() { rm -f "$render_out" "$render_out.json"; }
 trap cleanup EXIT INT TERM
 
 echo "gitops-render: rendering with gitRevision=${revision} ..."
@@ -47,13 +48,64 @@ fi
 
 fail=0
 
-appproject_count="$(grep -c '^kind: AppProject$' "$render_out" || true)"
-if [ "$appproject_count" != "1" ]; then
-  echo "FAIL: expected exactly 1 AppProject, found $appproject_count" >&2
-  fail=1
-else
-  echo "OK: exactly 1 AppProject rendered"
-fi
+# check_projects <render> <profile> (ADR-0026): the AppProjects are
+# exactly <project> (every environment, until no Application uses it) and
+# <project>-<env> per environment; each <project>-<env> has exactly one
+# destination, its own environment (by spoke name on hub-and-spoke
+# profiles, never a server; the in-cluster namespace on local-kind); every
+# project has the one source repo and the same kinds; developer roles only
+# on the lab hub (checked in depth by check-argocd-rbac); every generated
+# Application names its environment's project.
+check_projects() {
+  "$YQ_BIN" -o=json ea '[select(.kind == "AppProject" or .kind == "ApplicationSet")]' "$1" > "$1.json" || { echo "FAIL: $2: render is not valid YAML" >&2; return 1; }
+  python3 -I - "$1.json" "$2" "$("$YQ_BIN" -N '.project.name' gitops/bootstrap/values.yaml)" "$("$YQ_BIN" -N '.repoURL' gitops/bootstrap/values.yaml)" <<'PY'
+import json, sys
+docs = json.load(open(sys.argv[1])); prof, project, repo = sys.argv[2], sys.argv[3], sys.argv[4]
+multi = prof in ("local-multicluster", "aws-eks"); envs = ["dev", "uat", "prod"]
+fail = 0
+def bad(m):
+    global fail; fail = 1; print(f"FAIL: {prof}: {m}", file=sys.stderr)
+projs = {d["metadata"]["name"]: d["spec"] for d in docs if d["kind"] == "AppProject"}
+want = [project] + [f"{project}-{e}" for e in envs]
+sorted(projs) == sorted(want) or bad(f"AppProjects {sorted(projs)}, want exactly {want}")
+def dest(e): return {"name": f"spoke-{e}", "namespace": e} if multi else {"server": "https://kubernetes.default.svc", "namespace": e}
+kinds = None
+for name, spec in projs.items():
+    spec.get("sourceRepos") == [repo] or bad(f"{name}: sourceRepos {spec.get('sourceRepos')}, want exactly [{repo}]")
+    k = (json.dumps(spec.get("clusterResourceWhitelist")), json.dumps(spec.get("namespaceResourceWhitelist")))
+    if kinds is None: kinds = k
+    elif k != kinds: bad(f"{name}: kind whitelists differ from the other projects'")
+    cw = spec.get("clusterResourceWhitelist")
+    (cw == [] if multi else cw == [{"group": "", "kind": "Namespace"}]) or bad(f"{name}: clusterResourceWhitelist {cw}")
+    if name == project:
+        spec.get("destinations") == [dest(e) for e in envs] or bad(f"{name}: destinations {spec.get('destinations')}, want every environment")
+        spec.get("roles") and bad(f"{name}: has roles")
+        continue
+    e = name[len(project) + 1:]
+    spec.get("destinations") == [dest(e)] or bad(f"{name}: destinations {spec.get('destinations')}, want exactly [{dest(e)}]")
+    roles = [r["name"] for r in spec.get("roles") or []]
+    expect = ["developer"] if prof == "local-multicluster" and e in ("dev", "uat") else []
+    roles == expect or bad(f"{name}: roles {roles}, want {expect}")
+ref = "{{.values.env}}" if multi else "{{.env}}"
+sets = [d for d in docs if d["kind"] == "ApplicationSet"]
+for d in sets:
+    p = d["spec"]["template"]["spec"]["project"]
+    p == f"{project}-{ref}" or bad(f"ApplicationSet {d['metadata']['name']}: project {p!r}, want '{project}-{ref}'")
+fail or print(f"OK: profile={prof}: AppProjects {', '.join(want)}; each {project}-<env> deploys only to its own environment, same source and kinds everywhere; {len(sets)} ApplicationSet(s) put each Application in its environment's project")
+sys.exit(fail)
+PY
+}
+check_projects "$render_out" local-kind || fail=1
+# self-test: an Application template back on the all-environment project,
+# and a second destination in platform-dev, are both caught.
+st="$(mktemp)"
+"$HELM_BIN" template gitops/bootstrap --set profile=local-multicluster | sed 's#project: "platform-{{.values.env}}"#project: "platform"#' > "$st"
+if check_projects "$st" local-multicluster >/dev/null 2>&1; then echo "FAIL: check_projects missed an Application template on the all-environment project - check is broken" >&2; fail=1; fi
+"$HELM_BIN" template gitops/bootstrap --set profile=local-multicluster | awk '{print} /^  name: platform-dev$/{d=1} d && /^  destinations:$/{print "    - name: spoke-prod"; print "      namespace: prod"; d=0}' > "$st"
+if check_projects "$st" local-multicluster >/dev/null 2>&1; then echo "FAIL: check_projects missed a second destination in platform-dev - check is broken" >&2; fail=1; fi
+grep -q 'name: spoke-prod' "$st" || { echo "FAIL: self-test mutation not applied" >&2; fail=1; }
+rm -f "$st" "$st.json"
+echo "OK: check_projects self-test: an Application on the all-environment project and a widened platform-dev are both refused"
 
 appset_count="$(grep -c '^kind: ApplicationSet$' "$render_out" || true)"
 if [ "$appset_count" != "1" ]; then
@@ -115,17 +167,6 @@ if grep -qiE '^kind: SecretStore$|^kind: Secret$|auth:|serviceAccountRef|arn:aws
 else
   echo "OK: the default render contains zero SecretStore/Secret/auth/serviceAccountRef/ARN/credential-shaped content"
 fi
-# AppProject document only (the ApplicationSet also has namespace: lines).
-appproject_doc="$(awk '/^kind: AppProject$/{f=1} f && /^kind: ApplicationSet$/{exit} f{print}' "$render_out")"
-local_dest_count="$(printf '%s\n' "$appproject_doc" | grep -cE 'namespace: (dev|uat|prod)$' || true)"
-other_dest_count="$(printf '%s\n' "$appproject_doc" | grep -cE '^\s*- name: |namespace: [a-z]+-aws$' || true)"
-if [ "$local_dest_count" = "3" ] && [ "$other_dest_count" = "0" ]; then
-  echo "OK: default AppProject destinations are exactly dev/uat/prod in-cluster - no spoke and no *-aws destination (Phase 3.4.4b removed the always-on aws ones)"
-else
-  echo "FAIL: default AppProject destinations unexpected (local=$local_dest_count, expected 3; spoke/aws=$other_dest_count, expected 0)" >&2
-  fail=1
-fi
-
 # --- negative: an unrecognized profile value fails the render closed ---
 unknown_profile_out="$(mktemp)"
 if "$HELM_BIN" template gitops/bootstrap --set profile=azure > "$unknown_profile_out" 2>&1; then
@@ -174,7 +215,7 @@ check_hub_spoke() {
     cat "$out" >&2
     rm -f "$out"; fail=1; return
   fi
-  [ "$(grep -c '^kind: AppProject$' "$out")" = "1" ] || { echo "FAIL: $prof: expected exactly 1 AppProject" >&2; hs_fail=1; }
+  check_projects "$out" "$prof" || hs_fail=1
   # Phase 6.3c: smoke's ApplicationSet plus one per other component that
   # lists an environment and allows this profile.
   local want_sets
@@ -194,16 +235,7 @@ check_hub_spoke() {
   local sel_values
   sel_values="$(awk '/- key: platform\.environment$/{f=1} f && /^[[:space:]]*- (dev|uat|prod|[a-z-]+)$/{printf "%s ", $2} f && /values:$/ && ++v==2 {exit}' "$out")"
   [ "$sel_values" = "dev uat prod " ] || { echo "FAIL: $prof: selector environments are '$sel_values', expected exactly 'dev uat prod'" >&2; hs_fail=1; }
-  local project appset
-  project="$(awk '/^kind: AppProject$/{f=1} f && /^kind: ApplicationSet$/{exit} f{print}' "$out")"
-  [ "$(printf '%s\n' "$project" | grep -cE '^\s*- name: spoke-(dev|uat|prod)$')" = "3" ] || { echo "FAIL: $prof: AppProject must allow exactly spoke-dev/spoke-uat/spoke-prod" >&2; hs_fail=1; }
-  for e in dev uat prod; do
-    printf '%s\n' "$project" | grep -A1 -E "^\s*- name: spoke-${e}$" | grep -qE "^\s*namespace: ${e}$" || { echo "FAIL: $prof: AppProject destination spoke-${e} is not bound to namespace ${e}" >&2; hs_fail=1; }
-  done
-  if printf '%s\n' "$project" | grep -qE 'server: |name: "?\*"?$|namespace: "?\*"?$|namespace: [a-z]+-aws$'; then
-    echo "FAIL: $prof: AppProject has a server-based, wildcard or *-aws destination (the hub must be unreachable)" >&2; hs_fail=1
-  fi
-  printf '%s\n' "$project" | grep -qE '^\s*clusterResourceWhitelist: \[\]$' || { echo "FAIL: $prof: clusterResourceWhitelist must be empty" >&2; hs_fail=1; }
+  local appset
   # smoke's ApplicationSet only (the first one; others follow after ---)
   appset="$(awk '/^kind: ApplicationSet$/{f=1} f && /^---/{exit} f{print}' "$out")"
   printf '%s\n' "$appset" | grep -qE '^\s*- CreateNamespace=false$' || { echo "FAIL: $prof: CreateNamespace=false missing" >&2; hs_fail=1; }
@@ -224,12 +256,12 @@ check_hub_spoke() {
   qa_values="$(mktemp)"
   printf 'profile: "%s"\n%s:\n  environments: [dev, uat, prod, qa]\n' "$prof" "$key" > "$qa_values"
   qa_sel="$("$HELM_BIN" template gitops/bootstrap -f "$qa_values" 2>/dev/null | awk '/- key: platform\.environment$/{f=1} f && /^[[:space:]]*- [a-z-]+$/{printf "%s ", $2} f && /values:$/ && ++v==2 {exit}')"
-  rm -f "$qa_values" "$out"
+  rm -f "$qa_values" "$out" "$out.json"
   if [ "$qa_sel" != "dev uat prod qa " ]; then
     echo "FAIL: $prof: selector self-test did not render the injected 'qa' environment (got '$qa_sel') - check is broken" >&2; hs_fail=1
   fi
   if [ "$hs_fail" -eq 0 ]; then
-    echo "OK: profile=$prof renders 1 AppProject (spoke-dev/uat/prod by name, bound to dev/uat/prod, no cluster-scoped grant) and smoke's ApplicationSet (plus one per enabled component), each with exactly 1 clusters generator (owner=$owner + platform.environment in dev/uat/prod), CreateNamespace=false, destination by cluster name, values-<env>${suffix}.yaml, revision propagated; an extra 'qa' is detectable"
+    echo "OK: profile=$prof renders its AppProjects (above) and smoke's ApplicationSet (plus one per enabled component), each with exactly 1 clusters generator (owner=$owner + platform.environment in dev/uat/prod), CreateNamespace=false, destination by cluster name, values-<env>${suffix}.yaml, revision propagated; an extra 'qa' is detectable"
   else
     fail=1
   fi

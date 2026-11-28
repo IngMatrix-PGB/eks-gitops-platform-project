@@ -1,3 +1,92 @@
+{{- /*
+One AppProject per environment (ADR-0026): platform-<env> can deploy only
+to its own environment, so the destination itself is the boundary, not
+the Application's name. The kind whitelists are the same for every
+project and live once, in bootstrap.kindWhitelists below
+(scripts/validate/check-spoke-access.sh reads them from this file).
+
+The project `platform` (every environment) stays, unchanged, until no
+Application uses it; a later change removes it. Keeping it means a
+switch back to a revision whose Applications still name it never leaves
+them without their project.
+*/ -}}
+{{- define "bootstrap.kindWhitelists" -}}
+{{- if .multi }}
+# Phase 2.7.4: nothing cluster-scoped - CreateNamespace=false on spokes
+# (Phase 3.4.4b: aws-eks too - the spoke bootstrap creates the namespace).
+clusterResourceWhitelist: []
+{{- else }}
+# Proven necessary empirically, not assumed: an empty
+# clusterResourceWhitelist makes every generated Application's
+# CreateNamespace=true sync fail with "resource :Namespace is not
+# permitted in project" - the sync option IS subject to normal AppProject
+# cluster-resource enforcement. This is the single minimum grant that
+# makes it work; see docs/adr/0007-private-gitops-bootstrap.md.
+clusterResourceWhitelist:
+  - group: ""
+    kind: Namespace
+{{- end }}
+namespaceResourceWhitelist:
+  - group: ""
+    kind: ConfigMap
+  - group: ""
+    kind: Service
+  - group: ""
+    kind: ServiceAccount
+  - group: "apps"
+    kind: Deployment
+  # Phase 2.6.2: exactly the two namespaced kinds the workload chart's
+  # templates/secretstore.yaml and templates/externalsecret.yaml render.
+  # Never Secret - the generated target Secret is created by ESO
+  # directly, never by any chart template Argo CD applies.
+  - group: "external-secrets.io"
+    kind: SecretStore
+  - group: "external-secrets.io"
+    kind: ExternalSecret
+  # Phase 2.8.1: the two resilience kinds the workload chart renders
+  # (PodDisruptionBudget only where replicaCount >= 2).
+  - group: "policy"
+    kind: PodDisruptionBudget
+  - group: "networking.k8s.io"
+    kind: NetworkPolicy
+  # Phase 2.8.2: the workload chart's optional HPA.
+  - group: "autoscaling"
+    kind: HorizontalPodAutoscaler
+  # Phase 6.3a (ADR-0023): stateful components - a data store's
+  # StatefulSet and its PersistentVolumeClaim, and the Job/CronJob of its
+  # logical dumps. Still namespaced only, still never Secret.
+  - group: "apps"
+    kind: StatefulSet
+  - group: ""
+    kind: PersistentVolumeClaim
+  - group: "batch"
+    kind: Job
+  - group: "batch"
+    kind: CronJob
+{{- end }}
+{{- $multi := has .Values.profile (list "local-multicluster" "aws-eks") }}
+{{- $hs := ternary .Values.awsEks .Values.multicluster (eq .Values.profile "aws-eks") }}
+{{- $envs := list }}
+{{- if $multi }}
+{{- $envs = $hs.environments }}
+{{- else }}
+{{- range .Values.environments }}{{ $envs = append $envs .name }}{{ end }}
+{{- end }}
+{{- /*
+Developer access as an AppProject role per environment, keyed by group -
+the shape the EKS Argo CD capability uses (ADR-0025 4e). Lab hub only:
+the groups are the Keycloak realm's. aws-eks gets roles with Identity
+Center group IDs at its first deployment; local-kind has no SSO.
+*/ -}}
+{{- $groups := dict }}
+{{- if eq .Values.profile "local-multicluster" }}
+{{- $groups = .Values.multicluster.developerGroups | default dict }}
+{{- end }}
+{{- range $env, $_ := $groups }}
+{{- if not (has $env $envs) }}
+{{- fail (printf "gitops/bootstrap: developerGroups names environment %q, which profile %q does not have" $env $.Values.profile) }}
+{{- end }}
+{{- end }}
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
@@ -7,13 +96,11 @@ metadata:
     eks-gitops-lab-lite.local/owner: gitops-bootstrap
   annotations:
     # Sync waves order deletion in REVERSE - wave "0" is deleted last,
-    # after wave "1" (the ApplicationSet). Without this, the root
+    # after wave "1" (the ApplicationSets). Without this, the root
     # Application's finalizer deletes both with no ordering guarantee;
-    # observed empirically to sometimes delete this AppProject first,
-    # leaving the ApplicationSet's still-existing generated Applications
-    # unable to resolve their project reference until a slow
-    # informer-resync retry eventually clears it. This makes the
-    # correct order deterministic instead of racing on resync timing.
+    # observed empirically to sometimes delete the AppProject first,
+    # leaving generated Applications unable to resolve their project
+    # reference until a slow informer-resync retry clears it.
     argocd.argoproj.io/sync-wave: "0"
 spec:
   description: >-
@@ -23,16 +110,13 @@ spec:
   sourceRepos:
     - {{ .Values.repoURL }}
   destinations:
-    {{- if has .Values.profile (list "local-multicluster" "aws-eks") }}
+    {{- if $multi }}
     {{- /*
     Phase 2.7.4 / 3.4.4b: spokes only, by cluster name - never the hub's
-    in-cluster server, so not even a hand-made Application in this
-    project can land on the hub. aws-eks uses the same names
-    (spoke-<env>); the real EKS cluster name lives only in the cluster
-    Secret's awsAuthConfig.clusterName (lab/eks/spoke-cluster-secret.sh).
+    in-cluster server. The real EKS cluster name lives only in the
+    cluster Secret's awsAuthConfig.clusterName.
     */}}
-    {{- $hs := ternary .Values.awsEks .Values.multicluster (eq .Values.profile "aws-eks") }}
-    {{- range $hs.environments }}
+    {{- range $envs }}
     - name: {{ $hs.clusterNamePrefix }}{{ . }}
       namespace: {{ . }}
     {{- end }}
@@ -42,58 +126,50 @@ spec:
       namespace: {{ .namespace }}
     {{- end }}
     {{- end }}
-  # Proven necessary empirically during this phase's lifecycle test, not
-  # assumed: an empty clusterResourceWhitelist makes every generated
-  # Application's CreateNamespace=true sync fail with "resource
-  # :Namespace is not permitted in project platform" - the sync option
-  # IS subject to normal AppProject cluster-resource enforcement, it is
-  # not a permission-check-exempt controller step. This is the single
-  # minimum grant that makes it work; see docs/adr/0007-private-gitops-
-  # bootstrap.md for the empirical finding.
-  {{- if has .Values.profile (list "local-multicluster" "aws-eks") }}
-  {{- /* Phase 3.4.4b: aws-eks too - the spoke bootstrap creates the namespace. */}}
-  # Phase 2.7.4: nothing cluster-scoped - CreateNamespace=false on spokes.
-  clusterResourceWhitelist: []
-  {{- else }}
-  clusterResourceWhitelist:
-    - group: ""
-      kind: Namespace
+  {{- include "bootstrap.kindWhitelists" (dict "multi" $multi) | nindent 2 }}
+{{- range $env := $envs }}
+{{- $p := printf "%s-%s" $.Values.project.name $env }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: {{ $p }}
+  namespace: argocd
+  labels:
+    eks-gitops-lab-lite.local/owner: gitops-bootstrap
+  annotations:
+    # Same reverse-order deletion as above: after the ApplicationSets.
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  description: >-
+    Environment {{ $env }} only (ADR-0026): one source repo, one
+    destination, the same kinds as every environment.
+  sourceRepos:
+    - {{ $.Values.repoURL }}
+  destinations:
+    {{- if $multi }}
+    - name: {{ $hs.clusterNamePrefix }}{{ $env }}
+      namespace: {{ $env }}
+    {{- else }}
+    {{- range $.Values.environments }}
+    {{- if eq .name $env }}
+    - server: https://kubernetes.default.svc
+      namespace: {{ .namespace }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+  {{- include "bootstrap.kindWhitelists" (dict "multi" $multi) | nindent 2 }}
+  {{- with get $groups $env }}
+  roles:
+    # Developers of this environment see, sync and read logs of its
+    # Applications - nothing else, nowhere else (ADR-0026).
+    - name: developer
+      description: developers of {{ $env }}
+      groups:
+        - {{ . }}
+      policies:
+        - p, proj:{{ $p }}:developer, applications, get, {{ $p }}/*, allow
+        - p, proj:{{ $p }}:developer, applications, sync, {{ $p }}/*, allow
+        - p, proj:{{ $p }}:developer, logs, get, {{ $p }}/*, allow
   {{- end }}
-  namespaceResourceWhitelist:
-    - group: ""
-      kind: ConfigMap
-    - group: ""
-      kind: Service
-    - group: ""
-      kind: ServiceAccount
-    - group: "apps"
-      kind: Deployment
-    # Phase 2.6.2: exactly the two namespaced kinds the workload chart's
-    # new templates/secretstore.yaml and templates/externalsecret.yaml
-    # render. Never Secret - the generated target Secret is created by
-    # ESO directly, never by any chart template Argo CD applies, so
-    # Argo CD is never granted permission to manage a Secret.
-    - group: "external-secrets.io"
-      kind: SecretStore
-    - group: "external-secrets.io"
-      kind: ExternalSecret
-    # Phase 2.8.1: exactly the two resilience kinds the workload chart
-    # now renders (PodDisruptionBudget only where replicaCount >= 2).
-    - group: "policy"
-      kind: PodDisruptionBudget
-    - group: "networking.k8s.io"
-      kind: NetworkPolicy
-    # Phase 2.8.2: the workload chart's optional HPA (prod only today).
-    - group: "autoscaling"
-      kind: HorizontalPodAutoscaler
-    # Phase 6.3a (ADR-0023): stateful components - a data store's
-    # StatefulSet and its PersistentVolumeClaim, and the Job/CronJob of
-    # its logical dumps. Still namespaced only, still never Secret.
-    - group: "apps"
-      kind: StatefulSet
-    - group: ""
-      kind: PersistentVolumeClaim
-    - group: "batch"
-      kind: Job
-    - group: "batch"
-      kind: CronJob
+{{- end }}

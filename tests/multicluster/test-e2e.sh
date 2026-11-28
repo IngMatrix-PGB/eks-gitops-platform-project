@@ -149,11 +149,14 @@ else
   echo "FAIL: step 3 - workload objects on the hub:$hub_hits deployments=$hub_deploys" >&2
   fail=1
 fi
-dest_server="$(pkubectl -n "$ARGOCD_NAMESPACE" get appproject "$GITOPS_PROJECT_NAME" -o jsonpath='{.spec.destinations[*].server}')"
+dest_server=""
+for p in $GITOPS_PROJECT_NAMES; do
+  dest_server="$dest_server$(pkubectl -n "$ARGOCD_NAMESPACE" get appproject "$p" -o jsonpath='{.spec.destinations[*].server}')"
+done
 if [ -z "$dest_server" ]; then
-  echo "OK: step 3 - AppProject '$GITOPS_PROJECT_NAME' allows no server-addressed (in-cluster) destination"
+  echo "OK: step 3 - AppProjects $GITOPS_PROJECT_NAMES allow no server-addressed (in-cluster) destination"
 else
-  echo "FAIL: step 3 - AppProject allows server destination(s): $dest_server" >&2
+  echo "FAIL: step 3 - an AppProject allows server destination(s): $dest_server" >&2
   fail=1
 fi
 

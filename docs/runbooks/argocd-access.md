@@ -26,13 +26,19 @@ checks the role matrix on the Argo CD API.
 |---|---|---|
 | platform-admins | admin | everything |
 | auditors | readonly | read every Application, no sync |
-| developers-dev | developer-dev | get, sync and read logs of `platform-*-dev` |
-| developers-uat | developer-uat | the same for `platform-*-uat` |
+| developers-dev | `developer` of AppProject `platform-dev` | get, sync and read logs of the Applications in `platform-dev` |
+| developers-uat | `developer` of AppProject `platform-uat` | the same in `platform-uat` |
 | none | none | sign in, see nothing |
 
-The roles are in `configs.rbac` of `lab/argocd/values-lab.yaml`.
-`make check-argocd-rbac` checks them offline. A change reaches the hub
-through [argocd-upgrade](argocd-upgrade.md).
+Admins and auditors are in `configs.rbac` of
+`lab/argocd/values-lab.yaml`; a change there reaches the hub through
+[argocd-upgrade](argocd-upgrade.md). Developers are in the AppProjects
+([ADR-0026](../adr/0026-appproject-per-environment.md)): the groups in
+`multicluster.developerGroups` of `gitops/bootstrap/values.yaml`, the
+role in `gitops/bootstrap/templates/appproject.yaml`; a change there
+reaches the hub through Git, like any Application change. Each
+`platform-<env>` can deploy only to its own environment.
+`make check-argocd-rbac` checks both offline.
 
 ## Signing in with a browser
 
@@ -88,8 +94,9 @@ and turn break-glass off.
   `argocd-oidc` is missing or stale. Run `LAB_CLUSTER=hub make
   idp-install`, then `make argocd-test-sso`.
 - **A user sees no Application:** check the user's group in the token
-  (`make idp-status` prints each test user's groups) and the mapping in
-  `policy.csv`.
+  (`make idp-status` prints each test user's groups), the mapping in
+  `policy.csv` for admins and auditors, and for developers the
+  `developer` role of `platform-<env>` (`make gitops-status`).
 - **The break-glass alert was not sent:** the command prints a warning
   when Alertmanager is absent or down; break-glass still works. Check
   `LAB_CLUSTER=hub make obs-status`.

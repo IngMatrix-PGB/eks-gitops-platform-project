@@ -154,7 +154,9 @@ spec:
       finalizers:
         - resources-finalizer.argocd.argoproj.io
     spec:
-      project: {{ $.Values.project.name }}
+      # ADR-0026: the environment's own AppProject - it can deploy only
+      # there, whatever this Application is called.
+      project: "{{ $.Values.project.name }}-{{ $envRef }}"
       source:
         repoURL: {{ $.Values.repoURL }}
         targetRevision: {{ $.Values.gitRevision }}

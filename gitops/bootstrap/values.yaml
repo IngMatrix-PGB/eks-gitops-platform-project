@@ -7,6 +7,8 @@
 repoURL: git@github.com:IngMatrix-PGB/eks-gitops-platform-project.git
 gitRevision: main
 
+# ADR-0026: one AppProject per environment, <name>-<env>; the project
+# <name> itself (every environment) stays until no Application uses it.
 project:
   name: platform
 
@@ -105,3 +107,10 @@ multicluster:
     - dev
     - uat
     - prod
+  # ADR-0026: developer access, as the role `developer` of the
+  # environment's AppProject (platform-<env>), keyed by the realm group.
+  # prod has no developer group. Checked against the realm by
+  # check-argocd-rbac.
+  developerGroups:
+    dev: developers-dev
+    uat: developers-uat

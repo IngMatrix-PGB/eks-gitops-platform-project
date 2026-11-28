@@ -40,9 +40,9 @@ else
 fi
 
 if gitops_appproject_exists; then
-  echo "OK: AppProject '$GITOPS_PROJECT_NAME' present"
+  echo "OK: AppProjects present ($GITOPS_PROJECT_NAMES)"
 else
-  echo "FAIL: AppProject '$GITOPS_PROJECT_NAME' absent" >&2
+  echo "FAIL: AppProjects missing - present: $(gitops_appprojects_present)" >&2
   fail=1
 fi
 
